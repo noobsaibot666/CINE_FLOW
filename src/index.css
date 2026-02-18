@@ -534,7 +534,8 @@ body {
 
 .btn-primary {
   background: var(--color-primary);
-  color: var(--bg-app);
+  color: #000;
+  border: none;
   /* Deep charcoal text for better contrast on white/light primary */
 }
 
@@ -1085,6 +1086,13 @@ body {
   box-shadow: 0 0 12px rgba(255, 255, 255, 0.2);
 }
 
+.btn-onboarding-primary {
+  background: var(--color-primary);
+  color: #000;
+  border: none;
+  font-weight: 700;
+}
+
 /* ─── Loading Spinner ─── */
 
 @keyframes spin {
@@ -1369,8 +1377,9 @@ body {
 
 .btn-toggle.active {
   background: var(--color-primary);
-  color: #fff;
+  color: #000;
   border-color: var(--color-primary);
+  box-shadow: 0 0 10px rgba(255, 255, 255, 0.2);
 }
 
 .sort-dir {
