@@ -96,13 +96,34 @@ function AppContent() {
   const [projectName, setProjectName] = useState("");
   const [clips, setClips] = useState<ClipWithThumbnails[]>([]);
   const [selectedClipIds, setSelectedClipIds] = useState<Set<string>>(new Set());
-  const [thumbCount, setThumbCount] = useState<number>(5);
   const [scanning, setScanning] = useState(false);
   const [extracting, setExtracting] = useState(false);
   const [extractProgress, setExtractProgress] = useState({ done: 0, total: 0 });
   const [showPrint, setShowPrint] = useState(false);
   const [printingForImage, setPrintingForImage] = useState(false);
   const [thumbnailCache, setThumbnailCache] = useState<Record<string, string>>({});
+
+  // Settings with Persistence
+  const [thumbCount, setThumbCount] = useState<number>(() => {
+    const saved = localStorage.getItem("wp_thumbCount");
+    return saved ? parseInt(saved, 10) : 5;
+  });
+  const [sortBy, setSortBy] = useState<string>(() => {
+    return localStorage.getItem("wp_sortBy") || "name";
+  });
+  const [sortOrder, setSortOrder] = useState<"asc" | "desc">(() => {
+    return (localStorage.getItem("wp_sortOrder") as "asc" | "desc") || "asc";
+  });
+  const [namingTemplate, setNamingTemplate] = useState<string>(() => {
+    return localStorage.getItem("wp_namingTemplate") || "ContactSheet_{PROJECT}_{DATE}";
+  });
+
+  useEffect(() => {
+    localStorage.setItem("wp_thumbCount", thumbCount.toString());
+    localStorage.setItem("wp_sortBy", sortBy);
+    localStorage.setItem("wp_sortOrder", sortOrder);
+    localStorage.setItem("wp_namingTemplate", namingTemplate);
+  }, [thumbCount, sortBy, sortOrder, namingTemplate]);
 
   // Listen for thumbnail progress events
   useEffect(() => {
@@ -209,6 +230,14 @@ function AppContent() {
     setSelectedClipIds(new Set());
   };
 
+  const getExportFilename = () => {
+    const date = new Date().toISOString().split('T')[0];
+    return namingTemplate
+      .replace("{PROJECT}", projectName || "ContactSheet")
+      .replace("{DATE}", date)
+      .replace("{COUNT}", selectedClipIds.size.toString());
+  };
+
   const handleExportImage = async () => {
     if (selectedClipIds.size === 0) return;
     setPrintingForImage(true);
@@ -216,7 +245,7 @@ function AppContent() {
       const element = document.getElementById('print-area');
       if (element) {
         try {
-          await exportElementAsImage(element, `${projectName || 'ContactSheet'}`);
+          await exportElementAsImage(element, getExportFilename());
         } catch (err) {
           console.error(err);
           alert("Failed to export image.");
@@ -243,6 +272,15 @@ function AppContent() {
   const warnClips = clips.filter((c) => c.clip.status === "warn").length;
   const totalSize = clips.reduce((acc, c) => acc + c.clip.size_bytes, 0);
   const totalDuration = clips.reduce((acc, c) => acc + c.clip.duration_ms, 0);
+
+  const sortedClips = [...clips].sort((a, b) => {
+    let result = 0;
+    if (sortBy === "name") result = a.clip.filename.localeCompare(b.clip.filename);
+    else if (sortBy === "duration") result = a.clip.duration_ms - b.clip.duration_ms;
+    else if (sortBy === "size") result = a.clip.size_bytes - b.clip.size_bytes;
+
+    return sortOrder === "asc" ? result : -result;
+  });
 
   return (
     <div className="app-shell">
@@ -357,11 +395,44 @@ function AppContent() {
                   <button className="btn-link" onClick={selectAll}>All</button>
                   <button className="btn-link" onClick={selectNone}>None</button>
                 </div>
+
+                <div className="toolbar-divider" />
+
                 <div className="layout-picker">
                   <span className="toolbar-label">Thumbnails:</span>
                   {[3, 5, 7].map((n) => (
                     <button key={n} className={`btn-toggle ${thumbCount === n ? 'active' : ''}`} onClick={() => setThumbCount(n)}>{n}</button>
                   ))}
+                </div>
+
+                <div className="toolbar-divider" />
+
+                <div className="sort-picker">
+                  <span className="toolbar-label">Sort:</span>
+                  <select className="input-select" value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
+                    <option value="name">Name</option>
+                    <option value="duration">Duration</option>
+                    <option value="size">Size</option>
+                  </select>
+                  <button className="btn-toggle" onClick={() => setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc')}>
+                    {sortOrder === 'asc' ? '↑' : '↓'}
+                  </button>
+                </div>
+
+                <div className="toolbar-divider" />
+
+                <div className="naming-picker">
+                  <span className="toolbar-label">Export Name:</span>
+                  <input
+                    type="text"
+                    className="input-text"
+                    value={namingTemplate}
+                    onChange={(e) => setNamingTemplate(e.target.value)}
+                    placeholder="ContactSheet_{PROJECT}_{DATE}"
+                  />
+                  <div className="info-trigger" data-tooltip="{PROJECT}, {DATE}, {COUNT} are supported variables.">
+                    <Info size={12} className="info-icon" />
+                  </div>
                 </div>
               </div>
               <button className="btn btn-secondary" onClick={handleExportImage} disabled={selectedClipIds.size === 0}>
@@ -370,7 +441,7 @@ function AppContent() {
             </div>
 
             <ClipList
-              clips={clips}
+              clips={sortedClips}
               thumbnailCache={thumbnailCache}
               selectedIds={selectedClipIds}
               onToggleSelection={toggleClipSelection}

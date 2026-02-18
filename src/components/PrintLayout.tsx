@@ -241,14 +241,14 @@ const printStyles = `
 
   .print-date {
     font-size: 9pt;
-    color: #64748b;
+    color: #000;
     margin-top: 2px;
   }
 
   .print-subtitle {
     font-size: 10pt;
-    color: #64748b;
-    font-weight: 500;
+    color: #000;
+    font-weight: 700;
   }
 
   .print-clips {
@@ -259,7 +259,7 @@ const printStyles = `
   }
 
   .print-clip-row {
-    border: 1px solid #e2e8f0;
+    border: 1.5pt solid #000;
     border-radius: 4px;
     overflow: hidden;
   }
@@ -267,7 +267,7 @@ const printStyles = `
   .print-film-strip {
     display: flex;
     gap: 1px;
-    background: #e2e8f0;
+    background: #000;
   }
 
   .print-thumb {
@@ -297,21 +297,22 @@ const printStyles = `
     flex-wrap: wrap;
     gap: 4mm;
     padding: 3mm 4mm;
-    background: #f8fafc;
-    border-top: 1px solid #e2e8f0;
+    background: #fff;
+    border-top: 1.5pt solid #000;
     align-items: baseline;
   }
 
   .print-meta-filename {
-    font-weight: 600;
-    color: #0f172a;
+    font-weight: 800;
+    color: #000;
     margin-right: auto;
-    font-size: 9pt;
+    font-size: 10pt;
   }
 
   .print-meta-item {
-    color: #475569;
-    font-size: 8pt;
+    color: #000;
+    font-weight: 600;
+    font-size: 9pt;
     font-variant-numeric: tabular-nums;
   }
 
@@ -320,9 +321,10 @@ const printStyles = `
     justify-content: space-between;
     padding-top: 4mm;
     margin-top: auto;
-    border-top: 1px solid #e2e8f0;
-    color: #94a3b8;
-    font-size: 8pt;
+    border-top: 1.5pt solid #000;
+    color: #000;
+    font-weight: 600;
+    font-size: 9pt;
   }
 
   @media print {
