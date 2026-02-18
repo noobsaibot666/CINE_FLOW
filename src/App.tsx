@@ -9,7 +9,8 @@ import {
   Info,
   ShieldCheck,
   ArrowRight,
-  Clock
+  Clock,
+  Home
 } from "lucide-react";
 import { ClipList } from "./components/ClipList";
 import { PrintLayout } from "./components/PrintLayout";
@@ -223,6 +224,14 @@ function AppContent() {
     }
   }, []);
 
+  const handleGoHome = useCallback(() => {
+    setProjectId(null);
+    setClips([]);
+    setSelectedClipIds(new Set());
+    setExtracting(false);
+    setActiveTab("contact");
+  }, []);
+
   const toggleClipSelection = (clipId: string) => {
     setSelectedClipIds((prev) => {
       const next = new Set(prev);
@@ -312,7 +321,7 @@ function AppContent() {
 
       <header className="app-header">
         <div className="app-header-left">
-          <div className="app-logo">
+          <div className="app-logo" onClick={handleGoHome} style={{ cursor: 'pointer' }}>
             <div className="app-logo-icon">
               <img src={appLogo} alt="Wrap Preview Logo" />
             </div>

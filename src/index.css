@@ -460,6 +460,16 @@ body {
   display: flex;
   align-items: center;
   gap: var(--space-md);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.app-logo:hover {
+  opacity: 0.8;
+  transform: translateY(-1px);
+}
+
+.app-logo:active {
+  transform: translateY(0);
 }
 
 .app-logo img {
