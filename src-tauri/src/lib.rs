@@ -3,6 +3,7 @@ mod db;
 mod ffprobe;
 mod scanner;
 mod thumbnail;
+mod verification;
 
 use commands::AppState;
 use std::sync::Arc;
@@ -40,6 +41,10 @@ pub fn run() {
             commands::read_brand_logo,
             commands::save_brand_profile,
             commands::save_brand_logo,
+            commands::start_verification,
+            commands::get_verification_job,
+            commands::get_verification_items,
+            commands::export_verification_report_json,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

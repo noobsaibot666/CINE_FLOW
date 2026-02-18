@@ -1,10 +1,11 @@
-use crate::db::{Clip, Database, Project, Thumbnail};
+use crate::db::{Clip, Database, Project, Thumbnail, VerificationJob, VerificationItem};
 use crate::ffprobe;
 use crate::scanner;
 use crate::thumbnail;
+use crate::verification;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, State};
 use tokio::sync::Semaphore;
 
 /// App state holding the database
@@ -281,14 +282,67 @@ pub async fn save_brand_profile(
 }
 
 #[tauri::command]
-pub async fn save_brand_logo(project_path: String, content: String) -> Result<(), String> {
+pub async fn save_brand_logo(project_path: String, _content: String) -> Result<(), String> {
     let brand_dir = format!("{}/brand", project_path);
     std::fs::create_dir_all(&brand_dir)
         .map_err(|e| format!("Failed to create brand directory: {}", e))?;
 
-    let logo_path = format!("{}/logo.svg", brand_dir);
-    std::fs::write(&logo_path, content).map_err(|e| format!("Failed to write logo: {}", e))?;
+    Ok(())
+}
 
+#[tauri::command]
+pub async fn start_verification(
+    source_root: String,
+    dest_root: String,
+    mode: String,
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+) -> Result<String, String> {
+    verification::start_verification(
+        app,
+        Arc::new(state.db.clone()),
+        source_root,
+        dest_root,
+        mode,
+    ).await
+}
+
+#[tauri::command]
+pub async fn get_verification_job(
+    job_id: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<Option<VerificationJob>, String> {
+    state.db.get_verification_job(&job_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_verification_items(
+    job_id: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<VerificationItem>, String> {
+    state.db.get_verification_items(&job_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn export_verification_report_json(
+    job_id: String,
+    save_path: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<(), String> {
+    let job = state.db.get_verification_job(&job_id).map_err(|e| e.to_string())?
+        .ok_or("Job not found")?;
+    let items = state.db.get_verification_items(&job_id).map_err(|e| e.to_string())?;
+
+    let report = serde_json::json!({
+        "job": job,
+        "items": items,
+        "app": "Wrap Preview",
+        "version": "1.0.0",
+        "exported_at": chrono::Utc::now().to_rfc3339(),
+    });
+
+    let content = serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?;
+    std::fs::write(save_path, content).map_err(|e| e.to_string())?;
     Ok(())
 }
 

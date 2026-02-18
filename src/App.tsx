@@ -2,9 +2,18 @@ import { Component, ReactNode, useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
-import { FolderOpen, FileText, Info, Camera, Clock } from "lucide-react";
+import {
+  Camera,
+  FolderOpen,
+  FileText,
+  Info,
+  ShieldCheck,
+  ArrowRight,
+  Clock
+} from "lucide-react";
 import { ClipList } from "./components/ClipList";
 import { PrintLayout } from "./components/PrintLayout";
+import { SafeCopy } from "./components/SafeCopy";
 import { exportElementAsImage } from "./utils/ExportUtils";
 import appLogo from "./assets/Icon_square_rounded.svg";
 
@@ -102,6 +111,7 @@ function AppContent() {
   const [showPrint, setShowPrint] = useState(false);
   const [printingForImage, setPrintingForImage] = useState(false);
   const [thumbnailCache, setThumbnailCache] = useState<Record<string, string>>({});
+  const [activeTab, setActiveTab] = useState<"contact" | "safe-copy">("contact");
 
   // Settings with Persistence
   const [thumbCount, setThumbCount] = useState<number>(() => {
@@ -308,34 +318,64 @@ function AppContent() {
             </div>
             <span>Wrap Preview</span>
           </div>
-          {projectName && (
+          <div className="app-tabs">
+            <button className={`tab-btn ${activeTab === 'contact' ? 'active' : ''}`} onClick={() => setActiveTab('contact')}>Contact Sheet</button>
+            <button className={`tab-btn ${activeTab === 'safe-copy' ? 'active' : ''}`} onClick={() => setActiveTab('safe-copy')}>Safe Copy</button>
+          </div>
+          {activeTab === 'contact' && projectName && (
             <span style={{ color: "var(--text-muted)", fontSize: "var(--font-size-sm)", marginLeft: '12px' }}>
               / {projectName}
             </span>
           )}
         </div>
         <div className="app-header-right">
-          <button className="btn btn-primary" onClick={handleSelectFolder} disabled={scanning}>
-            {scanning ? <div className="spinner" /> : <FolderOpen size={16} />}
-            {scanning ? "Scanning..." : "Select Folder"}
-          </button>
-          {projectId && clips.length > 0 && !extracting && (
-            <button className="btn btn-primary btn-export" onClick={handleExport} disabled={selectedClipIds.size === 0}>
-              <FileText size={16} /> Export PDF
-            </button>
+          {activeTab === 'contact' && (
+            <>
+              <button className="btn btn-primary" onClick={handleSelectFolder} disabled={scanning}>
+                {scanning ? <div className="spinner" /> : <FolderOpen size={16} />}
+                {scanning ? "Scanning..." : "Select Folder"}
+              </button>
+              {projectId && clips.length > 0 && !extracting && (
+                <button className="btn btn-primary btn-export" onClick={handleExport} disabled={selectedClipIds.size === 0}>
+                  <FileText size={16} /> Export PDF
+                </button>
+              )}
+            </>
           )}
         </div>
       </header>
 
       <div className="app-content">
-        {!projectId ? (
-          <div className="empty-state">
-            <div className="empty-state-icon"><Camera size={32} /></div>
-            <h2>Welcome to Wrap Preview</h2>
-            <p>Select a footage folder to scan, extract thumbnails, and generate contact sheets.</p>
-            <button className="btn btn-primary btn-lg" onClick={handleSelectFolder} disabled={scanning}>
-              <FolderOpen size={20} /> Select Footage Folder
-            </button>
+        {activeTab === 'safe-copy' ? (
+          <SafeCopy />
+        ) : !projectId ? (
+          <div className="onboarding-container">
+            <div className="onboarding-header">
+              <h1>Professional Workflow</h1>
+              <p>Select a workspace to begin.</p>
+            </div>
+            <div className="onboarding-grid">
+              <div className={`module-card ${scanning ? 'disabled' : ''}`} onClick={scanning ? undefined : handleSelectFolder}>
+                <div className="module-icon">
+                  {scanning ? <div className="spinner" /> : <Camera size={32} strokeWidth={1.5} />}
+                </div>
+                <div className="module-info">
+                  <h3>Contact Sheet</h3>
+                  <p>Generate sheets and reports from media folders.</p>
+                  <span className="module-action">
+                    {scanning ? "Scanning..." : "Scan"} <ArrowRight size={14} />
+                  </span>
+                </div>
+              </div>
+              <div className="module-card" onClick={() => { setProjectId(null); setActiveTab('safe-copy'); }}>
+                <div className="module-icon"><ShieldCheck size={32} strokeWidth={1.5} /></div>
+                <div className="module-info">
+                  <h3>Safe Copy</h3>
+                  <p>Bit-accurate verification logs via BLAKE3.</p>
+                  <span className="module-action">Verify <ArrowRight size={14} /></span>
+                </div>
+              </div>
+            </div>
           </div>
         ) : (
           <>
@@ -379,7 +419,7 @@ function AppContent() {
             {extracting && (
               <div className="progress-container">
                 <div className="progress-bar-wrapper">
-                  <div className="progress-bar-fill" style={{ width: `${extractProgress.total > 0 ? (extractProgress.done / extractProgress.total) * 100 : 0}%` }} />
+                  <div className="progress-bar-fill" style={{ width: `${extractProgress.total > 0 ? (extractProgress.done / extractProgress.total) * 100 : 0}% ` }} />
                 </div>
                 <div className="progress-label">
                   <span>Extracting thumbnails…</span>
@@ -388,56 +428,64 @@ function AppContent() {
               </div>
             )}
 
-            <div className="toolbar">
-              <div className="toolbar-left">
-                <div className="selection-stats-toolbar">
-                  <span className="toolbar-label">Select:</span>
-                  <button className="btn-link" onClick={selectAll}>All</button>
-                  <button className="btn-link" onClick={selectNone}>None</button>
+            <div className="toolbar premium-toolbar">
+              <div className="toolbar-left-group">
+                <div className="toolbar-segment">
+                  <span className="toolbar-label">Selection</span>
+                  <div className="toolbar-actions">
+                    <button className="btn-link" onClick={selectAll}>All</button>
+                    <button className="btn-link" onClick={selectNone}>None</button>
+                  </div>
                 </div>
 
-                <div className="toolbar-divider" />
-
-                <div className="layout-picker">
-                  <span className="toolbar-label">Thumbnails:</span>
-                  {[3, 5, 7].map((n) => (
-                    <button key={n} className={`btn-toggle ${thumbCount === n ? 'active' : ''}`} onClick={() => setThumbCount(n)}>{n}</button>
-                  ))}
+                <div className="toolbar-segment">
+                  <span className="toolbar-label">Layout</span>
+                  <div className="layout-picker">
+                    {[3, 5, 7].map((n) => (
+                      <button key={n} className={`btn-toggle ${thumbCount === n ? 'active' : ''}`} onClick={() => setThumbCount(n)}>{n}</button>
+                    ))}
+                  </div>
                 </div>
 
-                <div className="toolbar-divider" />
-
-                <div className="sort-picker">
-                  <span className="toolbar-label">Sort:</span>
-                  <select className="input-select" value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
-                    <option value="name">Name</option>
-                    <option value="duration">Duration</option>
-                    <option value="size">Size</option>
-                  </select>
-                  <button className="btn-toggle" onClick={() => setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc')}>
-                    {sortOrder === 'asc' ? '↑' : '↓'}
-                  </button>
+                <div className="toolbar-segment">
+                  <span className="toolbar-label">Sort</span>
+                  <div className="sort-group">
+                    <select className="input-select" value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
+                      <option value="name">Name</option>
+                      <option value="duration">Duration</option>
+                      <option value="size">Size</option>
+                    </select>
+                    <button className="btn-toggle sort-dir" onClick={() => setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc')}>
+                      {sortOrder === 'asc' ? '↑' : '↓'}
+                    </button>
+                  </div>
                 </div>
 
-                <div className="toolbar-divider" />
-
-                <div className="naming-picker">
-                  <span className="toolbar-label">Export Name:</span>
-                  <input
-                    type="text"
-                    className="input-text"
-                    value={namingTemplate}
-                    onChange={(e) => setNamingTemplate(e.target.value)}
-                    placeholder="ContactSheet_{PROJECT}_{DATE}"
-                  />
-                  <div className="info-trigger" data-tooltip="{PROJECT}, {DATE}, {COUNT} are supported variables.">
-                    <Info size={12} className="info-icon" />
+                <div className="toolbar-segment naming-segment">
+                  <span className="toolbar-label">Export Name</span>
+                  <div className="naming-input-group">
+                    <input
+                      type="text"
+                      className="input-text"
+                      value={namingTemplate}
+                      onChange={(e) => setNamingTemplate(e.target.value)}
+                      placeholder="ContactSheet_{PROJECT}_{DATE}"
+                    />
+                    <div className="info-trigger" data-tooltip="{PROJECT}, {DATE}, {COUNT} are supported variables.">
+                      <Info size={12} className="info-icon" />
+                    </div>
                   </div>
                 </div>
               </div>
-              <button className="btn btn-secondary" onClick={handleExportImage} disabled={selectedClipIds.size === 0}>
-                <Camera size={16} /> Export Image
-              </button>
+
+              <div className="toolbar-right-group">
+                <button className="btn btn-secondary btn-image-export" onClick={handleExportImage} disabled={selectedClipIds.size === 0}>
+                  <Camera size={16} /> Image
+                </button>
+                {clips.length === 0 && !scanning && (
+                  <span className="empty-warning">No media found.</span>
+                )}
+              </div>
             </div>
 
             <ClipList
@@ -460,7 +508,7 @@ function formatFileSize(bytes: number): string {
   if (bytes === 0) return "0 B";
   const units = ["B", "KB", "MB", "GB", "TB"];
   const i = Math.floor(Math.log(bytes) / Math.log(1024));
-  return `${(bytes / Math.pow(1024, i)).toFixed(i > 1 ? 1 : 0)} ${units[i]}`;
+  return `${(bytes / Math.pow(1024, i)).toFixed(i > 1 ? 1 : 0)} ${units[i]} `;
 }
 
 function formatDuration(ms: number): string {
@@ -469,9 +517,9 @@ function formatDuration(ms: number): string {
   const hours = Math.floor(totalSecs / 3600);
   const mins = Math.floor((totalSecs % 3600) / 60);
   const secs = totalSecs % 60;
-  if (hours > 0) return `${hours}h ${mins}m`;
-  if (mins > 0) return `${mins}m ${secs}s`;
-  return `${secs}s`;
+  if (hours > 0) return `${hours}h ${mins} m`;
+  if (mins > 0) return `${mins}m ${secs} s`;
+  return `${secs} s`;
 }
 
 export default function App() {
