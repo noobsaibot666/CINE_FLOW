@@ -12,9 +12,10 @@ interface PrintLayoutProps {
   appVersion?: string;
   thumbCount: number;
   onClose: () => void;
+  projectLutHash?: string | null;
 }
 
-export function PrintLayout({ projectName, clips, thumbnailCache, brandProfile, logoSrc, appVersion = "unknown", thumbCount, onClose }: PrintLayoutProps) {
+export function PrintLayout({ projectName, clips, thumbnailCache, brandProfile, logoSrc, appVersion = "unknown", thumbCount, onClose, projectLutHash }: PrintLayoutProps) {
   const now = new Date();
   const dateStr = now.toLocaleDateString("en-GB", {
     day: "2-digit",
@@ -46,6 +47,7 @@ export function PrintLayout({ projectName, clips, thumbnailCache, brandProfile, 
                 item={item}
                 thumbnailCache={thumbnailCache}
                 thumbCount={thumbCount}
+                projectLutHash={projectLutHash}
               />
             ))}
           </div>
@@ -62,10 +64,12 @@ function PrintClipRow({
   item,
   thumbnailCache,
   thumbCount,
+  projectLutHash,
 }: {
   item: ClipWithThumbnails;
   thumbnailCache: Record<string, string>;
   thumbCount: number;
+  projectLutHash?: string | null;
 }) {
   const { clip } = item;
   const printAudioBadge = getAudioBadge(clip.audio_summary, clip.audio_envelope);
@@ -77,12 +81,23 @@ function PrintClipRow({
       <div className="print-film-strip">
         {Array.from({ length: thumbCount }, (_, idx) => {
           const cacheKey = `${clip.id}_${idx}`;
-          const src = thumbnailCache[cacheKey];
+          let src = thumbnailCache[cacheKey];
+
+          if (src && projectLutHash && clip.lut_enabled === 1) {
+            const parts = src.split('/');
+            const filename = parts.pop();
+            const newFilename = `lut_${projectLutHash}_${filename}`;
+            src = [...parts, newFilename].join('/');
+          }
 
           if (src) {
             return (
               <div key={idx} className="print-thumb">
-                <img src={src} alt="" />
+                <img src={src} alt="" onError={(e) => {
+                  if (projectLutHash && clip.lut_enabled === 1) {
+                    (e.target as HTMLImageElement).src = thumbnailCache[cacheKey];
+                  }
+                }} />
               </div>
             );
           }

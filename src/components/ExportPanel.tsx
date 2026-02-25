@@ -156,30 +156,42 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-      <div className="bg-[#111] border border-white/10 rounded-2xl p-6 w-full max-w-lg shadow-2xl relative animate-in fade-in zoom-in-95 duration-200">
-        <button onClick={onClose} className="absolute top-4 right-4 p-2 text-white/40 hover:text-white rounded-full hover:bg-white/5 transition-colors">
+    <div className="export-panel-backdrop">
+      <div className="export-panel card premium-card">
+        <button onClick={onClose} className="btn-close-modal">
           <X size={20} />
         </button>
 
-        <div className="flex items-center gap-3 mb-6">
-          <div className="p-3 bg-indigo-500/10 rounded-xl text-indigo-400">
+        <div className="export-panel-header">
+          <div className="export-header-icon">
             <FileDown size={28} />
           </div>
-          <div>
-            <h2 className="text-xl font-bold text-white">Export to DaVinci Resolve</h2>
-            <p className="text-white/40 text-sm">Generate an FCPXML timeline from your selection.</p>
+          <div className="export-header-text">
+            <h2>Export to DaVinci Resolve</h2>
+            <p>Generate an FCPXML timeline from your selection.</p>
           </div>
         </div>
 
-        <div className="space-y-4 mb-8">
-          <label className="text-xs font-medium text-white/50 uppercase tracking-wider ml-1">Step 1: Delivery Type</label>
-          <div className="grid grid-cols-2 gap-2">
-            <button onClick={() => setDeliveryType("resolve")} className={`p-3 rounded-lg border text-sm ${deliveryType === "resolve" ? "bg-white text-black border-white" : "bg-white/5 border-white/10 text-white"}`}>Resolve FCPXML</button>
-            <button onClick={() => setDeliveryType("director_pack")} className={`p-3 rounded-lg border text-sm ${deliveryType === "director_pack" ? "bg-amber-400 text-black border-amber-300" : "bg-white/5 border-white/10 text-white"}`}>Director Pack</button>
+        <div className="export-options-grid">
+          <div className="export-section">
+            <label className="section-label">Step 1: Delivery Type</label>
+            <div className="delivery-type-toggle">
+              <button
+                onClick={() => setDeliveryType("resolve")}
+                className={`btn-delivery ${deliveryType === "resolve" ? "active" : ""}`}
+              >
+                Resolve FCPXML
+              </button>
+              <button
+                onClick={() => setDeliveryType("director_pack")}
+                className={`btn-delivery ${deliveryType === "director_pack" ? "active" : ""}`}
+              >
+                Director Pack
+              </button>
+            </div>
           </div>
           <button
-            className="text-xs text-white/70 underline"
+            className="btn-link preset-btn"
             onClick={() => {
               setDeliveryType("director_pack");
               setScope("current_filter");
@@ -188,44 +200,47 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({
             Most common preset
           </button>
 
-          <label className="text-xs font-medium text-white/50 uppercase tracking-wider ml-1">Step 2: Scope</label>
-          <label className="text-xs font-medium text-white/50 uppercase tracking-wider ml-1">Export Scope</label>
+          <div className="export-section">
+            <label className="section-label">Step 2: Scope</label>
+            <div className="scope-list">
 
-          <button onClick={() => setScope("picks")} disabled={picksCount === 0} className={`w-full flex items-center p-4 rounded-xl border transition-all text-left ${scope === "picks" ? "bg-emerald-500/10 border-emerald-500/50" : "bg-white/5 border-transparent"} ${picksCount === 0 ? "opacity-50 cursor-not-allowed" : ""}`}>
-            <div className={`p-2 rounded-lg mr-4 ${scope === "picks" ? "bg-emerald-500 text-black" : "bg-white/10 text-emerald-400"}`}><Check size={20} /></div>
-            <div className="flex-1"><div className="font-medium text-white">Picks Only</div><div className="text-sm text-white/40">{picksCount} clips selected</div></div>
-          </button>
+              <button onClick={() => setScope("picks")} disabled={picksCount === 0} className={`scope-item ${scope === "picks" ? "active" : ""} ${picksCount === 0 ? "disabled" : ""}`}>
+                <div className="scope-icon"><Check size={20} /></div>
+                <div className="scope-info"><div className="scope-title">Picks Only</div><div className="scope-count">{picksCount} clips selected</div></div>
+              </button>
 
-          <button onClick={() => setScope("rated")} disabled={ratedCount === 0} className={`w-full flex items-center p-4 rounded-xl border transition-all text-left ${scope === "rated" ? "bg-amber-500/10 border-amber-500/50" : "bg-white/5 border-transparent"} ${ratedCount === 0 ? "opacity-50 cursor-not-allowed" : ""}`}>
-            <div className={`p-2 rounded-lg mr-4 ${scope === "rated" ? "bg-amber-500 text-black" : "bg-white/10 text-amber-400"}`}><Star size={20} /></div>
-            <div className="flex-1"><div className="font-medium text-white">Rated ({">"} 0)</div><div className="text-sm text-white/40">{ratedCount} clips</div></div>
-          </button>
+              <button onClick={() => setScope("rated")} disabled={ratedCount === 0} className={`scope-item ${scope === "rated" ? "active" : ""} ${ratedCount === 0 ? "disabled" : ""}`}>
+                <div className="scope-icon"><Star size={20} /></div>
+                <div className="scope-info"><div className="scope-title">Rated ({">"} 0)</div><div className="scope-count">{ratedCount} clips</div></div>
+              </button>
 
-          <button onClick={() => setScope("rated_min")} disabled={ratedMinCount === 0} className={`w-full flex items-center p-4 rounded-xl border transition-all text-left ${scope === "rated_min" ? "bg-yellow-500/10 border-yellow-500/50" : "bg-white/5 border-transparent"} ${ratedMinCount === 0 ? "opacity-50 cursor-not-allowed" : ""}`}>
-            <div className={`p-2 rounded-lg mr-4 ${scope === "rated_min" ? "bg-yellow-500 text-black" : "bg-white/10 text-yellow-300"}`}><Star size={20} /></div>
-            <div className="flex-1">
-              <div className="font-medium text-white">Rating {"≥"} {minRating}</div>
-              <div className="text-sm text-white/40">{ratedMinCount} clips</div>
-              {scope === "rated_min" && (
-                <input type="range" min={1} max={5} value={minRating} onChange={(e) => setMinRating(Number(e.target.value))} className="w-full mt-2" />
-              )}
+              <button onClick={() => setScope("rated_min")} disabled={ratedMinCount === 0} className={`scope-item ${scope === "rated_min" ? "active" : ""} ${ratedMinCount === 0 ? "disabled" : ""}`}>
+                <div className="scope-icon"><Star size={20} /></div>
+                <div className="scope-info">
+                  <div className="scope-title">Rating {"≥"} {minRating}</div>
+                  <div className="scope-count">{ratedMinCount} clips</div>
+                  {scope === "rated_min" && (
+                    <input type="range" min={1} max={5} value={minRating} onChange={(e) => setMinRating(Number(e.target.value))} className="range-input" />
+                  )}
+                </div>
+              </button>
+
+              <button onClick={() => setScope("selected_blocks")} disabled={selectedBlockIds.length === 0} className={`scope-item ${scope === "selected_blocks" ? "active" : ""} ${selectedBlockIds.length === 0 ? "disabled" : ""}`}>
+                <div className="scope-icon"><Grid2X2 size={20} /></div>
+                <div className="scope-info"><div className="scope-title">Selected Blocks</div><div className="scope-count">{selectedBlockIds.length} blocks</div></div>
+              </button>
+
+              <button onClick={() => setScope("current_filter")} className={`scope-item ${scope === "current_filter" ? "active" : ""}`}>
+                <div className="scope-icon"><Star size={20} /></div>
+                <div className="scope-info"><div className="scope-title">Current View Filter</div><div className="scope-count">{currentFilterMode === "rated_min" ? `Rating >= ${currentFilterMinRating}` : currentFilterMode === "picks" ? "Picks only" : "All clips"}</div></div>
+              </button>
+
+              <button onClick={() => setScope("all")} className={`scope-item ${scope === "all" ? "active" : ""}`}>
+                <div className="scope-icon"><Film size={20} /></div>
+                <div className="scope-info"><div className="scope-title">All Media</div><div className="scope-count">{allCount} clips</div></div>
+              </button>
             </div>
-          </button>
-
-          <button onClick={() => setScope("selected_blocks")} disabled={selectedBlockIds.length === 0} className={`w-full flex items-center p-4 rounded-xl border transition-all text-left ${scope === "selected_blocks" ? "bg-cyan-500/10 border-cyan-500/50" : "bg-white/5 border-transparent"} ${selectedBlockIds.length === 0 ? "opacity-50 cursor-not-allowed" : ""}`}>
-            <div className={`p-2 rounded-lg mr-4 ${scope === "selected_blocks" ? "bg-cyan-500 text-black" : "bg-white/10 text-cyan-400"}`}><Grid2X2 size={20} /></div>
-            <div className="flex-1"><div className="font-medium text-white">Selected Blocks</div><div className="text-sm text-white/40">{selectedBlockIds.length} blocks selected in Blocks view</div></div>
-          </button>
-
-          <button onClick={() => setScope("current_filter")} className={`w-full flex items-center p-4 rounded-xl border transition-all text-left ${scope === "current_filter" ? "bg-purple-500/10 border-purple-500/50" : "bg-white/5 border-transparent"}`}>
-            <div className={`p-2 rounded-lg mr-4 ${scope === "current_filter" ? "bg-purple-500 text-black" : "bg-white/10 text-purple-300"}`}><Star size={20} /></div>
-            <div className="flex-1"><div className="font-medium text-white">Current View Filter</div><div className="text-sm text-white/40">{currentFilterMode === "rated_min" ? `Rating >= ${currentFilterMinRating}` : currentFilterMode === "picks" ? "Picks only" : "All clips"}</div></div>
-          </button>
-
-          <button onClick={() => setScope("all")} className={`w-full flex items-center p-4 rounded-xl border transition-all text-left ${scope === "all" ? "bg-blue-500/10 border-blue-500/50" : "bg-white/5 border-transparent"}`}>
-            <div className={`p-2 rounded-lg mr-4 ${scope === "all" ? "bg-blue-500 text-black" : "bg-white/10 text-blue-400"}`}><Film size={20} /></div>
-            <div className="flex-1"><div className="font-medium text-white">All Media</div><div className="text-sm text-white/40">{allCount} clips</div></div>
-          </button>
+          </div>
         </div>
         {(!deliveryType || !scope) && (
           <div className="mb-4 text-xs text-amber-300">Choose one type and one scope to continue.</div>
@@ -256,16 +271,18 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({
           </div>
         )}
 
-        <div className="flex gap-4 pt-2 border-t border-white/10">
-          <button onClick={onClose} className="flex-1 px-4 py-3 bg-white/5 hover:bg-white/10 text-white font-medium rounded-xl transition-colors">
+        <div className="export-panel-footer">
+          <button onClick={onClose} className="btn btn-secondary">
             Cancel
           </button>
-          <button onClick={handleDirectorPack} disabled={isExporting || !deliveryType || !scope || deliveryType !== "director_pack"} className="tour-director-pack-btn flex-1 px-4 py-3 bg-amber-400 text-black font-bold rounded-xl transition-transform shadow-lg shadow-amber-300/20 flex items-center justify-center gap-2 disabled:opacity-60">
+          <button onClick={handleDirectorPack} disabled={isExporting || !deliveryType || !scope || deliveryType !== "director_pack"} className="btn btn-accent btn-glow">
             Director Pack
             <Package size={18} />
           </button>
-          <button onClick={handleExport} disabled={isExporting || !deliveryType || !scope || deliveryType !== "resolve"} className="flex-1 px-4 py-3 bg-white text-black font-bold rounded-xl hover:scale-[1.02] active:scale-[0.98] transition-transform shadow-lg shadow-white/10 flex items-center justify-center gap-2 disabled:opacity-60">
-            {isExporting ? "Exporting..." : "Export Resolve FCPXML"}
+          <button onClick={handleExport} disabled={isExporting || !deliveryType || !scope || deliveryType !== "resolve"} className="btn btn-primary">
+            <span className={isExporting ? "shimmer-text" : ""}>
+              {isExporting ? "Exporting..." : "Export Resolve FCPXML"}
+            </span>
             {!isExporting && <FileDown size={18} />}
           </button>
         </div>

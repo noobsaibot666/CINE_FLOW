@@ -1,14 +1,15 @@
 mod audio;
-mod commands;
 mod clustering;
+mod commands;
 mod db;
+mod export;
 mod ffprobe;
 mod jobs;
+mod lut;
 mod perf;
 mod scanner;
 mod thumbnail;
 mod verification;
-mod export;
 
 use commands::AppState;
 use std::sync::Arc;
@@ -87,6 +88,11 @@ pub fn run() {
             commands::rename_scene_block,
             commands::merge_scene_blocks,
             commands::split_scene_block,
+            commands::set_project_lut,
+            commands::remove_project_lut,
+            commands::set_clip_lut_enabled,
+            commands::generate_lut_thumbnails,
+            commands::get_project_settings,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

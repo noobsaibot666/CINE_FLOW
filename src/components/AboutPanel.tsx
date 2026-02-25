@@ -47,6 +47,7 @@ export function AboutPanel({ open, info, onResetTour, onClose }: AboutPanelProps
               <div><strong>FFmpeg</strong><p>{info.ffmpeg_version}</p></div>
               <div><strong>ffprobe</strong><p>{info.ffprobe_version}</p></div>
               <div><strong>BRAW Bridge</strong><p>{info.braw_bridge_active ? "Active" : "Not Detected"}</p></div>
+              <div><strong>LUT Previews</strong><p>Supported (.cube)</p></div>
               <div><strong>macOS</strong><p>{info.macos_version}</p></div>
               <div><strong>Architecture</strong><p>{info.arch}</p></div>
             </div>
@@ -58,7 +59,7 @@ export function AboutPanel({ open, info, onResetTour, onClose }: AboutPanelProps
                     const dest = await openDialog({ directory: true, multiple: false, title: "Export Performance Report" });
                     if (!dest) return;
                     const result = await invoke<{ md_path: string; json_path: string }>("export_perf_report", { outputRoot: dest });
-                    try { await openPath(result.md_path); } catch {}
+                    try { await openPath(result.md_path); } catch { }
                   }}
                 >
                   Export Performance Report

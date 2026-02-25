@@ -1,4 +1,4 @@
-import { Component, ReactNode, useState, useEffect, useCallback } from "react";
+import { Component, ReactNode, useState, useEffect, useCallback, useRef } from "react";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
@@ -6,8 +6,6 @@ import { openPath } from "@tauri-apps/plugin-opener";
 import {
   Camera,
   FolderOpen,
-  FileText,
-  FileDown,
   Info,
   ShieldCheck,
   ArrowRight,
@@ -19,12 +17,13 @@ import {
   BadgeInfo,
   CircleHelp,
   MoreHorizontal,
-  LayoutGrid,
-  Image as ImageIcon,
+  ImageIcon,
+  FileDown,
+  FileText,
   Plus,
   Trash2,
   RefreshCw,
-  ChevronLeft,
+  Palette,
 } from "lucide-react";
 import { ClipList } from "./components/ClipList";
 import { PrintLayout } from "./components/PrintLayout";
@@ -86,9 +85,9 @@ function AppContent() {
   const [printingForImage, setPrintingForImage] = useState(false);
   const [preparingExport, setPreparingExport] = useState<{ kind: "pdf" | "image"; message: string } | null>(null);
   const [thumbnailCache, setThumbnailCache] = useState<Record<string, string>>({});
-  const [activeTab, setActiveTab] = useState<"home" | "shot-planner" | "media-workspace" | "contact" | "blocks" | "safe-copy">(() => {
+  const [activeTab, setActiveTab] = useState<"home" | "shot-planner" | "media-workspace" | "contact" | "blocks" | "safe-copy" | "all">(() => {
     const saved = localStorage.getItem("wp_active_tab");
-    if (saved === "home" || saved === "shot-planner" || saved === "media-workspace" || saved === "contact" || saved === "blocks" || saved === "safe-copy") {
+    if (saved === "home" || saved === "shot-planner" || saved === "media-workspace" || saved === "contact" || saved === "blocks" || saved === "safe-copy" || saved === "all") {
       return saved;
     }
     return "home";
@@ -112,7 +111,7 @@ function AppContent() {
     const saved = localStorage.getItem("wp_lookbook_sort_mode");
     return saved === "canonical" ? "canonical" : "custom";
   });
-  const [groupByShotSize, setGroupByShotSize] = useState<boolean>(() => {
+  const [groupByShotSize] = useState<boolean>(() => {
     return localStorage.getItem("wp_group_shot_size") !== "false";
   });
   const [enableOptionalShotTags] = useState<boolean>(() => {
@@ -123,6 +122,8 @@ function AppContent() {
   });
   const [shotSizeFilter, setShotSizeFilter] = useState<string>(() => localStorage.getItem("wp_shot_size_filter") || "all");
   const [processingWaveforms, setProcessingWaveforms] = useState(false);
+  const [playingClipId, setPlayingClipId] = useState<string | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
 
   // Settings with Persistence
   const [thumbCount, setThumbCount] = useState<number>(() => {
@@ -188,6 +189,67 @@ function AppContent() {
   // State for delayed actions
   const [postScanTab, setPostScanTab] = useState<"shot-planner" | "media-workspace" | "contact" | "blocks" | null>(null);
 
+  const [projectLut, setProjectLut] = useState<{ path: string; name: string; hash: string } | null>(null);
+  const [lutRenderNonce, setLutRenderNonce] = useState(0);
+  const activeProjectRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    activeProjectRef.current = projectId;
+  }, [projectId]);
+
+  const fetchProjectSettings = useCallback(async (pid: string) => {
+    try {
+      const settingsJson = await invoke<string>("get_project_settings", { projectId: pid });
+      if (settingsJson && settingsJson !== "{}") {
+        const settings = JSON.parse(settingsJson);
+        if (settings.lut_path) {
+          setProjectLut({
+            path: settings.lut_path,
+            name: settings.lut_name,
+            hash: settings.lut_hash
+          });
+        } else {
+          setProjectLut(null);
+        }
+      } else {
+        setProjectLut(null);
+      }
+    } catch (e) {
+      console.error("Failed to fetch project settings", e);
+      setProjectLut(null);
+    }
+  }, []);
+
+  const handleLoadLut = async () => {
+    if (!projectId) return;
+    try {
+      const selected = await open({
+        multiple: false,
+        filters: [{ name: 'LUT Files', extensions: ['cube'] }]
+      });
+      if (selected && typeof selected === 'string') {
+        await invoke("set_project_lut", { projectId, lutPath: selected });
+        await fetchProjectSettings(projectId);
+        await invoke("generate_lut_thumbnails", { projectId });
+        setLutRenderNonce((n) => n + 1);
+      }
+    } catch (e) {
+      console.error(e);
+      setUiError({ title: "LUT Load Failed", hint: String(e) });
+    }
+  };
+
+  const handleRemoveLut = async () => {
+    if (!projectId) return;
+    try {
+      await invoke("remove_project_lut", { projectId });
+      await fetchProjectSettings(projectId);
+      setLutRenderNonce((n) => n + 1);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   const [hoveredClipId, setHoveredClipId] = useState<string | null>(null);
 
   const toggleClipSelection = useCallback((id: string) => {
@@ -201,7 +263,7 @@ function AppContent() {
     });
   }, [clips]);
 
-  const handleUpdateMetadata = useCallback(async (clipId: string, updates: Partial<Pick<Clip, 'rating' | 'flag' | 'notes' | 'shot_size' | 'movement' | 'manual_order'>>) => {
+  const handleUpdateMetadata = useCallback(async (clipId: string, updates: Partial<Pick<Clip, 'rating' | 'flag' | 'notes' | 'shot_size' | 'movement' | 'manual_order' | 'lut_enabled'>>) => {
     // Optimistic UI update
     setClips((prevClips) =>
       prevClips.map(clipItem => {
@@ -232,12 +294,54 @@ function AppContent() {
         shotSize: updates.shot_size ?? null,
         movement: updates.movement ?? null,
         manualOrder: updates.manual_order ?? null,
+        lutEnabled: updates.lut_enabled ?? null,
       });
+      if (updates.lut_enabled === 1 && projectId && projectLut) {
+        await invoke("generate_lut_thumbnails", { projectId });
+        setLutRenderNonce((n) => n + 1);
+      }
+      if (updates.lut_enabled === 0) {
+        setLutRenderNonce((n) => n + 1);
+      }
     } catch (err) {
       console.error("Failed to persist metadata:", err);
       setUiError({ title: "Could not save rating/flag", hint: "Retry. If this persists, export diagnostics from header actions." });
     }
-  }, []);
+  }, [projectId, projectLut]);
+
+  const handlePlayClip = useCallback(async (id: string | null) => {
+    if (!id || (playingClipId === id)) {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current = null;
+      }
+      setPlayingClipId(null);
+      return;
+    }
+
+    const clip = clips.find(c => c.clip.id === id)?.clip;
+    if (!clip) return;
+
+    if (audioRef.current) {
+      audioRef.current.pause();
+    }
+
+    try {
+      const src = convertFileSrc(clip.file_path);
+      const audio = new Audio(src);
+      audio.onended = () => setPlayingClipId(null);
+      audio.onerror = (e) => {
+        console.error("Audio playback error", e);
+        setPlayingClipId(null);
+      };
+      audioRef.current = audio;
+      setPlayingClipId(id);
+      audio.play();
+    } catch (err) {
+      console.error("Failed to play audio:", err);
+      setPlayingClipId(null);
+    }
+  }, [playingClipId, clips]);
 
   // Keyboard Shortcuts
   useEffect(() => {
@@ -357,7 +461,10 @@ function AppContent() {
         path: thumb.file_path
       }))
     );
-    if (thumbEntries.length === 0) return;
+    if (thumbEntries.length === 0) {
+      setThumbnailCache({});
+      return;
+    }
 
     const results = thumbEntries.map(({ key, path }) => {
       try {
@@ -373,16 +480,16 @@ function AppContent() {
     for (const item of results) {
       if (item) nextCache[item.key] = item.url;
     }
-    if (Object.keys(nextCache).length > 0) {
-      setThumbnailCache((prev) => ({ ...prev, ...nextCache }));
-    }
+    setThumbnailCache(nextCache);
   }, []);
 
   const refreshProjectClips = useCallback(async (nextProjectId: string) => {
     try {
       const clipRows = await invoke<ClipWithThumbnails[]>("get_clips", { projectId: nextProjectId });
+      if (activeProjectRef.current !== nextProjectId) return;
       setClips(clipRows);
       await hydrateThumbnailCache(clipRows);
+      await fetchProjectSettings(nextProjectId);
     } catch (error) {
       console.error("Failed to refresh clips:", error);
       setUiError({ title: "Could not load clip previews", hint: "Retry scan. If this persists, export diagnostics." });
@@ -405,7 +512,8 @@ function AppContent() {
 
     async function setupListeners() {
       unlistenProgress = await listen<ThumbnailProgress>("thumbnail-progress", (event) => {
-        const { clip_id, clip_index, total_clips, thumbnails } = event.payload;
+        const { project_id, clip_id, clip_index, total_clips, thumbnails } = event.payload;
+        if (!projectId || project_id !== projectId) return;
         setExtractProgress({ done: clip_index + 1, total: total_clips });
 
         if (thumbnails.length > 0) {
@@ -463,6 +571,7 @@ function AppContent() {
     setClips([]);
     setThumbnailCache({});
     setProjectId(null);
+    setSelectedClipIds(new Set());
     setSelectedBlockIds([]);
     if (targetTab) setPostScanTab(targetTab);
 
@@ -507,25 +616,7 @@ function AppContent() {
     refreshProjectRoots(projectId).catch(console.error);
   }, [projectId, refreshProjectRoots]);
 
-  const handleGoHome = useCallback(() => {
-    setProjectId(null);
-    setClips([]);
-    setSelectedClipIds(new Set());
-    setExtracting(false);
-    setActiveTab("home");
-  }, []);
 
-  const handleBack = useCallback(() => {
-    if (activeTab === "contact" || activeTab === "blocks" || activeTab === "safe-copy") {
-      setActiveTab("media-workspace");
-      return;
-    }
-    if (activeTab === "media-workspace" || activeTab === "shot-planner") {
-      setActiveTab("home");
-      return;
-    }
-    setActiveTab("home");
-  }, [activeTab]);
 
   const tourSteps: TourStep[] = [
     {
@@ -673,17 +764,6 @@ function AppContent() {
     }
   };
 
-  const handlePlayClip = async (clipId: string) => {
-    const clip = clips.find(c => c.clip.id === clipId);
-    if (clip) {
-      try {
-        await openPath(clip.clip.file_path);
-      } catch (error) {
-        console.error("Failed to play clip:", error);
-        setUiError({ title: "Playback Failed", hint: String(error) });
-      }
-    }
-  };
 
   const handleExport = useCallback(() => {
     if (selectedClipIds.size === 0) {
@@ -693,6 +773,7 @@ function AppContent() {
     const run = async () => {
       setShowPrint(true);
       setPreparingExport({ kind: "pdf", message: "Preparing PDF export..." });
+      document.body.classList.add("printing-contact-sheet");
       try {
         await waitForPrintAssets();
         window.print();
@@ -704,6 +785,7 @@ function AppContent() {
           hint: "No thumbnails/data were ready for export. Re-run check clips and try again.",
         });
       } finally {
+        document.body.classList.remove("printing-contact-sheet");
         setPreparingExport(null);
         setTimeout(() => setShowPrint(false), 350);
       }
@@ -752,7 +834,7 @@ function AppContent() {
   }, {});
 
   return (
-    <div className="app-shell">
+    <div className="app-container">
       {(showPrint || printingForImage) && (
         <div id="print-area" style={printingForImage ? { position: 'absolute', left: '-9999px', width: '297mm' } : {}}>
           <PrintLayout
@@ -766,6 +848,7 @@ function AppContent() {
             onClose={() => {
               if (!printingForImage) setShowPrint(false);
             }}
+            projectLutHash={projectLut?.hash || null}
           />
         </div>
       )}
@@ -781,130 +864,350 @@ function AppContent() {
 
       <header className="app-header">
         <div className="app-header-left">
-          <div className="app-logo" onClick={handleGoHome} style={{ cursor: 'pointer' }}>
+          <div className="app-logo" onClick={() => setActiveTab('home')}>
             <div className="app-logo-icon">
-              <img src={appLogo} alt="Wrap Preview Logo" />
+              <img src="/logo.svg" alt="Wrap Preview" onError={(e) => (e.currentTarget.style.display = 'none')} />
             </div>
             <span>Wrap Preview</span>
           </div>
-          {activeTab !== "home" && (
-            <nav className="app-tabs-nav">
-              <button className="nav-tab" onClick={handleBack} title="Back">
-                <ChevronLeft size={15} /> Back
-              </button>
-              <button className="nav-tab" onClick={() => setActiveTab('home')}>
-                <LayoutGrid size={15} /> Modules
-              </button>
-              <button className={`nav-tab ${activeTab === 'safe-copy' ? 'active' : ''}`} onClick={() => setActiveTab('safe-copy')} title="Safe Copy (Verification)">
-                <ShieldCheck size={15} /> Safe Copy
-              </button>
-              <button className={`nav-tab ${activeTab === 'contact' || activeTab === 'shot-planner' ? 'active' : ''}`} onClick={() => setActiveTab(activeTab === "shot-planner" ? 'shot-planner' : 'contact')}>
-                <Camera size={15} /> Review
-              </button>
-              <button className={`nav-tab tour-blocks-tab ${activeTab === 'blocks' ? 'active' : ''}`} onClick={() => setActiveTab('blocks')} disabled={!projectId}>
-                <Boxes size={15} /> Scene Blocks
-              </button>
-              <button className={`nav-tab ${showExportPanel ? 'active' : ''}`} onClick={() => setShowExportPanel(true)} disabled={!projectId}>
-                <FileDown size={15} /> Delivery
-              </button>
-            </nav>
-          )}
-          {(activeTab === 'contact' || activeTab === 'blocks') && projectName && (
-            <span className="header-project-name">/ {projectName}</span>
+          {projectName && (
+            <div className="header-project-info">
+              <span className="separator">/</span>
+              <span className="project-name">{projectName}</span>
+            </div>
           )}
         </div>
         <div className="app-header-right">
-          {(activeTab === 'shot-planner' || activeTab === 'media-workspace' || activeTab === 'contact' || activeTab === 'blocks') && (
-            <>
+          <nav className="header-nav">
+          </nav>
+          <>
+            {projectId && (
               <button
-                className="btn btn-primary"
-                onClick={() => handleSelectFolder(
-                  activeTab === "blocks"
-                    ? "blocks"
-                    : activeTab === "shot-planner"
-                      ? "shot-planner"
-                      : activeTab === "media-workspace"
-                        ? "media-workspace"
-                        : "contact"
-                )}
-                disabled={scanning}
-                title="Check clips and generate metadata/thumbnails for a media folder."
+                className="btn btn-secondary"
+                onClick={async () => {
+                  try {
+                    await invoke("auto_analyze_lookbook", { projectId, recompute: false });
+                    await refreshProjectClips(projectId);
+                  } catch (e) {
+                    console.error(e);
+                    setUiError({ title: "Auto Analyze failed", hint: "Retry analysis or export diagnostics if it persists." });
+                  }
+                }}
               >
-                {scanning ? <div className="spinner" /> : <FolderOpen size={16} />}
-                {scanning ? "Scanning..." : "Check Clips"}
+                <Star size={16} /> Auto Analyze
               </button>
-              {projectId && (
-                <button
-                  className="btn btn-secondary"
-                  onClick={async () => {
-                    try {
-                      await invoke("auto_analyze_lookbook", { projectId, recompute: false });
-                      await refreshProjectClips(projectId);
-                    } catch (e) {
-                      console.error(e);
-                      setUiError({ title: "Auto Analyze failed", hint: "Retry analysis or export diagnostics if it persists." });
-                    }
-                  }}
-                >
-                  <Star size={16} /> Auto Analyze
-                </button>
-              )}
-              <div className="help-menu-wrapper">
-                <button className="btn btn-icon" onClick={() => setHelpMenuOpen(!helpMenuOpen)} title="Help & Info">
-                  <MoreHorizontal size={18} />
-                </button>
-                {helpMenuOpen && (
-                  <>
-                    <div className="dropdown-backdrop" onClick={() => setHelpMenuOpen(false)} />
-                    <div className="help-dropdown">
-                      <button className="dropdown-item" onClick={() => { setAboutOpen(true); setHelpMenuOpen(false); }}>
-                        <BadgeInfo size={15} /> About Wrap Preview
-                      </button>
-                      <button className="dropdown-item" onClick={async () => {
-                        setHelpMenuOpen(false);
-                        const dest = await open({ directory: true, multiple: false, title: "Export Feedback Bundle" });
-                        if (!dest) return;
-                        try {
-                          const zip = await invoke<string>("export_feedback_bundle", { outputRoot: dest, lastVerificationJobId });
-                          try { await openPath(zip); } catch (openErr) {
-                            console.warn("openPath failed for feedback bundle", openErr);
-                            setUiError({ title: "Feedback bundle exported", hint: `Saved at ${zip}. Use Finder to open if auto-open is blocked.` });
-                          }
-                        } catch (e) {
-                          console.error(e);
-                          setUiError({ title: "Diagnostics export failed", hint: "Retry and verify destination folder is writable." });
+            )}
+
+            <div className="help-menu-wrapper" style={{ position: 'relative' }}>
+              <button className="btn btn-icon" onClick={() => setHelpMenuOpen(!helpMenuOpen)} title="Help & Info">
+                <MoreHorizontal size={18} />
+              </button>
+              {helpMenuOpen && (
+                <>
+                  <div className="dropdown-backdrop" onClick={() => setHelpMenuOpen(false)} />
+                  <div className="help-dropdown">
+                    <button className="dropdown-item" onClick={() => { setAboutOpen(true); setHelpMenuOpen(false); }}>
+                      <BadgeInfo size={15} /> About Wrap Preview
+                    </button>
+                    <button className="dropdown-item" onClick={async () => {
+                      setHelpMenuOpen(false);
+                      const dest = await open({ directory: true, multiple: false, title: "Export Feedback Bundle" });
+                      if (!dest) return;
+                      try {
+                        const zip = await invoke<string>("export_feedback_bundle", { outputRoot: dest, lastVerificationJobId });
+                        try { await openPath(zip); } catch (openErr) {
+                          console.warn("openPath failed for feedback bundle", openErr);
+                          setUiError({ title: "Feedback bundle exported", hint: `Saved at ${zip}. Use Finder to open if auto-open is blocked.` });
                         }
-                      }}>
-                        <MessageCircleWarning size={15} /> Send Feedback
-                      </button>
-                      <div className="dropdown-divider" />
-                      <button className="dropdown-item" onClick={() => {
-                        setHelpMenuOpen(false);
-                        if (tourRun) completeTour();
-                        else setTourRun(true);
-                      }}>
-                        <CircleHelp size={15} /> {tourRun ? "Hide Tour" : "Show Tour"}
-                      </button>
-                    </div>
-                  </>
-                )}
-              </div>
-            </>
-          )}
-          <button className="btn btn-secondary" onClick={() => setJobsOpen(true)}>
-            <BriefcaseBusiness size={16} /> Jobs {runningJobs > 0 ? `(${runningJobs})` : ""}
-            <span className={`clip-status-dot ${failedJobs > 0 ? "fail" : runningJobs > 0 ? "warn" : "ok"}`} />
-          </button>
+                      } catch (e) {
+                        console.error(e);
+                        setUiError({ title: "Diagnostics export failed", hint: "Retry and verify destination folder is writable." });
+                      }
+                    }}>
+                      <MessageCircleWarning size={15} /> Send Feedback
+                    </button>
+                    <div className="dropdown-divider" />
+                    <button className="dropdown-item" onClick={() => {
+                      setHelpMenuOpen(false);
+                      if (tourRun) completeTour();
+                      else setTourRun(true);
+                    }}>
+                      <CircleHelp size={15} /> {tourRun ? "Hide Tour" : "Show Tour"}
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+
+            <button className="btn btn-secondary" onClick={() => setJobsOpen(true)}>
+              <BriefcaseBusiness size={16} />
+              <span className={runningJobs > 0 ? "shimmer-text" : ""}>
+                Jobs {runningJobs > 0 ? `(${runningJobs})` : ""}
+              </span>
+              <span className={`clip-status-dot ${failedJobs > 0 ? "fail" : runningJobs > 0 ? "warn" : "ok"} ${runningJobs > 0 ? "pulse-glow" : ""}`} />
+            </button>
+          </>
         </div>
       </header>
 
       <div className="app-content">
+        {activeTab !== 'home' && (
+          <nav className="app-tabs-nav">
+            <button className={`nav-tab ${activeTab === 'media-workspace' || activeTab === 'safe-copy' || activeTab === 'blocks' ? 'active' : ''}`} onClick={() => setActiveTab('media-workspace')}>
+              Workspace
+            </button>
+            <button className={`nav-tab ${activeTab === 'contact' ? 'active' : ''}`} onClick={() => setActiveTab('contact')}>
+              Clip Review
+            </button>
+            <button className={`nav-tab ${activeTab === 'shot-planner' ? 'active' : ''}`} onClick={() => setActiveTab('shot-planner')}>
+              Shot Planner
+            </button>
+            <button className={`nav-tab ${activeTab === 'blocks' ? 'active' : ''}`} onClick={() => setActiveTab('blocks')}>
+              Blocks
+            </button>
+            <button
+              className={`nav-tab ${showExportPanel ? 'active' : ''}`}
+              onClick={() => {
+                if (!projectId) {
+                  setUiError({ title: "No Project Loaded", hint: "Please initialize a workspace by checking clips first." });
+                  return;
+                }
+                setShowExportPanel(true);
+              }}
+            >
+              Delivery
+            </button>
+          </nav>
+        )}
         {uiError && (
           <div className="error-banner">
             <strong>{uiError.title}</strong> {uiError.hint}
           </div>
         )}
-        {activeTab === 'safe-copy' ? (
+        {activeTab === 'contact' || activeTab === 'all' ? (
+          projectId ? (
+            <div className="media-workspace">
+              <div className="stats-bar">
+                <div className={`stat-card ${selectedClipIds.size > 0 ? 'stat-card-highlight' : ''}`}>
+                  <div className="stat-header">
+                    <span className="stat-label">Selection</span>
+                  </div>
+                  <span className="stat-value stat-value-xl">{selectedClipIds.size}<span className="stat-value-total"> / {totalClips}</span></span>
+                  <span className="stat-sub">Selected for Export</span>
+                </div>
+                <div className="stat-card">
+                  <div className="stat-header">
+                    <span className="stat-label">Assets</span>
+                    <Info size={12} className="info-icon" data-tooltip="Total video files discovered." />
+                  </div>
+                  <span className="stat-value">{totalClips}</span>
+                  <div className="stat-sub-group">
+                    <span className="stat-sub-item ok">{okClips} OK</span>
+                    <span className="stat-sub-item warn">{warnClips} WARN</span>
+                  </div>
+                </div>
+                <div className="stat-card">
+                  <div className="stat-header">
+                    <span className="stat-label">Warnings</span>
+                    <Info size={12} className="info-icon" data-tooltip="No embedded timecode found in these files." />
+                  </div>
+                  <span className="stat-value">{warnClips}</span>
+                  <span className="stat-sub">Missing Timecode</span>
+                </div>
+                <div className="stat-card">
+                  <div className="stat-header">
+                    <span className="stat-label">Total Duration</span>
+                    <Clock size={12} className="info-icon" data-tooltip="Cumulative runtime of all discovered clips." />
+                  </div>
+                  <span className="stat-value">{formatDuration(totalDuration)}</span>
+                  <span className="stat-sub">{formatFileSize(totalSize)} total volume</span>
+                </div>
+                <div className={`stat-card ${projectLut ? 'stat-card-lut-loaded' : ''}`}>
+                  <div className="stat-header">
+                    <span className="stat-label">Color Profile</span>
+                    <Palette size={12} className="info-icon" />
+                  </div>
+                  <span className="stat-value" style={{ fontSize: '1.2rem', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap', maxWidth: '100px' }}>
+                    {projectLut ? projectLut.name : 'None'}
+                  </span>
+                  <div className="stat-sub-group">
+                    <span className="stat-sub-item ok" style={{ cursor: 'pointer', textDecoration: 'underline' }} onClick={handleLoadLut}>
+                      Load LUT
+                    </span>
+                    {projectLut && (
+                      <span className="stat-sub-item warn" style={{ cursor: 'pointer', textDecoration: 'underline' }} onClick={handleRemoveLut}>
+                        Clear
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {extracting && (
+                <div className="progress-container">
+                  <div className="progress-bar-wrapper">
+                    <div className="progress-bar-fill" style={{ width: `${extractProgress.total > 0 ? (extractProgress.done / extractProgress.total) * 100 : 0}% ` }} />
+                  </div>
+                  <div className="progress-label">
+                    <span>Extracting thumbnails…</span>
+                    <span>{extractProgress.done} / {extractProgress.total}</span>
+                  </div>
+                </div>
+              )}
+
+              <div className="toolbar premium-toolbar">
+                <div className="toolbar-left-group">
+                  <div className="toolbar-segment">
+                    <span className="toolbar-label">Sort</span>
+                    <div className="sort-group">
+                      <select className="input-select" value={lookbookSortMode} onChange={(e) => setLookbookSortMode(e.target.value as LookbookSortMode)}>
+                        <option value="custom">Custom Manual</option>
+                        <option value="canonical">Canonical</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="toolbar-divider" />
+
+                  <div className="toolbar-segment">
+                    <span className="toolbar-label">Filter</span>
+                    <div className="sort-group">
+                      <select className="input-select" value={viewFilter} onChange={(e) => setViewFilter(e.target.value as "all" | "picks" | "rated_min")}>
+                        <option value="all">Show All</option>
+                        <option value="picks">Picks Only</option>
+                        <option value="rated_min">Rating &gt;= N</option>
+                      </select>
+                      {viewFilter === "rated_min" && (
+                        <select className="input-select" value={viewMinRating} onChange={(e) => setViewMinRating(Number(e.target.value))}>
+                          {[1, 2, 3, 4, 5].map((n) => (
+                            <option key={n} value={n}>{n}+</option>
+                          ))}
+                        </select>
+                      )}
+                      <select className="input-select" value={shotSizeFilter} onChange={(e) => setShotSizeFilter(e.target.value)}>
+                        <option value="all">All Shot Sizes</option>
+                        {[...SHOT_SIZE_CANONICAL, ...(enableOptionalShotTags ? SHOT_SIZE_OPTIONAL : [])].map((size) => (
+                          <option key={size} value={size}>{size}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="toolbar-divider" />
+
+                  <div className="toolbar-segment">
+                    <span className="toolbar-label">Layout</span>
+                    <div className="segmented-control">
+                      {[3, 5, 7].map((n) => (
+                        <button key={n} className={`btn-toggle ${thumbCount === n ? 'active' : ''}`} onClick={() => setThumbCount(n)}>{n}</button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="toolbar-divider" />
+
+                  <div className="toolbar-segment">
+                    <span className="toolbar-label">Selection</span>
+                    <div className="toolbar-actions">
+                      <button className="btn-link" onClick={toggleSelectAll}>{selectableClipIds.length > 0 && selectedSelectableCount === selectableClipIds.length ? "Clear" : "All"}</button>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="toolbar-right-group">
+                  {projectId && clips.length > 0 && !extracting && (
+                    <div className="export-dropdown-wrapper">
+                      <button
+                        className="btn btn-primary btn-export tour-open-export"
+                        onClick={() => setExportMenuOpen(!exportMenuOpen)}
+                        disabled={selectedClipIds.size === 0}
+                      >
+                        <FileDown size={16} /> Export ▾
+                      </button>
+                      {exportMenuOpen && (
+                        <>
+                          <div className="dropdown-backdrop" onClick={() => setExportMenuOpen(false)} />
+                          <div className="export-dropdown">
+                            <button className="dropdown-item" onClick={() => { handleExport(); setExportMenuOpen(false); }}>
+                              <FileText size={15} /> Export as PDF
+                            </button>
+                            <button className="dropdown-item" onClick={() => { handleExportImage(); setExportMenuOpen(false); }}>
+                              <ImageIcon size={15} /> Export as Image
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <ClipList
+                clips={sortedClips}
+                thumbnailCache={thumbnailCache}
+                isExtracting={extracting}
+                selectedIds={selectedClipIds}
+                onToggleSelection={toggleClipSelection}
+                thumbCount={thumbCount}
+                onUpdateMetadata={handleUpdateMetadata}
+                onHoverClip={setHoveredClipId}
+                shotSizeOptions={[...SHOT_SIZE_CANONICAL, ...(enableOptionalShotTags ? SHOT_SIZE_OPTIONAL : [])]}
+                movementOptions={[...MOVEMENT_CANONICAL]}
+                lookbookSortMode={lookbookSortMode}
+                groupByShotSize={false}
+                onPromoteClip={handlePromoteClip}
+                onPlayClip={handlePlayClip}
+                playingClipId={playingClipId}
+                focusedClipId={hoveredClipId}
+                projectLutHash={projectLut?.hash || null}
+                lutRenderNonce={lutRenderNonce}
+              />
+            </div>
+          ) : (
+            <div className="onboarding-container" style={{ minHeight: '60vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <div className="empty-state-card premium-card" style={{ maxWidth: 400, padding: 40, textAlign: 'center' }}>
+                <div className="module-icon" style={{ marginBottom: 24, transform: 'scale(1.5)' }}><Camera size={48} strokeWidth={1} /></div>
+                <h2>Ready to Review?</h2>
+                <p style={{ opacity: 0.6, marginBottom: 32 }}>Select a media folder to analyze thumbnails, metadata, and shot sequencing.</p>
+                <button className="btn btn-primary btn-lg" onClick={() => handleSelectFolder("contact")} disabled={scanning}>
+                  {scanning ? <div className="spinner" /> : <FolderOpen size={18} />}
+                  <span>{scanning ? "Scanning..." : "Open Media Folder"}</span>
+                </button>
+              </div>
+            </div>
+          )
+        ) : activeTab === 'blocks' ? (
+          projectId ? (
+            <div className="media-workspace">
+              <BlocksView
+                projectId={projectId}
+                thumbnailCache={thumbnailCache}
+                thumbnailsByClipId={thumbnailsByClipId}
+                onSelectedBlockIdsChange={setSelectedBlockIds}
+                onRequestGenerateThumbnails={async () => {
+                  try {
+                    await invoke("auto_analyze_lookbook", { projectId, recompute: false });
+                    await refreshProjectClips(projectId);
+                  } catch (e) {
+                    console.error(e);
+                  }
+                }}
+              />
+            </div>
+          ) : (
+            <div className="onboarding-container" style={{ minHeight: '60vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <div className="empty-state-card premium-card" style={{ maxWidth: 400, padding: 40, textAlign: 'center' }}>
+                <div className="module-icon" style={{ marginBottom: 24, transform: 'scale(1.5)' }}><Boxes size={48} strokeWidth={1} /></div>
+                <h2>Scene Blocks</h2>
+                <p style={{ opacity: 0.6, marginBottom: 32 }}>Organize your clips into meaningful editorial groups. Select a folder to start.</p>
+                <button className="btn btn-primary btn-lg" onClick={() => handleSelectFolder("blocks")} disabled={scanning}>
+                  {scanning ? <div className="spinner" /> : <FolderOpen size={18} />}
+                  <span>{scanning ? "Scanning..." : "Open Media Folder"}</span>
+                </button>
+              </div>
+            </div>
+          )
+        ) : activeTab === 'shot-planner' ? (
           <SafeCopy projectId={projectId ?? "__global__"} onJobCreated={setLastVerificationJobId} onError={setUiError} />
         ) : activeTab === 'media-workspace' ? (
           <div className="onboarding-container">
@@ -933,6 +1236,12 @@ function AppContent() {
                       onClick={async () => {
                         await invoke("rescan_project", { projectId });
                         await refreshProjectClips(projectId);
+                        setExtracting(true);
+                        setExtractProgress({ done: 0, total: 0 });
+                        invoke("extract_thumbnails", { projectId }).catch((e) => {
+                          console.error("Thumbnail extraction error after rescan:", e);
+                          setExtracting(false);
+                        });
                       }}
                     >
                       <RefreshCw size={14} /> Rescan
@@ -971,60 +1280,66 @@ function AppContent() {
             )}
             <div className="onboarding-grid workspace-apps-grid">
               <div
-                className="module-card"
+                className="module-card premium-card"
                 onClick={() => setActiveTab("safe-copy")}
+                style={{ "--corner-color": "rgba(255, 255, 255, 0.05)", "--card-accent": "#ffffff", "--card-accent-soft": "rgba(255, 255, 255, 0.1)" } as any}
               >
                 <div className="module-icon"><ShieldCheck size={32} strokeWidth={1.5} /></div>
                 <div className="module-info">
-                  <h3>Safe Copy (Verification)</h3>
-                  <p>Validate copied media integrity.</p>
-                  <span className="module-action">Verify <ArrowRight size={14} /></span>
+                  <h3>Safe Copy</h3>
+                  <p>Validate media integrity with bit-accurate verification.</p>
+                  <span className="module-action">Execute Check <ArrowRight size={14} /></span>
                 </div>
               </div>
               <div
-                className={`module-card ${!projectId ? "disabled" : ""}`}
+                className={`module-card premium-card`}
                 onClick={() => {
                   if (projectId) setActiveTab("contact");
+                  else handleSelectFolder("contact");
                 }}
+                style={{ "--corner-color": "var(--color-accent-soft)", "--card-accent": "var(--color-accent)", "--card-accent-soft": "var(--color-accent-soft)" } as any}
               >
                 <div className="module-icon"><Camera size={32} strokeWidth={1.5} /></div>
                 <div className="module-info">
-                  <h3>Review</h3>
-                  <p>Review clips and metadata.</p>
-                  <span className="module-action">{projectId ? <>Open <ArrowRight size={14} /></> : "Load workspace first"}</span>
+                  <h3>Clip Review</h3>
+                  <p>Analyze thumbnails, metadata, and shot sequencing.</p>
+                  <span className="module-action">Enter Review <ArrowRight size={14} /></span>
                 </div>
               </div>
               <div
-                className={`module-card ${!projectId ? "disabled" : ""}`}
+                className={`module-card premium-card`}
                 onClick={() => {
                   if (projectId) setActiveTab("blocks");
+                  else handleSelectFolder("blocks");
                 }}
+                style={{ "--corner-color": "var(--color-accent-amethyst-soft)", "--card-accent": "var(--color-accent-amethyst)", "--card-accent-soft": "var(--color-accent-amethyst-soft)" } as any}
               >
                 <div className="module-icon"><Boxes size={32} strokeWidth={1.5} /></div>
                 <div className="module-info">
                   <h3>Scene Blocks</h3>
-                  <p>Group clips into editorial moments.</p>
-                  <span className="module-action">{projectId ? <>Open <ArrowRight size={14} /></> : "Load workspace first"}</span>
+                  <p>Organize clips into meaningful editorial groups.</p>
+                  <span className="module-action">Manage Blocks <ArrowRight size={14} /></span>
                 </div>
               </div>
               <div
-                className={`module-card ${!projectId ? "disabled" : ""}`}
+                className={`module-card premium-card ${!projectId ? "disabled" : ""}`}
                 onClick={() => {
                   if (projectId) {
                     setShowExportPanel(true);
                   }
                 }}
+                style={{ "--corner-color": "var(--color-accent-forest-soft)", "--card-accent": "var(--color-accent-forest)", "--card-accent-soft": "var(--color-accent-forest-soft)" } as any}
               >
                 <div className="module-icon"><FileDown size={32} strokeWidth={1.5} /></div>
                 <div className="module-info">
-                  <h3>Delivery</h3>
-                  <p>Prepare edit handoff and delivery package.</p>
-                  <span className="module-action">{projectId ? <>Open <ArrowRight size={14} /></> : "Load workspace first"}</span>
+                  <h3>Handoff</h3>
+                  <p>Generate PDF contact sheets and DaVinci exports.</p>
+                  <span className="module-action">{projectId ? <>Prepare Delivery <ArrowRight size={14} /></> : "Load workspace first"}</span>
                 </div>
               </div>
             </div>
           </div>
-        ) : activeTab === 'home' ? (
+        ) : (
           <div className="onboarding-container">
             <div className="onboarding-header">
               <h1>Wrap Preview Suite</h1>
@@ -1033,8 +1348,9 @@ function AppContent() {
               <div className="onboarding-phase">
                 <div className="onboarding-grid">
                   <div
-                    className={`module-card tour-contact-module ${scanning ? 'disabled' : ''}`}
-                    onClick={scanning ? undefined : () => setActiveTab("shot-planner")}
+                    className={`module-card tour-contact-module ${scanning ? 'disabled' : ''} premium-card`}
+                    onClick={scanning ? undefined : () => setActiveTab("all")}
+                    style={{ "--corner-color": "var(--color-accent-amethyst-soft)", "--card-accent": "var(--color-accent-amethyst)", "--card-accent-soft": "var(--color-accent-amethyst-soft)" } as any}
                   >
                     <div className="module-icon">
                       {scanning ? <div className="spinner" /> : <ImageIcon size={32} strokeWidth={1.5} />}
@@ -1053,8 +1369,9 @@ function AppContent() {
               <div className="onboarding-phase">
                 <div className="onboarding-grid">
                   <div
-                    className={`module-card tour-safe-copy-module ${scanning ? 'disabled' : ''}`}
+                    className={`module-card tour-safe-copy-module ${scanning ? 'disabled' : ''} premium-card`}
                     onClick={scanning ? undefined : () => setActiveTab("media-workspace")}
+                    style={{ "--corner-color": "var(--color-accent-soft)", "--card-accent": "var(--color-accent)", "--card-accent-soft": "var(--color-accent-soft)" } as any}
                   >
                     <div className="module-icon">
                       {scanning ? <div className="spinner" /> : <BriefcaseBusiness size={32} strokeWidth={1.5} />}
@@ -1071,221 +1388,31 @@ function AppContent() {
               </div>
             </div>
           </div>
-        ) : activeTab === "blocks" ? (
-          projectId ? (
-            <BlocksView
-              projectId={projectId}
-              thumbnailCache={thumbnailCache}
-              thumbnailsByClipId={thumbnailsByClipId}
-              onSelectedBlockIdsChange={setSelectedBlockIds}
-              onRequestGenerateThumbnails={async () => {
-                try {
-                  setExtracting(true);
-                  setExtractProgress({ done: 0, total: clips.length });
-                  await invoke("extract_thumbnails", { projectId });
-                } catch (error) {
-                  console.error("Thumbnail extraction error:", error);
-                  setUiError({ title: "Thumbnail extraction failed", hint: "Retry and confirm media folder is readable." });
-                  setExtracting(false);
-                }
-              }}
-            />
-          ) : (
-            <div className="onboarding-container">
-              <div className="empty-state">No project loaded. Use <strong>Check Clips</strong> to scan a media folder first.</div>
-            </div>
-          )
-        ) : (
-          <>
-            <div className="stats-bar">
-              <div className={`stat-card ${selectedClipIds.size > 0 ? 'stat-card-highlight' : ''}`}>
-                <div className="stat-header">
-                  <span className="stat-label">Selection</span>
-                </div>
-                <span className="stat-value stat-value-xl">{selectedClipIds.size}<span className="stat-value-total"> / {totalClips}</span></span>
-                <span className="stat-sub">Selected for Export</span>
-              </div>
-              <div className="stat-card">
-                <div className="stat-header">
-                  <span className="stat-label">Assets</span>
-                  <Info size={12} className="info-icon" data-tooltip="Total video files discovered." />
-                </div>
-                <span className="stat-value">{totalClips}</span>
-                <div className="stat-sub-group">
-                  <span className="stat-sub-item ok">{okClips} OK</span>
-                  <span className="stat-sub-item warn">{warnClips} WARN</span>
-                </div>
-              </div>
-              <div className="stat-card">
-                <div className="stat-header">
-                  <span className="stat-label">Warnings</span>
-                  <Info size={12} className="info-icon" data-tooltip="No embedded timecode found in these files." />
-                </div>
-                <span className="stat-value">{warnClips}</span>
-                <span className="stat-sub">Missing Timecode</span>
-              </div>
-              <div className="stat-card">
-                <div className="stat-header">
-                  <span className="stat-label">Total Duration</span>
-                  <Clock size={12} className="info-icon" data-tooltip="Cumulative runtime of all discovered clips." />
-                </div>
-                <span className="stat-value">{formatDuration(totalDuration)}</span>
-                <span className="stat-sub">{formatFileSize(totalSize)} total volume</span>
-              </div>
-            </div>
-
-            {extracting && (
-              <div className="progress-container">
-                <div className="progress-bar-wrapper">
-                  <div className="progress-bar-fill" style={{ width: `${extractProgress.total > 0 ? (extractProgress.done / extractProgress.total) * 100 : 0}% ` }} />
-                </div>
-                <div className="progress-label">
-                  <span>Extracting thumbnails…</span>
-                  <span>{extractProgress.done} / {extractProgress.total}</span>
-                </div>
-              </div>
-            )}
-
-            <div className="toolbar premium-toolbar">
-              <div className="toolbar-left-group">
-                <div className="toolbar-segment">
-                  <span className="toolbar-label">Sort</span>
-                  <div className="sort-group">
-                    <select className="input-select" value={lookbookSortMode} onChange={(e) => setLookbookSortMode(e.target.value as LookbookSortMode)}>
-                      <option value="custom">Custom Manual</option>
-                      <option value="canonical">Canonical</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div className="toolbar-divider" />
-
-                <div className="toolbar-segment">
-                  <span className="toolbar-label">Filter</span>
-                  <div className="sort-group">
-                    <select className="input-select" value={viewFilter} onChange={(e) => setViewFilter(e.target.value as "all" | "picks" | "rated_min")}>
-                      <option value="all">Show All</option>
-                      <option value="picks">Picks Only</option>
-                      <option value="rated_min">Rating &gt;= N</option>
-                    </select>
-                    {viewFilter === "rated_min" && (
-                      <select className="input-select" value={viewMinRating} onChange={(e) => setViewMinRating(Number(e.target.value))}>
-                        {[1, 2, 3, 4, 5].map((n) => (
-                          <option key={n} value={n}>{n}+</option>
-                        ))}
-                      </select>
-                    )}
-                    <select className="input-select" value={shotSizeFilter} onChange={(e) => setShotSizeFilter(e.target.value)}>
-                      <option value="all">All Shot Sizes</option>
-                      {[...SHOT_SIZE_CANONICAL, ...(enableOptionalShotTags ? SHOT_SIZE_OPTIONAL : [])].map((size) => (
-                        <option key={size} value={size}>{size}</option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-
-                <div className="toolbar-divider" />
-
-                <div className="toolbar-segment">
-                  <span className="toolbar-label">Layout</span>
-                  <div className="segmented-control">
-                    {[3, 5, 7].map((n) => (
-                      <button key={n} className={`btn-toggle ${thumbCount === n ? 'active' : ''}`} onClick={() => setThumbCount(n)}>{n}</button>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="toolbar-divider" />
-
-                <div className="toolbar-segment">
-                  <span className="toolbar-label">View</span>
-                  <div className="segmented-control">
-                    <button className={`btn-toggle ${!groupByShotSize ? 'active' : ''}`} onClick={() => setGroupByShotSize(false)}>List</button>
-                    <button className={`btn-toggle ${groupByShotSize ? 'active' : ''}`} onClick={() => setGroupByShotSize(true)}>Group</button>
-                  </div>
-                </div>
-
-                <div className="toolbar-divider" />
-
-                <div className="toolbar-segment">
-                  <span className="toolbar-label">Selection</span>
-                  <div className="toolbar-actions">
-                    <button className="btn-link" onClick={toggleSelectAll}>{selectableClipIds.length > 0 && selectedSelectableCount === selectableClipIds.length ? "Clear" : "All"}</button>
-                  </div>
-                </div>
-              </div>
-
-              <div className="toolbar-right-group">
-                {projectId && clips.length > 0 && !extracting && (
-                  <div className="export-dropdown-wrapper">
-                    <button
-                      className="btn btn-primary btn-export tour-open-export"
-                      onClick={() => setExportMenuOpen(!exportMenuOpen)}
-                      disabled={selectedClipIds.size === 0}
-                    >
-                      <FileDown size={16} /> Export ▾
-                    </button>
-                    {exportMenuOpen && (
-                      <>
-                        <div className="dropdown-backdrop" onClick={() => setExportMenuOpen(false)} />
-                        <div className="export-dropdown">
-                          <button className="dropdown-item" onClick={() => { handleExport(); setExportMenuOpen(false); }}>
-                            <FileText size={15} /> Export as PDF
-                          </button>
-                          <button className="dropdown-item" onClick={() => { handleExportImage(); setExportMenuOpen(false); }}>
-                            <ImageIcon size={15} /> Export as Image
-                          </button>
-                        </div>
-                      </>
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <ClipList
-              clips={sortedClips}
-              thumbnailCache={thumbnailCache}
-              isExtracting={extracting}
-              selectedIds={selectedClipIds}
-              onToggleSelection={toggleClipSelection}
-              thumbCount={thumbCount}
-              onUpdateMetadata={handleUpdateMetadata}
-              onHoverClip={setHoveredClipId}
-              shotSizeOptions={[...SHOT_SIZE_CANONICAL, ...(enableOptionalShotTags ? SHOT_SIZE_OPTIONAL : [])]}
-              movementOptions={[...MOVEMENT_CANONICAL]}
-              lookbookSortMode={lookbookSortMode}
-              groupByShotSize={groupByShotSize}
-              onPromoteClip={handlePromoteClip}
-              onPlayClip={handlePlayClip}
-              focusedClipId={hoveredClipId}
-            />
-          </>
         )}
       </div>
 
-      {
-        showExportPanel && projectId && (
-          <ExportPanel
-            projectId={projectId}
-            clips={clips.map(c => c.clip).filter((c) => c.flag !== "reject")}
-            selectedBlockIds={selectedBlockIds}
-            currentFilterMode={viewFilter}
-            currentFilterMinRating={viewMinRating}
-            onError={setUiError}
-            onClose={() => setShowExportPanel(false)}
-          />
-        )
-      }
+      {showExportPanel && projectId && (
+        <ExportPanel
+          projectId={projectId}
+          clips={clips.map(c => c.clip).filter((c) => c.flag !== "reject")}
+          selectedBlockIds={selectedBlockIds}
+          currentFilterMode={viewFilter}
+          currentFilterMinRating={viewMinRating}
+          onError={setUiError}
+          onClose={() => setShowExportPanel(false)}
+        />
+      )}
       <JobsPanel open={jobsOpen} jobs={jobs} onClose={() => setJobsOpen(false)} onRefresh={refreshJobs} />
       <AboutPanel open={aboutOpen} info={appInfo} onResetTour={resetTour} onClose={() => setAboutOpen(false)} />
+
+
       <TourGuide
         run={tourRun}
         steps={tourSteps}
         onComplete={completeTour}
         onClose={completeTour}
       />
-    </div >
+    </div>
   );
 }
 

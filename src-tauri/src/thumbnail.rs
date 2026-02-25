@@ -54,19 +54,23 @@ pub fn extract_thumbnail(
             .map_err(|e| format!("Failed to create thumbnail directory: {}", e))?;
     }
 
-    let status = Command::new("ffmpeg")
-        .args([
-            "-ss", &ts_str,
-            "-i", input_path,
-            "-vframes", "1",
-            "-vf", &format!("scale={}:-1", MAX_WIDTH),
-            "-pix_fmt", "yuv420p",
-            "-q:v", "6",
-            "-y",
-            output_path,
-        ])
-        .output()
-        .map_err(|e| format!("Failed to run ffmpeg: {}", e))?;
+    let status = if is_braw(input_path) {
+        extract_braw_thumbnail(input_path, output_path, timestamp_ms)?
+    } else {
+        Command::new("ffmpeg")
+            .args([
+                "-ss", &ts_str,
+                "-i", input_path,
+                "-vframes", "1",
+                "-vf", &format!("scale={}:-1", MAX_WIDTH),
+                "-pix_fmt", "yuv420p",
+                "-q:v", "6",
+                "-y",
+                output_path,
+            ])
+            .output()
+            .map_err(|e| format!("Failed to run ffmpeg: {}", e))?
+    };
 
     if !status.status.success() {
         return Err(format!(
@@ -81,6 +85,87 @@ pub fn extract_thumbnail(
     }
 
     Ok(true) // accepted
+}
+
+fn is_braw(input_path: &str) -> bool {
+    Path::new(input_path)
+        .extension()
+        .map(|e| e.to_string_lossy().eq_ignore_ascii_case("braw"))
+        .unwrap_or(false)
+}
+
+fn shell_quote(value: &str) -> String {
+    let escaped = value.replace('\'', "'\"'\"'");
+    format!("'{}'", escaped)
+}
+
+fn probe_fps(input_path: &str) -> Option<f64> {
+    let out = Command::new("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=r_frame_rate",
+            "-of",
+            "default=nw=1:nk=1",
+            input_path,
+        ])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let rate = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if rate.is_empty() {
+        return None;
+    }
+    if let Some((a, b)) = rate.split_once('/') {
+        let num = a.trim().parse::<f64>().ok()?;
+        let den = b.trim().parse::<f64>().ok()?;
+        if den > 0.0 {
+            return Some(num / den);
+        }
+        return None;
+    }
+    rate.parse::<f64>().ok()
+}
+
+fn extract_braw_thumbnail(input_path: &str, output_path: &str, timestamp_ms: u64) -> Result<std::process::Output, String> {
+    let ff_fmt = Command::new("braw-decode")
+        .args(["-f", input_path])
+        .output()
+        .map_err(|e| format!("Failed to run braw-decode -f: {}", e))?;
+    if !ff_fmt.status.success() {
+        return Err(format!(
+            "braw-decode format probe failed: {}",
+            String::from_utf8_lossy(&ff_fmt.stderr)
+        ));
+    }
+
+    let fmt_args = String::from_utf8_lossy(&ff_fmt.stdout).trim().to_string();
+    if fmt_args.is_empty() {
+        return Err("braw-decode returned empty ffmpeg format args".to_string());
+    }
+
+    let fps = probe_fps(input_path).unwrap_or(24.0);
+    let frame_index = ((timestamp_ms as f64 / 1000.0) * fps).round().max(0.0) as u64;
+    let frame_end = frame_index.saturating_add(1);
+    let cmd = format!(
+        "braw-decode -c rgba -i {frame} -o {frame_end} {input} | ffmpeg {fmt} -vframes 1 -vf scale={w}:-1 -f image2 -vcodec png -update 1 -y {output}",
+        frame = frame_index,
+        frame_end = frame_end,
+        input = shell_quote(input_path),
+        fmt = fmt_args,
+        w = MAX_WIDTH,
+        output = shell_quote(output_path)
+    );
+
+    Command::new("sh")
+        .args(["-lc", &cmd])
+        .output()
+        .map_err(|e| format!("Failed to run BRAW thumbnail pipeline: {}", e))
 }
 
 /// Check if a thumbnail image is mostly black by sampling its mean luminance

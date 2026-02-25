@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { FolderOpen, Play, XCircle, CheckCircle, AlertTriangle, Search, FileText, ListChecks, Plus, Trash2 } from "lucide-react";
 
@@ -133,15 +134,13 @@ export function SafeCopy({ projectId, onJobCreated, onError }: SafeCopyProps) {
 
   useEffect(() => {
     let unlistenProgress: (() => void) | null = null;
-    import("@tauri-apps/api/event").then(({ listen }) => {
-      listen<VerificationProgress>("verification-progress", (event) => {
-        setProgress(event.payload);
-        if (event.payload.phase === "DONE" || event.payload.phase === "FAILED" || event.payload.phase === "CANCELLED") {
-          fetchResults(event.payload.job_id);
-          loadQueue();
-        }
-      }).then((u) => { unlistenProgress = u; }).catch(console.error);
-    });
+    listen<VerificationProgress>("verification-progress", (event) => {
+      setProgress(event.payload);
+      if (event.payload.phase === "DONE" || event.payload.phase === "FAILED" || event.payload.phase === "CANCELLED") {
+        fetchResults(event.payload.job_id);
+        loadQueue();
+      }
+    }).then((u) => { unlistenProgress = u; }).catch(console.error);
     return () => {
       if (unlistenProgress) unlistenProgress();
     };
@@ -312,7 +311,7 @@ export function SafeCopy({ projectId, onJobCreated, onError }: SafeCopyProps) {
   return (
     <div className="safe-copy-view">
       <div className="safecopy-featured-wrapper">
-        <div className="safe-copy-config card">
+        <div className="safe-copy-config card premium-card">
           <div className="dashboard-header">
             <h3>Safe Copy Queue</h3>
             <div className="toolbar-right" style={{ display: "flex", gap: 8 }}>
@@ -408,7 +407,7 @@ export function SafeCopy({ projectId, onJobCreated, onError }: SafeCopyProps) {
         </div>
 
         {(progress || queue.length > 0) && (
-          <div className="verification-dashboard card">
+          <div className="verification-dashboard card premium-card">
             <div className="dashboard-header">
               <h3>{isRunningQueue ? "Queue Running" : "Queue Summary"}</h3>
               <span className="job-id">{queueRunId ? `Queue: ${queueRunId.slice(0, 12)}` : "Idle"}</span>
@@ -440,7 +439,7 @@ export function SafeCopy({ projectId, onJobCreated, onError }: SafeCopyProps) {
                   <span>{Math.round(percent)}%</span>
                 </div>
                 <div className="progress-bar-wrapper">
-                  <div className="progress-bar-fill" style={{ width: `${percent}%`, background: progress.phase === "DONE" ? "var(--color-primary)" : "var(--accent-glow)" }} />
+                  <div className="progress-bar-fill" style={{ width: `${percent}%`, background: "var(--color-accent-indigo)" }} />
                 </div>
               </div>
             )}
@@ -448,7 +447,7 @@ export function SafeCopy({ projectId, onJobCreated, onError }: SafeCopyProps) {
         )}
 
         {results.length > 0 && (
-          <div className="results-container card">
+          <div className="results-container card premium-card">
             <div className="results-toolbar">
               <div className="toolbar-left">
                 <div className="search-box">

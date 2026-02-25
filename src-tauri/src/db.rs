@@ -1,4 +1,4 @@
-use rusqlite::{Connection, params, Result as SqlResult, params_from_iter};
+use rusqlite::{params, params_from_iter, Connection, Result as SqlResult};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 
@@ -51,7 +51,7 @@ pub struct Clip {
     pub timecode: Option<String>,
     pub status: String, // "ok", "warn", "fail"
     pub rating: i32,
-    pub flag: String,   // "none", "pick", "reject"
+    pub flag: String, // "none", "pick", "reject"
     pub notes: Option<String>,
     pub shot_size: Option<String>,
     pub movement: Option<String>,
@@ -64,6 +64,7 @@ pub struct Clip {
     pub auto_analyzed_at: Option<String>,
     pub auto_analyzer_version: Option<String>,
     pub audio_envelope: Option<Vec<u8>>,
+    pub lut_enabled: i32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -105,7 +106,7 @@ pub struct VerificationJob {
     pub dest_path: String,
     pub dest_root: String,
     pub dest_label: String,
-    pub mode: String, // "FAST", "SOLID"
+    pub mode: String,   // "FAST", "SOLID"
     pub status: String, // "RUNNING", "DONE", "FAILED", "CANCELLED"
     pub started_at: Option<String>,
     pub ended_at: Option<String>,
@@ -158,6 +159,12 @@ pub struct SceneDetectionCache {
     pub updated_at: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectSettings {
+    pub project_id: String,
+    pub settings_json: String,
+}
+
 impl Database {
     pub fn new(db_path: &str) -> SqlResult<Self> {
         let conn = Connection::open(db_path)?;
@@ -165,26 +172,39 @@ impl Database {
             conn: Arc::new(Mutex::new(conn)),
         };
         db.create_tables()?;
-        
+
         // --- Migrations: Add new columns to existing clips table ---
         {
             let conn = db.conn.lock().unwrap();
             let mut stmt = conn.prepare("PRAGMA table_info(clips)")?;
-            let columns: Vec<String> = stmt.query_map([], |row| row.get(1))?
+            let columns: Vec<String> = stmt
+                .query_map([], |row| row.get(1))?
                 .filter_map(|r| r.ok())
                 .collect();
 
             if !columns.contains(&"rating".to_string()) {
-                conn.execute("ALTER TABLE clips ADD COLUMN rating INTEGER NOT NULL DEFAULT 0", [])?;
+                conn.execute(
+                    "ALTER TABLE clips ADD COLUMN rating INTEGER NOT NULL DEFAULT 0",
+                    [],
+                )?;
             }
             if !columns.contains(&"root_id".to_string()) {
-                conn.execute("ALTER TABLE clips ADD COLUMN root_id TEXT NOT NULL DEFAULT 'legacy_root'", [])?;
+                conn.execute(
+                    "ALTER TABLE clips ADD COLUMN root_id TEXT NOT NULL DEFAULT 'legacy_root'",
+                    [],
+                )?;
             }
             if !columns.contains(&"rel_path".to_string()) {
-                conn.execute("ALTER TABLE clips ADD COLUMN rel_path TEXT NOT NULL DEFAULT ''", [])?;
+                conn.execute(
+                    "ALTER TABLE clips ADD COLUMN rel_path TEXT NOT NULL DEFAULT ''",
+                    [],
+                )?;
             }
             if !columns.contains(&"flag".to_string()) {
-                conn.execute("ALTER TABLE clips ADD COLUMN flag TEXT NOT NULL DEFAULT 'none'", [])?;
+                conn.execute(
+                    "ALTER TABLE clips ADD COLUMN flag TEXT NOT NULL DEFAULT 'none'",
+                    [],
+                )?;
             }
             if !columns.contains(&"notes".to_string()) {
                 conn.execute("ALTER TABLE clips ADD COLUMN notes TEXT", [])?;
@@ -193,19 +213,34 @@ impl Database {
                 conn.execute("ALTER TABLE clips ADD COLUMN audio_envelope BLOB", [])?;
             }
             if !columns.contains(&"video_bitrate".to_string()) {
-                conn.execute("ALTER TABLE clips ADD COLUMN video_bitrate INTEGER NOT NULL DEFAULT 0", [])?;
+                conn.execute(
+                    "ALTER TABLE clips ADD COLUMN video_bitrate INTEGER NOT NULL DEFAULT 0",
+                    [],
+                )?;
             }
             if !columns.contains(&"format_name".to_string()) {
-                conn.execute("ALTER TABLE clips ADD COLUMN format_name TEXT NOT NULL DEFAULT 'unknown'", [])?;
+                conn.execute(
+                    "ALTER TABLE clips ADD COLUMN format_name TEXT NOT NULL DEFAULT 'unknown'",
+                    [],
+                )?;
             }
             if !columns.contains(&"audio_codec".to_string()) {
-                conn.execute("ALTER TABLE clips ADD COLUMN audio_codec TEXT NOT NULL DEFAULT 'none'", [])?;
+                conn.execute(
+                    "ALTER TABLE clips ADD COLUMN audio_codec TEXT NOT NULL DEFAULT 'none'",
+                    [],
+                )?;
             }
             if !columns.contains(&"audio_channels".to_string()) {
-                conn.execute("ALTER TABLE clips ADD COLUMN audio_channels INTEGER NOT NULL DEFAULT 0", [])?;
+                conn.execute(
+                    "ALTER TABLE clips ADD COLUMN audio_channels INTEGER NOT NULL DEFAULT 0",
+                    [],
+                )?;
             }
             if !columns.contains(&"audio_sample_rate".to_string()) {
-                conn.execute("ALTER TABLE clips ADD COLUMN audio_sample_rate INTEGER NOT NULL DEFAULT 0", [])?;
+                conn.execute(
+                    "ALTER TABLE clips ADD COLUMN audio_sample_rate INTEGER NOT NULL DEFAULT 0",
+                    [],
+                )?;
             }
             if !columns.contains(&"camera_iso".to_string()) {
                 conn.execute("ALTER TABLE clips ADD COLUMN camera_iso TEXT", [])?;
@@ -220,7 +255,10 @@ impl Database {
                 conn.execute("ALTER TABLE clips ADD COLUMN movement TEXT", [])?;
             }
             if !columns.contains(&"manual_order".to_string()) {
-                conn.execute("ALTER TABLE clips ADD COLUMN manual_order INTEGER NOT NULL DEFAULT 0", [])?;
+                conn.execute(
+                    "ALTER TABLE clips ADD COLUMN manual_order INTEGER NOT NULL DEFAULT 0",
+                    [],
+                )?;
             }
             if !columns.contains(&"auto_motion".to_string()) {
                 conn.execute("ALTER TABLE clips ADD COLUMN auto_motion TEXT", [])?;
@@ -241,7 +279,46 @@ impl Database {
                 conn.execute("ALTER TABLE clips ADD COLUMN auto_analyzed_at TEXT", [])?;
             }
             if !columns.contains(&"auto_analyzer_version".to_string()) {
-                conn.execute("ALTER TABLE clips ADD COLUMN auto_analyzer_version TEXT", [])?;
+                conn.execute(
+                    "ALTER TABLE clips ADD COLUMN auto_analyzer_version TEXT",
+                    [],
+                )?;
+            }
+            if !columns.contains(&"lut_enabled".to_string()) {
+                conn.execute(
+                    "ALTER TABLE clips ADD COLUMN lut_enabled INTEGER NOT NULL DEFAULT 0",
+                    [],
+                )?;
+            }
+
+            conn.execute_batch(
+                "
+                CREATE TABLE IF NOT EXISTS project_settings (
+                    project_id TEXT PRIMARY KEY,
+                    settings_json TEXT NOT NULL
+                );
+                ",
+            )?;
+            let mut settings_stmt = conn.prepare("PRAGMA table_info(project_settings)")?;
+            let settings_columns: Vec<String> = settings_stmt
+                .query_map([], |row| row.get(1))?
+                .filter_map(|r| r.ok())
+                .collect();
+            if !settings_columns.contains(&"settings_json".to_string()) {
+                conn.execute(
+                    "ALTER TABLE project_settings ADD COLUMN settings_json TEXT NOT NULL DEFAULT '{}'",
+                    [],
+                )?;
+                if settings_columns.contains(&"settings".to_string()) {
+                    conn.execute(
+                        "UPDATE project_settings
+                         SET settings_json = CASE
+                           WHEN settings IS NULL OR TRIM(settings) = '' THEN '{}'
+                           ELSE settings
+                         END",
+                        [],
+                    )?;
+                }
             }
 
             conn.execute_batch(
@@ -264,13 +341,19 @@ impl Database {
                 .filter_map(|r| r.ok())
                 .collect();
             if !block_columns.contains(&"clip_count".to_string()) {
-                conn.execute("ALTER TABLE blocks ADD COLUMN clip_count INTEGER NOT NULL DEFAULT 0", [])?;
+                conn.execute(
+                    "ALTER TABLE blocks ADD COLUMN clip_count INTEGER NOT NULL DEFAULT 0",
+                    [],
+                )?;
             }
             if !block_columns.contains(&"camera_list".to_string()) {
                 conn.execute("ALTER TABLE blocks ADD COLUMN camera_list TEXT", [])?;
             }
             if !block_columns.contains(&"confidence".to_string()) {
-                conn.execute("ALTER TABLE blocks ADD COLUMN confidence REAL NOT NULL DEFAULT 0.0", [])?;
+                conn.execute(
+                    "ALTER TABLE blocks ADD COLUMN confidence REAL NOT NULL DEFAULT 0.0",
+                    [],
+                )?;
             }
 
             let mut block_clips_stmt = conn.prepare("PRAGMA table_info(block_clips)")?;
@@ -282,7 +365,10 @@ impl Database {
                 conn.execute("ALTER TABLE block_clips ADD COLUMN camera_label TEXT", [])?;
             }
             if !block_clip_columns.contains(&"sort_index".to_string()) {
-                conn.execute("ALTER TABLE block_clips ADD COLUMN sort_index INTEGER NOT NULL DEFAULT 0", [])?;
+                conn.execute(
+                    "ALTER TABLE block_clips ADD COLUMN sort_index INTEGER NOT NULL DEFAULT 0",
+                    [],
+                )?;
             }
 
             let mut verification_stmt = conn.prepare("PRAGMA table_info(verification_jobs)")?;
@@ -300,25 +386,43 @@ impl Database {
                 conn.execute("ALTER TABLE verification_jobs ADD COLUMN project_id TEXT NOT NULL DEFAULT '__global__'", [])?;
             }
             if !verification_columns.contains(&"source_path".to_string()) {
-                conn.execute("ALTER TABLE verification_jobs ADD COLUMN source_path TEXT NOT NULL DEFAULT ''", [])?;
+                conn.execute(
+                    "ALTER TABLE verification_jobs ADD COLUMN source_path TEXT NOT NULL DEFAULT ''",
+                    [],
+                )?;
             }
             if !verification_columns.contains(&"dest_path".to_string()) {
-                conn.execute("ALTER TABLE verification_jobs ADD COLUMN dest_path TEXT NOT NULL DEFAULT ''", [])?;
+                conn.execute(
+                    "ALTER TABLE verification_jobs ADD COLUMN dest_path TEXT NOT NULL DEFAULT ''",
+                    [],
+                )?;
             }
             if !verification_columns.contains(&"started_at".to_string()) {
-                conn.execute("ALTER TABLE verification_jobs ADD COLUMN started_at TEXT", [])?;
+                conn.execute(
+                    "ALTER TABLE verification_jobs ADD COLUMN started_at TEXT",
+                    [],
+                )?;
             }
             if !verification_columns.contains(&"ended_at".to_string()) {
                 conn.execute("ALTER TABLE verification_jobs ADD COLUMN ended_at TEXT", [])?;
             }
             if !verification_columns.contains(&"duration_ms".to_string()) {
-                conn.execute("ALTER TABLE verification_jobs ADD COLUMN duration_ms INTEGER", [])?;
+                conn.execute(
+                    "ALTER TABLE verification_jobs ADD COLUMN duration_ms INTEGER",
+                    [],
+                )?;
             }
             if !verification_columns.contains(&"counts_json".to_string()) {
-                conn.execute("ALTER TABLE verification_jobs ADD COLUMN counts_json TEXT", [])?;
+                conn.execute(
+                    "ALTER TABLE verification_jobs ADD COLUMN counts_json TEXT",
+                    [],
+                )?;
             }
             if !verification_columns.contains(&"issues_json".to_string()) {
-                conn.execute("ALTER TABLE verification_jobs ADD COLUMN issues_json TEXT", [])?;
+                conn.execute(
+                    "ALTER TABLE verification_jobs ADD COLUMN issues_json TEXT",
+                    [],
+                )?;
             }
 
             conn.execute_batch(
@@ -391,7 +495,13 @@ impl Database {
                 auto_analyzed_at TEXT,
                 auto_analyzer_version TEXT,
                 audio_envelope BLOB,
+                lut_enabled INTEGER NOT NULL DEFAULT 0,
                 FOREIGN KEY (project_id) REFERENCES projects(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS project_settings (
+                project_id TEXT PRIMARY KEY,
+                settings_json TEXT NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS project_roots (
@@ -524,7 +634,8 @@ impl Database {
 
     pub fn get_project(&self, id: &str) -> SqlResult<Option<Project>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT id, root_path, name, created_at FROM projects WHERE id = ?1")?;
+        let mut stmt =
+            conn.prepare("SELECT id, root_path, name, created_at FROM projects WHERE id = ?1")?;
         let mut rows = stmt.query_map(params![id], |row| {
             Ok(Project {
                 id: row.get(0)?,
@@ -574,7 +685,13 @@ impl Database {
             conn.execute(
                 "INSERT OR IGNORE INTO project_roots (id, project_id, root_path, label, created_at)
                  VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![root.id, root.project_id, root.root_path, root.label, root.created_at],
+                params![
+                    root.id,
+                    root.project_id,
+                    root.root_path,
+                    root.label,
+                    root.created_at
+                ],
             )?;
         }
         Ok(())
@@ -591,6 +708,15 @@ impl Database {
         conn.execute(
             "UPDATE project_roots SET label = ?1 WHERE id = ?2",
             params![label, root_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn keep_only_project_root_path(&self, project_id: &str, keep_root_path: &str) -> SqlResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM project_roots WHERE project_id = ?1 AND root_path <> ?2",
+            params![project_id, keep_root_path],
         )?;
         Ok(())
     }
@@ -623,14 +749,14 @@ impl Database {
                 video_codec, video_bitrate, format_name, audio_codec, audio_channels, audio_sample_rate,
                 camera_iso, camera_white_balance, audio_summary, timecode, status, rating, flag, notes,
                 shot_size, movement, manual_order, auto_motion, auto_brightness, auto_contrast, auto_temp,
-                auto_tags_json, auto_analyzed_at, auto_analyzer_version, audio_envelope
+                auto_tags_json, auto_analyzed_at, auto_analyzer_version, audio_envelope, lut_enabled
              )
              VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
                 ?13, ?14, ?15, ?16, ?17, ?18,
                 ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26,
                 ?27, ?28, ?29, ?30, ?31, ?32, ?33,
-                ?34, ?35, ?36, ?37
+                ?34, ?35, ?36, ?37, ?38
              )
              ON CONFLICT(id) DO UPDATE SET
                 project_id = excluded.project_id,
@@ -662,7 +788,8 @@ impl Database {
                 auto_tags_json = excluded.auto_tags_json,
                 auto_analyzed_at = excluded.auto_analyzed_at,
                 auto_analyzer_version = excluded.auto_analyzer_version,
-                audio_envelope = excluded.audio_envelope",
+                audio_envelope = excluded.audio_envelope
+                -- intentionally excluding lut_enabled from UPDATE to prevent rescans from overwriting it",
             params![
                 clip.id,
                 clip.project_id,
@@ -701,6 +828,7 @@ impl Database {
                 clip.auto_analyzed_at,
                 clip.auto_analyzer_version,
                 clip.audio_envelope,
+                clip.lut_enabled,
             ],
         )?;
         Ok(())
@@ -714,7 +842,7 @@ impl Database {
                     video_codec, video_bitrate, format_name, audio_codec, audio_channels, audio_sample_rate,
                     camera_iso, camera_white_balance, audio_summary, timecode, status, rating, flag, notes,
                     shot_size, movement, manual_order, auto_motion, auto_brightness, auto_contrast, auto_temp,
-                    auto_tags_json, auto_analyzed_at, auto_analyzer_version, audio_envelope
+                    auto_tags_json, auto_analyzed_at, auto_analyzer_version, audio_envelope, lut_enabled
              FROM clips WHERE project_id = ?1 ORDER BY filename",
         )?;
         let clips = stmt
@@ -757,6 +885,7 @@ impl Database {
                     auto_analyzed_at: row.get(34)?,
                     auto_analyzer_version: row.get(35)?,
                     audio_envelope: row.get(36)?,
+                    lut_enabled: row.get(37)?,
                 })
             })?
             .filter_map(|r| r.ok())
@@ -772,7 +901,7 @@ impl Database {
                     video_codec, video_bitrate, format_name, audio_codec, audio_channels, audio_sample_rate,
                     camera_iso, camera_white_balance, audio_summary, timecode, status, rating, flag, notes,
                     shot_size, movement, manual_order, auto_motion, auto_brightness, auto_contrast, auto_temp,
-                    auto_tags_json, auto_analyzed_at, auto_analyzer_version, audio_envelope
+                    auto_tags_json, auto_analyzed_at, auto_analyzer_version, audio_envelope, lut_enabled
              FROM clips WHERE id IN ({})",
             placeholders
         );
@@ -817,6 +946,7 @@ impl Database {
                     auto_analyzed_at: row.get(34)?,
                     auto_analyzer_version: row.get(35)?,
                     audio_envelope: row.get(36)?,
+                    lut_enabled: row.get(37)?,
                 })
             })?
             .filter_map(|r| r.ok())
@@ -832,28 +962,52 @@ impl Database {
         shot_size: Option<String>,
         movement: Option<String>,
         manual_order: Option<i32>,
+        lut_enabled: Option<i32>,
     ) -> SqlResult<()> {
         let conn = self.conn.lock().unwrap();
-        
+
         if let Some(r) = rating {
-            conn.execute("UPDATE clips SET rating = ?1 WHERE id = ?2", params![r, clip_id])?;
+            conn.execute(
+                "UPDATE clips SET rating = ?1 WHERE id = ?2",
+                params![r, clip_id],
+            )?;
         }
         if let Some(f) = flag {
-            conn.execute("UPDATE clips SET flag = ?1 WHERE id = ?2", params![f, clip_id])?;
+            conn.execute(
+                "UPDATE clips SET flag = ?1 WHERE id = ?2",
+                params![f, clip_id],
+            )?;
         }
         if let Some(n) = notes {
-            conn.execute("UPDATE clips SET notes = ?1 WHERE id = ?2", params![n, clip_id])?;
+            conn.execute(
+                "UPDATE clips SET notes = ?1 WHERE id = ?2",
+                params![n, clip_id],
+            )?;
         }
         if let Some(s) = shot_size {
-            conn.execute("UPDATE clips SET shot_size = ?1 WHERE id = ?2", params![s, clip_id])?;
+            conn.execute(
+                "UPDATE clips SET shot_size = ?1 WHERE id = ?2",
+                params![s, clip_id],
+            )?;
         }
         if let Some(m) = movement {
-            conn.execute("UPDATE clips SET movement = ?1 WHERE id = ?2", params![m, clip_id])?;
+            conn.execute(
+                "UPDATE clips SET movement = ?1 WHERE id = ?2",
+                params![m, clip_id],
+            )?;
         }
-        if let Some(o) = manual_order {
-            conn.execute("UPDATE clips SET manual_order = ?1 WHERE id = ?2", params![o, clip_id])?;
+        if let Some(mo) = manual_order {
+            conn.execute(
+                "UPDATE clips SET manual_order = ?1 WHERE id = ?2",
+                params![mo, clip_id],
+            )?;
         }
-        
+        if let Some(le) = lut_enabled {
+            conn.execute(
+                "UPDATE clips SET lut_enabled = ?1 WHERE id = ?2",
+                params![le, clip_id],
+            )?;
+        }
         Ok(())
     }
 
@@ -910,6 +1064,11 @@ impl Database {
         Ok(())
     }
 
+    pub fn delete_thumbnails_for_clip(&self, clip_id: &str) -> SqlResult<usize> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM thumbnails WHERE clip_id = ?1", params![clip_id])
+    }
+
     pub fn get_thumbnails(&self, clip_id: &str) -> SqlResult<Vec<Thumbnail>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
@@ -942,7 +1101,10 @@ impl Database {
             "DELETE FROM block_clips WHERE block_id IN (SELECT id FROM blocks WHERE project_id = ?1)",
             params![project_id],
         )?;
-        tx.execute("DELETE FROM blocks WHERE project_id = ?1", params![project_id])?;
+        tx.execute(
+            "DELETE FROM blocks WHERE project_id = ?1",
+            params![project_id],
+        )?;
 
         {
             let mut stmt = tx.prepare(
@@ -1061,11 +1223,123 @@ impl Database {
                     auto_analyzed_at: row.get(34)?,
                     auto_analyzer_version: row.get(35)?,
                     audio_envelope: row.get(36)?,
+                    lut_enabled: row.get(37)?,
                 })
             })?
             .filter_map(|r| r.ok())
             .collect();
         Ok(clips)
+    }
+
+    pub fn get_project_settings(&self, project_id: &str) -> SqlResult<Option<ProjectSettings>> {
+        let conn = self.conn.lock().unwrap();
+        let mut col_stmt = conn.prepare("PRAGMA table_info(project_settings)")?;
+        let columns: Vec<String> = col_stmt
+            .query_map([], |row| row.get(1))?
+            .filter_map(|r| r.ok())
+            .collect();
+        let has_settings_json = columns.contains(&"settings_json".to_string());
+        let has_legacy_json = columns.contains(&"json".to_string());
+        let query = if has_settings_json {
+            "SELECT project_id, settings_json FROM project_settings WHERE project_id = ?1"
+        } else if has_legacy_json {
+            "SELECT project_id, json FROM project_settings WHERE project_id = ?1"
+        } else {
+            "SELECT project_id, '{}' FROM project_settings WHERE project_id = ?1"
+        };
+        let mut stmt = conn.prepare(query)?;
+        let mut rows = stmt.query_map(params![project_id], |row| {
+            Ok(ProjectSettings {
+                project_id: row.get(0)?,
+                settings_json: row.get(1)?,
+            })
+        })?;
+        match rows.next() {
+            Some(Ok(s)) => Ok(Some(s)),
+            _ => Ok(None),
+        }
+    }
+
+    pub fn upsert_project_settings(&self, settings: &ProjectSettings) -> SqlResult<()> {
+        let conn = self.conn.lock().unwrap();
+        let mut col_stmt = conn.prepare("PRAGMA table_info(project_settings)")?;
+        let columns: Vec<String> = col_stmt
+            .query_map([], |row| row.get(1))?
+            .filter_map(|r| r.ok())
+            .collect();
+        let has_settings_json = columns.contains(&"settings_json".to_string());
+        let has_legacy_json = columns.contains(&"json".to_string());
+        let has_updated_at = columns.contains(&"updated_at".to_string());
+        let has_created_at = columns.contains(&"created_at".to_string());
+        let now = chrono::Utc::now().to_rfc3339();
+
+        if has_settings_json && has_legacy_json && has_created_at && has_updated_at {
+            conn.execute(
+                "INSERT INTO project_settings (project_id, settings_json, json, created_at, updated_at)
+                 VALUES (?1, ?2, ?2, ?3, ?3)
+                 ON CONFLICT(project_id) DO UPDATE SET settings_json = excluded.settings_json, json = excluded.settings_json, updated_at = excluded.updated_at",
+                params![settings.project_id, settings.settings_json, now],
+            )?;
+        } else if has_settings_json && has_legacy_json && has_updated_at {
+            conn.execute(
+                "INSERT INTO project_settings (project_id, settings_json, json, updated_at)
+                 VALUES (?1, ?2, ?2, ?3)
+                 ON CONFLICT(project_id) DO UPDATE SET settings_json = excluded.settings_json, json = excluded.settings_json, updated_at = excluded.updated_at",
+                params![settings.project_id, settings.settings_json, now],
+            )?;
+        } else if has_settings_json && has_legacy_json {
+            conn.execute(
+                "INSERT INTO project_settings (project_id, settings_json, json) VALUES (?1, ?2, ?2)
+                 ON CONFLICT(project_id) DO UPDATE SET settings_json = excluded.settings_json, json = excluded.settings_json",
+                params![settings.project_id, settings.settings_json],
+            )?;
+        } else if has_settings_json && has_created_at && has_updated_at {
+            conn.execute(
+                "INSERT INTO project_settings (project_id, settings_json, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?3)
+                 ON CONFLICT(project_id) DO UPDATE SET settings_json = excluded.settings_json, updated_at = excluded.updated_at",
+                params![settings.project_id, settings.settings_json, now],
+            )?;
+        } else if has_settings_json && has_updated_at {
+            conn.execute(
+                "INSERT INTO project_settings (project_id, settings_json, updated_at)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT(project_id) DO UPDATE SET settings_json = excluded.settings_json, updated_at = excluded.updated_at",
+                params![settings.project_id, settings.settings_json, now],
+            )?;
+        } else if has_settings_json {
+            conn.execute(
+                "INSERT INTO project_settings (project_id, settings_json) VALUES (?1, ?2)
+                 ON CONFLICT(project_id) DO UPDATE SET settings_json = excluded.settings_json",
+                params![settings.project_id, settings.settings_json],
+            )?;
+        } else if has_legacy_json && has_created_at && has_updated_at {
+            conn.execute(
+                "INSERT INTO project_settings (project_id, json, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?3)
+                 ON CONFLICT(project_id) DO UPDATE SET json = excluded.json, updated_at = excluded.updated_at",
+                params![settings.project_id, settings.settings_json, now],
+            )?;
+        } else if has_legacy_json && has_updated_at {
+            conn.execute(
+                "INSERT INTO project_settings (project_id, json, updated_at)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT(project_id) DO UPDATE SET json = excluded.json, updated_at = excluded.updated_at",
+                params![settings.project_id, settings.settings_json, now],
+            )?;
+        } else if has_legacy_json {
+            conn.execute(
+                "INSERT INTO project_settings (project_id, json) VALUES (?1, ?2)
+                 ON CONFLICT(project_id) DO UPDATE SET json = excluded.json",
+                params![settings.project_id, settings.settings_json],
+            )?;
+        } else {
+            conn.execute(
+                "INSERT OR REPLACE INTO project_settings (project_id) VALUES (?1)",
+                params![settings.project_id],
+            )?;
+        }
+        Ok(())
     }
 
     pub fn rename_scene_block(&self, block_id: &str, name: &str) -> SqlResult<()> {
@@ -1099,14 +1373,13 @@ impl Database {
         Ok(ids)
     }
 
-    pub fn replace_block_memberships(
-        &self,
-        block_id: &str,
-        clip_ids: &[String],
-    ) -> SqlResult<()> {
+    pub fn replace_block_memberships(&self, block_id: &str, clip_ids: &[String]) -> SqlResult<()> {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
-        tx.execute("DELETE FROM block_clips WHERE block_id = ?1", params![block_id])?;
+        tx.execute(
+            "DELETE FROM block_clips WHERE block_id = ?1",
+            params![block_id],
+        )?;
         {
             let mut stmt = tx.prepare(
                 "INSERT OR REPLACE INTO block_clips (block_id, clip_id, sort_index) VALUES (?1, ?2, ?3)",
@@ -1140,7 +1413,10 @@ impl Database {
 
     pub fn delete_scene_block(&self, block_id: &str) -> SqlResult<()> {
         let conn = self.conn.lock().unwrap();
-        conn.execute("DELETE FROM block_clips WHERE block_id = ?1", params![block_id])?;
+        conn.execute(
+            "DELETE FROM block_clips WHERE block_id = ?1",
+            params![block_id],
+        )?;
         conn.execute("DELETE FROM blocks WHERE id = ?1", params![block_id])?;
         Ok(())
     }
@@ -1177,30 +1453,89 @@ impl Database {
     pub fn delete_project_data(&self, project_id: &str) -> SqlResult<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute("DELETE FROM block_clips WHERE block_id IN (SELECT id FROM blocks WHERE project_id = ?1)", params![project_id])?;
-        conn.execute("DELETE FROM blocks WHERE project_id = ?1", params![project_id])?;
-        conn.execute("DELETE FROM thumbnails WHERE clip_id IN (SELECT id FROM clips WHERE project_id = ?1)", params![project_id])?;
-        conn.execute("DELETE FROM clips WHERE project_id = ?1", params![project_id])?;
-        conn.execute("DELETE FROM project_roots WHERE project_id = ?1", params![project_id])?;
+        conn.execute(
+            "DELETE FROM blocks WHERE project_id = ?1",
+            params![project_id],
+        )?;
+        conn.execute(
+            "DELETE FROM thumbnails WHERE clip_id IN (SELECT id FROM clips WHERE project_id = ?1)",
+            params![project_id],
+        )?;
+        conn.execute(
+            "DELETE FROM clips WHERE project_id = ?1",
+            params![project_id],
+        )?;
+        conn.execute(
+            "DELETE FROM project_roots WHERE project_id = ?1",
+            params![project_id],
+        )?;
         conn.execute("DELETE FROM projects WHERE id = ?1", params![project_id])?;
         Ok(())
     }
 
-    pub fn prune_project_clips(&self, project_id: &str, keep_clip_ids: &[String]) -> SqlResult<usize> {
-        let conn = self.conn.lock().unwrap();
+    pub fn prune_project_clips(
+        &self,
+        project_id: &str,
+        keep_clip_ids: &[String],
+    ) -> SqlResult<usize> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
         if keep_clip_ids.is_empty() {
-            let removed = conn.execute("DELETE FROM clips WHERE project_id = ?1", params![project_id])?;
+            tx.execute(
+                "DELETE FROM block_clips WHERE clip_id IN (SELECT id FROM clips WHERE project_id = ?1)",
+                params![project_id],
+            )?;
+            tx.execute(
+                "DELETE FROM scene_detection_cache WHERE clip_id IN (SELECT id FROM clips WHERE project_id = ?1)",
+                params![project_id],
+            )?;
+            tx.execute(
+                "DELETE FROM thumbnails WHERE clip_id IN (SELECT id FROM clips WHERE project_id = ?1)",
+                params![project_id],
+            )?;
+            let removed = tx.execute(
+                "DELETE FROM clips WHERE project_id = ?1",
+                params![project_id],
+            )?;
+            tx.commit()?;
             return Ok(removed);
         }
 
-        let placeholders = keep_clip_ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
-        let query = format!(
+        let placeholders = keep_clip_ids
+            .iter()
+            .map(|_| "?")
+            .collect::<Vec<_>>()
+            .join(", ");
+        let thumbs_query = format!(
+            "DELETE FROM thumbnails WHERE clip_id IN (
+                SELECT id FROM clips WHERE project_id = ? AND id NOT IN ({})
+            )",
+            placeholders
+        );
+        let scene_cache_query = format!(
+            "DELETE FROM scene_detection_cache WHERE clip_id IN (
+                SELECT id FROM clips WHERE project_id = ? AND id NOT IN ({})
+            )",
+            placeholders
+        );
+        let block_clips_query = format!(
+            "DELETE FROM block_clips WHERE clip_id IN (
+                SELECT id FROM clips WHERE project_id = ? AND id NOT IN ({})
+            )",
+            placeholders
+        );
+        let clips_query = format!(
             "DELETE FROM clips WHERE project_id = ? AND id NOT IN ({})",
             placeholders
         );
         let mut query_params: Vec<String> = Vec::with_capacity(keep_clip_ids.len() + 1);
         query_params.push(project_id.to_string());
         query_params.extend_from_slice(keep_clip_ids);
-        let removed = conn.execute(&query, params_from_iter(query_params))?;
+        tx.execute(&block_clips_query, params_from_iter(query_params.clone()))?;
+        tx.execute(&scene_cache_query, params_from_iter(query_params.clone()))?;
+        tx.execute(&thumbs_query, params_from_iter(query_params.clone()))?;
+        let removed = tx.execute(&clips_query, params_from_iter(query_params))?;
+        tx.commit()?;
         Ok(removed)
     }
 
@@ -1249,7 +1584,10 @@ impl Database {
 
     pub fn update_verification_job_status(&self, id: &str, status: &str) -> SqlResult<()> {
         let conn = self.conn.lock().unwrap();
-        conn.execute("UPDATE verification_jobs SET status = ?1 WHERE id = ?2", params![status, id])?;
+        conn.execute(
+            "UPDATE verification_jobs SET status = ?1 WHERE id = ?2",
+            params![status, id],
+        )?;
         Ok(())
     }
 
@@ -1263,10 +1601,21 @@ impl Database {
                 duration_ms = ?11, counts_json = ?12, issues_json = ?13, status = ?14
              WHERE id = ?15",
             params![
-                job.verified_ok_count, job.missing_count, job.size_mismatch_count, 
-                job.hash_mismatch_count, job.unreadable_count, job.extra_in_dest_count,
-                job.total_files, job.total_bytes as i64, job.started_at, job.ended_at,
-                job.duration_ms, job.counts_json, job.issues_json, job.status, job.id
+                job.verified_ok_count,
+                job.missing_count,
+                job.size_mismatch_count,
+                job.hash_mismatch_count,
+                job.unreadable_count,
+                job.extra_in_dest_count,
+                job.total_files,
+                job.total_bytes as i64,
+                job.started_at,
+                job.ended_at,
+                job.duration_ms,
+                job.counts_json,
+                job.issues_json,
+                job.status,
+                job.id
             ],
         )?;
         Ok(())
@@ -1282,9 +1631,16 @@ impl Database {
             )?;
             for item in items {
                 stmt.execute(params![
-                    item.job_id, item.rel_path, item.source_size as i64, item.dest_size.map(|s| s as i64),
-                    item.source_mtime as i64, item.dest_mtime.map(|s| s as i64),
-                    item.source_hash, item.dest_hash, item.status, item.error_message
+                    item.job_id,
+                    item.rel_path,
+                    item.source_size as i64,
+                    item.dest_size.map(|s| s as i64),
+                    item.source_mtime as i64,
+                    item.dest_mtime.map(|s| s as i64),
+                    item.source_hash,
+                    item.dest_hash,
+                    item.status,
+                    item.error_message
                 ])?;
             }
         }
@@ -1383,7 +1739,10 @@ impl Database {
         Ok(jobs)
     }
 
-    pub fn list_verification_queue(&self, project_id: &str) -> SqlResult<Vec<VerificationQueueItem>> {
+    pub fn list_verification_queue(
+        &self,
+        project_id: &str,
+    ) -> SqlResult<Vec<VerificationQueueItem>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT id, project_id, idx, label, source_path, dest_path, last_job_id, created_at, updated_at
@@ -1504,20 +1863,23 @@ impl Database {
             "SELECT job_id, rel_path, source_size, dest_size, source_mtime, dest_mtime, source_hash, dest_hash, status, error_message 
              FROM verification_items WHERE job_id = ?1"
         )?;
-        let items = stmt.query_map(params![job_id], |row| {
-            Ok(VerificationItem {
-                job_id: row.get(0)?,
-                rel_path: row.get(1)?,
-                source_size: row.get::<_, i64>(2)? as u64,
-                dest_size: row.get::<_, Option<i64>>(3)?.map(|s| s as u64),
-                source_mtime: row.get::<_, i64>(4)? as u64,
-                dest_mtime: row.get::<_, Option<i64>>(5)?.map(|s| s as u64),
-                source_hash: row.get(6)?,
-                dest_hash: row.get(7)?,
-                status: row.get(8)?,
-                error_message: row.get(9)?,
-            })
-        })?.filter_map(|r| r.ok()).collect();
+        let items = stmt
+            .query_map(params![job_id], |row| {
+                Ok(VerificationItem {
+                    job_id: row.get(0)?,
+                    rel_path: row.get(1)?,
+                    source_size: row.get::<_, i64>(2)? as u64,
+                    dest_size: row.get::<_, Option<i64>>(3)?.map(|s| s as u64),
+                    source_mtime: row.get::<_, i64>(4)? as u64,
+                    dest_mtime: row.get::<_, Option<i64>>(5)?.map(|s| s as u64),
+                    source_hash: row.get(6)?,
+                    dest_hash: row.get(7)?,
+                    status: row.get(8)?,
+                    error_message: row.get(9)?,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
         Ok(items)
     }
 

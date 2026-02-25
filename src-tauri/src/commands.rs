@@ -8,6 +8,7 @@ use crate::thumbnail;
 use crate::verification;
 use sha2::{Digest, Sha256};
 use std::io::Write;
+use std::path::Path;
 use std::process::Command;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -61,6 +62,8 @@ pub async fn scan_folder(
     };
     db.upsert_project_root(&initial_root)
         .map_err(|e| format!("Failed to create initial project root: {}", e))?;
+    db.keep_only_project_root_path(&project_id, &folder_path)
+        .map_err(|e| format!("Failed to sync project root set: {}", e))?;
 
     let clips = rescan_project_internal(db, &project_id)?;
 
@@ -151,14 +154,35 @@ pub async fn get_clips(
     state: State<'_, Arc<AppState>>,
 ) -> Result<Vec<ClipWithThumbnails>, String> {
     let db = &state.db;
+    let roots = db
+        .list_project_roots(&project_id)
+        .map_err(|e| format!("Failed to get project roots: {}", e))?;
+    let root_map: std::collections::HashMap<String, String> = roots
+        .into_iter()
+        .map(|r| (r.id, r.root_path))
+        .collect();
+
     let clips = db
         .get_clips(&project_id)
         .map_err(|e| format!("Failed to get clips: {}", e))?;
+    let mut valid_clip_ids: Vec<String> = Vec::new();
 
     let mut result = Vec::new();
     for clip in clips {
+        let file_exists = std::path::Path::new(&clip.file_path).exists();
+        let in_project_root = root_map
+            .get(&clip.root_id)
+            .map(|root_path| std::path::Path::new(&clip.file_path).starts_with(root_path))
+            .unwrap_or(false);
+        if !(file_exists && in_project_root) {
+            continue;
+        }
+        valid_clip_ids.push(clip.id.clone());
         let thumbnails = db.get_thumbnails(&clip.id).unwrap_or_default();
         result.push(ClipWithThumbnails { clip, thumbnails });
+    }
+    if let Err(e) = db.prune_project_clips(&project_id, &valid_clip_ids) {
+        eprintln!("get_clips: failed to prune stale clips: {}", e);
     }
     Ok(result)
 }
@@ -194,6 +218,7 @@ pub async fn extract_thumbnails(
         if clip.status == "fail" || clip.duration_ms == 0 {
             // Emit progress even for skipped clips
             let _ = app.emit("thumbnail-progress", ThumbnailProgress {
+                project_id: project_id.clone(),
                 clip_id: clip.id.clone(),
                 clip_index: clip_idx,
                 total_clips,
@@ -209,12 +234,29 @@ pub async fn extract_thumbnails(
         let timestamps = thumbnail::calculate_timestamps(clip.duration_ms, 7);
 
         let clip_cache_dir = format!("{}/{}", cache_dir, clip.id);
+        if let Err(e) = db.delete_thumbnails_for_clip(&clip.id) {
+            eprintln!("thumbnail: failed to clear DB rows for {}: {}", clip.id, e);
+        }
+        if std::path::Path::new(&clip_cache_dir).exists() {
+            if let Err(e) = std::fs::remove_dir_all(&clip_cache_dir) {
+                eprintln!("thumbnail: failed to clear cache dir {}: {}", clip_cache_dir, e);
+            }
+        }
         std::fs::create_dir_all(&clip_cache_dir).ok();
 
         let mut thumb_results: Vec<Thumbnail> = Vec::new();
 
         for (idx, &ts) in timestamps.iter().enumerate() {
-            let output_path = format!("{}/thumb_{}.jpg", clip_cache_dir, idx);
+            let thumb_ext = if Path::new(&clip.file_path)
+                .extension()
+                .map(|e| e.to_string_lossy().eq_ignore_ascii_case("braw"))
+                .unwrap_or(false)
+            {
+                "png"
+            } else {
+                "jpg"
+            };
+            let output_path = format!("{}/thumb_{}.{}", clip_cache_dir, idx, thumb_ext);
 
             match thumbnail::extract_with_fallback(
                 &clip.file_path,
@@ -242,6 +284,7 @@ pub async fn extract_thumbnails(
         }
 
         let _ = app.emit("thumbnail-progress", ThumbnailProgress {
+            project_id: project_id.clone(),
             clip_id: clip.id.clone(),
             clip_index: clip_idx,
             total_clips,
@@ -1210,6 +1253,7 @@ pub async fn generate_lut_thumbnails(
         let thumbnails = db.get_thumbnails(&clip.id).unwrap_or_default();
         if thumbnails.is_empty() {
              let _ = app.emit("lut-thumbnail-progress", ThumbnailProgress {
+                project_id: project_id.clone(),
                 clip_id: clip.id.clone(),
                 clip_index: clip_idx,
                 total_clips,
@@ -1225,7 +1269,11 @@ pub async fn generate_lut_thumbnails(
         let mut processed_thumbs = Vec::new();
 
         for thumb in &thumbnails {
-            let output_path = format!("{}/lut_{}_thumb_{}.jpg", clip_cache_dir, lut_hash, thumb.index);
+            let original_name = Path::new(&thumb.file_path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("thumb.jpg");
+            let output_path = format!("{}/lut_{}_{}", clip_cache_dir, lut_hash, original_name);
             
             if std::path::Path::new(&output_path).exists() {
                 // already applied
@@ -1248,6 +1296,7 @@ pub async fn generate_lut_thumbnails(
         }
 
         let _ = app.emit("lut-thumbnail-progress", ThumbnailProgress {
+            project_id: project_id.clone(),
             clip_id: clip.id.clone(),
             clip_index: clip_idx,
             total_clips,
@@ -1876,6 +1925,7 @@ pub struct SceneBlockWithClips {
 
 #[derive(serde::Serialize, Clone)]
 pub struct ThumbnailProgress {
+    pub project_id: String,
     pub clip_id: String,
     pub clip_index: usize,
     pub total_clips: usize,

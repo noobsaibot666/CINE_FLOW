@@ -13,15 +13,18 @@ interface ClipListProps {
     selectedIds: Set<string>;
     onToggleSelection: (id: string) => void;
     thumbCount: number;
-    onUpdateMetadata: (clipId: string, updates: Partial<Pick<Clip, 'rating' | 'flag' | 'notes' | 'shot_size' | 'movement' | 'manual_order'>>) => Promise<void>;
+    onUpdateMetadata: (clipId: string, updates: Partial<Pick<Clip, 'rating' | 'flag' | 'notes' | 'shot_size' | 'movement' | 'manual_order' | 'lut_enabled'>>) => Promise<void>;
     onHoverClip: (id: string | null) => void;
     onPromoteClip: (id: string) => void;
-    onPlayClip: (id: string) => void;
+    onPlayClip: (id: string | null) => void;
+    playingClipId: string | null;
     shotSizeOptions: string[];
     movementOptions: string[];
     lookbookSortMode: LookbookSortMode;
     groupByShotSize: boolean;
     focusedClipId: string | null;
+    projectLutHash: string | null;
+    lutRenderNonce: number;
 }
 
 export function ClipList({
@@ -35,11 +38,14 @@ export function ClipList({
     onHoverClip,
     onPromoteClip,
     onPlayClip,
+    playingClipId,
     shotSizeOptions,
     movementOptions,
     lookbookSortMode,
     groupByShotSize,
-    focusedClipId
+    focusedClipId,
+    projectLutHash,
+    lutRenderNonce
 }: ClipListProps) {
     if (clips.length === 0) return null;
 
@@ -72,7 +78,10 @@ export function ClipList({
                                 lookbookSortMode={lookbookSortMode}
                                 onPromoteClip={() => onPromoteClip(item.clip.id)}
                                 onPlayClip={() => onPlayClip(item.clip.id)}
+                                isPlaying={playingClipId === item.clip.id}
                                 isFocused={focusedClipId === item.clip.id}
+                                projectLutHash={projectLutHash}
+                                lutRenderNonce={lutRenderNonce}
                             />
                         </div>
                     );
@@ -103,7 +112,10 @@ function ClipCard({
     lookbookSortMode,
     onPromoteClip,
     onPlayClip,
+    isPlaying,
     isFocused,
+    projectLutHash,
+    lutRenderNonce,
 }: {
     item: ClipWithThumbnails;
     thumbnailCache: Record<string, string>;
@@ -111,15 +123,18 @@ function ClipCard({
     isSelected: boolean;
     onToggle: () => void;
     thumbCount: number;
-    onUpdateMetadata: (clipId: string, updates: Partial<Pick<Clip, 'rating' | 'flag' | 'notes' | 'shot_size' | 'movement' | 'manual_order'>>) => Promise<void>;
+    onUpdateMetadata: (clipId: string, updates: Partial<Pick<Clip, 'rating' | 'flag' | 'notes' | 'shot_size' | 'movement' | 'manual_order' | 'lut_enabled'>>) => Promise<void>;
     onMouseEnter: () => void;
     onMouseLeave: () => void;
-    onPromoteClip: () => void;
-    onPlayClip: () => void;
     shotSizeOptions: string[];
     movementOptions: string[];
     lookbookSortMode: LookbookSortMode;
+    onPromoteClip: () => void;
+    onPlayClip: () => void;
+    isPlaying: boolean;
     isFocused: boolean;
+    projectLutHash: string | null;
+    lutRenderNonce: number;
 }) {
     const { clip, thumbnails } = item;
     const audioHealth = getAudioBadge(clip.audio_summary, clip.audio_envelope);
@@ -169,9 +184,10 @@ function ClipCard({
     return (
         <div
             ref={cardRef}
-            className={`clip-card ${isSelected ? 'selected' : ''} flag-${clip.flag} ${isFocused ? "focused" : ""}`}
+            className={`clip-card premium-card ${isSelected ? 'selected' : ''} flag-${clip.flag} ${isFocused ? "focused" : ""}`}
             onMouseEnter={onMouseEnter}
             onMouseLeave={onMouseLeave}
+            style={{ "--corner-color": isSelected ? "var(--color-accent-soft)" : isFocused ? "var(--color-accent-indigo-soft)" : "rgba(255,255,255,0.03)" } as any}
             onDoubleClick={(e) => {
                 // Only promote if not double-clicking interactive elements
                 if ((e.target as HTMLElement).closest('button, input, select')) return;
@@ -185,8 +201,8 @@ function ClipCard({
                         <Film size={14} style={{ opacity: 0.6 }} /> {clip.filename}
                     </span>
                 </div>
-                <div className="clip-card-header-right">
-                    <div className="clip-rating">
+                    <div className="clip-card-header-right">
+                        <div className="clip-rating">
                         {[1, 2, 3, 4, 5].map((star) => (
                             <Star
                                 key={star}
@@ -195,8 +211,21 @@ function ClipCard({
                                 onClick={() => onUpdateMetadata(clip.id, { rating: star === clip.rating ? 0 : star })}
                             />
                         ))}
-                    </div>
+                        </div>
                     <div className="clip-flags">
+                        <button
+                            className={`btn-flag btn-lut ${clip.lut_enabled === 1 ? 'active' : ''}`}
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                if (!projectLutHash) return;
+                                onUpdateMetadata(clip.id, { lut_enabled: clip.lut_enabled === 1 ? 0 : 1 });
+                            }}
+                            title={projectLutHash ? "LUT Preview On/Off" : "Load project LUT to enable"}
+                            aria-label="Toggle LUT Preview"
+                            disabled={!projectLutHash}
+                        >
+                            <span>LUT</span>
+                        </button>
                         <button
                             className={`btn-flag btn-reject ${clip.flag === 'reject' ? 'active' : ''}`}
                             onClick={(e) => {
@@ -238,6 +267,9 @@ function ClipCard({
                     aspectRatio={clip.width > 0 && clip.height > 0 ? clip.width / clip.height : 16 / 9}
                     isExtracting={isExtracting}
                     onDoubleClick={onPlayClip}
+                    projectLutHash={projectLutHash}
+                    clipLutEnabled={clip.lut_enabled}
+                    lutRenderNonce={lutRenderNonce}
                 />
             </div>
 
@@ -249,7 +281,9 @@ function ClipCard({
                             {tag.value}
                         </span>
                     ))}
-                    <span className={`clip-status-dot ${clip.status}`} />
+                    <div className="clip-card-status-wrapper">
+                        <span className={`clip-status-dot ${clip.status}`} />
+                    </div>
                 </div>
             </div>
 
@@ -257,6 +291,8 @@ function ClipCard({
             {clip.audio_envelope && (
                 <Waveform
                     envelope={clip.audio_envelope}
+                    onPlayToggle={onPlayClip}
+                    isPlaying={isPlaying}
                 />
             )}
 

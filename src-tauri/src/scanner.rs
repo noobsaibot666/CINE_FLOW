@@ -12,7 +12,7 @@ pub fn scan_folder(root: &str) -> Vec<String> {
     let mut video_files: Vec<String> = Vec::new();
 
     for entry in WalkDir::new(root)
-        .follow_links(true)
+        .follow_links(false)
         .into_iter()
         .filter_map(|e| e.ok())
     {
@@ -29,6 +29,11 @@ pub fn scan_folder(root: &str) -> Vec<String> {
 }
 
 fn is_video_file(path: &Path) -> bool {
+    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+        if name.starts_with("._") {
+            return false;
+        }
+    }
     if let Some(ext) = path.extension() {
         let ext_lower = ext.to_string_lossy().to_lowercase();
         VIDEO_EXTENSIONS.contains(&ext_lower.as_str())

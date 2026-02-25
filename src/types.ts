@@ -36,6 +36,7 @@ export interface Clip {
     auto_analyzed_at?: string | null;
     auto_analyzer_version?: string | null;
     audio_envelope?: number[]; // Represented as byte array/number array from Rust Vec<u8>
+    lut_enabled: number;
 }
 
 export interface Thumbnail {
@@ -66,6 +67,7 @@ export interface ProjectRoot {
 }
 
 export interface ThumbnailProgress {
+    project_id: string;
     clip_id: string;
     clip_index: number;
     total_clips: number;
