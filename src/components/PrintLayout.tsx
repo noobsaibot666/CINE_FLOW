@@ -1,6 +1,7 @@
 import { BrandProfile, ClipWithThumbnails } from "../types";
 import { PdfHeader } from "./print/PdfHeader";
 import { PdfFooter } from "./print/PdfFooter";
+import { buildClipMetadataTags, getAudioBadge } from "../utils/clipMetadata";
 
 interface PrintLayoutProps {
   projectName: string;
@@ -67,6 +68,8 @@ function PrintClipRow({
   thumbCount: number;
 }) {
   const { clip } = item;
+  const printAudioBadge = getAudioBadge(clip.audio_summary, clip.audio_envelope);
+  const metadataTags = buildClipMetadataTags(clip, printAudioBadge);
 
   return (
     <div className="print-clip-row">
@@ -95,15 +98,13 @@ function PrintClipRow({
       {/* Metadata row */}
       <div className="print-meta-row">
         <span className="print-meta-filename">{clip.filename}</span>
-        <span className="print-meta-item">{formatDuration(clip.duration_ms)}</span>
-        <span className="print-meta-item">{clip.width > 0 ? `${clip.width}×${clip.height}` : "—"}</span>
-        <span className="print-meta-item">{clip.fps > 0 ? `${clip.fps} fps` : "—"}</span>
-        <span className="print-meta-item">{clip.video_codec.toUpperCase()}</span>
-        <span className="print-meta-item">{formatFileSize(clip.size_bytes)}</span>
-        <span className="print-meta-item">{clip.audio_summary}</span>
+        {metadataTags.map((tag) => (
+          <span key={`${clip.id}-${tag.label}-${tag.value}`} className="print-meta-item">
+            {tag.value}
+          </span>
+        ))}
         {clip.rating > 0 && <span className="print-meta-item">★{clip.rating}</span>}
         {clip.flag !== "none" && <span className="print-meta-item">{clip.flag.toUpperCase()}</span>}
-        {clip.timecode && <span className="print-meta-item">TC: {clip.timecode}</span>}
       </div>
     </div>
   );
@@ -115,23 +116,6 @@ function chunkArray<T>(arr: T[], size: number): T[][] {
     chunks.push(arr.slice(i, i + size));
   }
   return chunks;
-}
-
-function formatFileSize(bytes: number): string {
-  if (bytes === 0) return "—";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(1024));
-  return `${(bytes / Math.pow(1024, i)).toFixed(i > 1 ? 1 : 0)} ${units[i]}`;
-}
-
-function formatDuration(ms: number): string {
-  if (ms === 0) return "—";
-  const totalSecs = Math.floor(ms / 1000);
-  const hours = Math.floor(totalSecs / 3600);
-  const mins = Math.floor((totalSecs % 3600) / 60);
-  const secs = totalSecs % 60;
-  if (hours > 0) return `${hours}:${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
-  return `${mins}:${String(secs).padStart(2, "0")}`;
 }
 
 const printStyles = `

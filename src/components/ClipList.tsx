@@ -1,9 +1,10 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Clip, ClipWithThumbnails } from "../types";
 import { FilmStrip } from "./FilmStrip";
 import { Film, CheckCircle2, XCircle, Star } from "lucide-react";
 import { Waveform } from "./Waveform";
 import { LookbookSortMode } from "../lookbook";
+import { buildClipMetadataTags, getAudioBadge } from "../utils/clipMetadata";
 
 interface ClipListProps {
     clips: ClipWithThumbnails[];
@@ -20,6 +21,7 @@ interface ClipListProps {
     movementOptions: string[];
     lookbookSortMode: LookbookSortMode;
     groupByShotSize: boolean;
+    focusedClipId: string | null;
 }
 
 export function ClipList({
@@ -36,7 +38,8 @@ export function ClipList({
     shotSizeOptions,
     movementOptions,
     lookbookSortMode,
-    groupByShotSize
+    groupByShotSize,
+    focusedClipId
 }: ClipListProps) {
     if (clips.length === 0) return null;
 
@@ -69,6 +72,7 @@ export function ClipList({
                                 lookbookSortMode={lookbookSortMode}
                                 onPromoteClip={() => onPromoteClip(item.clip.id)}
                                 onPlayClip={() => onPlayClip(item.clip.id)}
+                                isFocused={focusedClipId === item.clip.id}
                             />
                         </div>
                     );
@@ -99,6 +103,7 @@ function ClipCard({
     lookbookSortMode,
     onPromoteClip,
     onPlayClip,
+    isFocused,
 }: {
     item: ClipWithThumbnails;
     thumbnailCache: Record<string, string>;
@@ -114,9 +119,12 @@ function ClipCard({
     shotSizeOptions: string[];
     movementOptions: string[];
     lookbookSortMode: LookbookSortMode;
+    isFocused: boolean;
 }) {
     const { clip, thumbnails } = item;
-    const audioHealth = getAudioHealth(clip.audio_summary, clip.audio_envelope);
+    const audioHealth = getAudioBadge(clip.audio_summary, clip.audio_envelope);
+    const metadataTags = buildClipMetadataTags(clip, audioHealth);
+    const cardRef = useRef<HTMLDivElement>(null);
 
     // Local state to prevent jumping during edits
     const [localShotSize, setLocalShotSize] = useState(clip.shot_size ?? "");
@@ -153,9 +161,15 @@ function ClipCard({
         onUpdateMetadata(clip.id, { manual_order: localManualOrder });
     };
 
+    useEffect(() => {
+        if (!isFocused || !cardRef.current) return;
+        cardRef.current.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }, [isFocused]);
+
     return (
         <div
-            className={`clip-card ${isSelected ? 'selected' : ''} flag-${clip.flag}`}
+            ref={cardRef}
+            className={`clip-card ${isSelected ? 'selected' : ''} flag-${clip.flag} ${isFocused ? "focused" : ""}`}
             onMouseEnter={onMouseEnter}
             onMouseLeave={onMouseLeave}
             onDoubleClick={(e) => {
@@ -230,15 +244,11 @@ function ClipCard({
             {/* Actions / Metadata */}
             <div className="clip-card-footer">
                 <div className="clip-metadata-compact">
-                    <span className="metadata-tag">{formatDuration(clip.duration_ms)}</span>
-                    <span className="metadata-tag">{clip.format_name.toUpperCase()}</span>
-                    <span className="metadata-tag">{clip.video_codec.toUpperCase()}</span>
-                    {clip.video_bitrate > 0 && (
-                        <span className="metadata-tag highlight-tag">
-                            {Math.round(clip.video_bitrate / 1_000_000)} Mbps
+                    {metadataTags.map((tag) => (
+                        <span key={`${clip.id}-${tag.label}-${tag.value}`} className={`metadata-tag ${tag.highlight ? "highlight-tag" : ""}`}>
+                            {tag.value}
                         </span>
-                    )}
-                    {audioHealth && <span className="metadata-tag">{audioHealth}</span>}
+                    ))}
                     <span className={`clip-status-dot ${clip.status}`} />
                 </div>
             </div>
@@ -249,16 +259,6 @@ function ClipCard({
                     envelope={clip.audio_envelope}
                 />
             )}
-
-            <div className="clip-metadata">
-                <MetaItem label="RES" value={clip.width > 0 ? `${clip.width}×${clip.height}` : "—"} />
-                <MetaItem label="FPS" value={clip.fps > 0 ? `${clip.fps}` : "—"} />
-                <MetaItem label="SIZE" value={formatFileSize(clip.size_bytes)} />
-                <MetaItem label="AUDIO" value={clip.audio_codec !== "none" ? `${clip.audio_codec.toUpperCase()} ${clip.audio_channels}ch ${clip.audio_sample_rate / 1000}kHz` : "No Audio"} />
-                <MetaItem label="TC" value={clip.timecode || "—"} />
-                <MetaItem label="ISO" value={clip.camera_iso || "—"} />
-                <MetaItem label="WB" value={clip.camera_white_balance || "—"} />
-            </div>
 
             <div className="clip-lookbook-taxonomy">
                 <label className="clip-taxonomy-field">
@@ -308,41 +308,4 @@ function ClipCard({
             </div>
         </div>
     );
-}
-
-function MetaItem({ label, value, tooltip }: { label: string; value: string; tooltip?: string }) {
-    return (
-        <div className="meta-item" data-tooltip={tooltip}>
-            <span className="meta-label">{label}</span>
-            <span className="meta-value">{value}</span>
-        </div>
-    );
-}
-
-function formatFileSize(bytes: number): string {
-    if (bytes === 0) return "—";
-    const units = ["B", "KB", "MB", "GB", "TB"];
-    const i = Math.floor(Math.log(bytes) / Math.log(1024));
-    if (i < 0) return "0 B";
-    return `${(bytes / Math.pow(1024, i)).toFixed(i > 1 ? 1 : 0)} ${units[i]}`;
-}
-
-function formatDuration(ms: number): string {
-    if (ms === 0) return "—";
-    const totalSecs = Math.floor(ms / 1000);
-    const hours = Math.floor(totalSecs / 3600);
-    const mins = Math.floor((totalSecs % 3600) / 60);
-    const secs = totalSecs % 60;
-    if (hours > 0) return `${hours}:${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
-    return `${mins}:${String(secs).padStart(2, "0")}`;
-}
-
-function getAudioHealth(summary: string | undefined, envelope?: number[]): string | null {
-    if (!summary || summary.toLowerCase().includes("no audio")) return "NO AUDIO";
-    if (!envelope || envelope.length === 0) return "AUDIO";
-    const peak = Math.max(...envelope);
-    const silentRatio = envelope.filter((v) => v < 20).length / envelope.length;
-    if (peak >= 245) return "POSSIBLE CLIP";
-    if (silentRatio > 0.85) return "VERY LOW";
-    return "AUDIO OK";
 }

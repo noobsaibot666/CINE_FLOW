@@ -1,5 +1,5 @@
 use crate::clustering;
-use crate::db::{Clip, Database, Project, ProjectRoot, SceneBlock, SceneDetectionCache, Thumbnail, VerificationJob, VerificationItem};
+use crate::db::{Clip, Database, Project, ProjectRoot, SceneBlock, SceneDetectionCache, Thumbnail, VerificationJob, VerificationItem, VerificationQueueItem};
 use crate::audio;
 use crate::ffprobe;
 use crate::jobs::JobInfo;
@@ -389,6 +389,7 @@ pub async fn cancel_job(
 
 #[tauri::command]
 pub async fn start_verification(
+    project_id: Option<String>,
     source_root: String,
     source_label: Option<String>,
     dest_root: String,
@@ -414,6 +415,7 @@ pub async fn start_verification(
             app_clone.clone(),
             db,
             job_id_clone.clone(),
+            project_id.unwrap_or_else(|| "__global__".to_string()),
             source_root,
             source_label.unwrap_or_else(|| "Source".to_string()),
             dest_root,
@@ -460,6 +462,265 @@ pub async fn get_verification_items(
 }
 
 #[tauri::command]
+pub async fn list_verification_queue(
+    project_id: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<VerificationQueueItemView>, String> {
+    let items = state
+        .db
+        .list_verification_queue(&project_id)
+        .map_err(|e| e.to_string())?;
+    let out = items
+        .into_iter()
+        .map(|item| {
+            let job = item
+                .last_job_id
+                .as_ref()
+                .and_then(|job_id| state.db.get_verification_job(job_id).ok().flatten());
+            VerificationQueueItemView {
+                id: item.id,
+                project_id: item.project_id,
+                idx: item.idx,
+                label: item.label,
+                source_path: item.source_path,
+                dest_path: item.dest_path,
+                last_job_id: item.last_job_id,
+                status: job
+                    .as_ref()
+                    .map(|j| j.status.to_ascii_lowercase())
+                    .unwrap_or_else(|| "queued".to_string()),
+                mode: job.as_ref().map(|j| j.mode.clone()),
+                duration_ms: job.as_ref().and_then(|j| j.duration_ms),
+                counts_json: job.as_ref().and_then(|j| j.counts_json.clone()),
+                created_at: item.created_at,
+                updated_at: item.updated_at,
+            }
+        })
+        .collect();
+    Ok(out)
+}
+
+#[tauri::command]
+pub async fn set_verification_queue_item(
+    project_id: String,
+    idx: i32,
+    source_path: String,
+    dest_path: String,
+    label: Option<String>,
+    state: State<'_, Arc<AppState>>,
+) -> Result<VerificationQueueItem, String> {
+    if idx < 1 || idx > 5 {
+        return Err("Queue index must be between 1 and 5".into());
+    }
+    state
+        .db
+        .upsert_verification_queue_item(
+            &project_id,
+            idx,
+            &source_path,
+            &dest_path,
+            label.as_deref(),
+        )
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn remove_verification_queue_item(
+    project_id: String,
+    idx: i32,
+    state: State<'_, Arc<AppState>>,
+) -> Result<(), String> {
+    state
+        .db
+        .remove_verification_queue_item(&project_id, idx)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn clear_verification_queue(
+    project_id: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<(), String> {
+    state
+        .db
+        .clear_verification_queue(&project_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn start_verification_queue(
+    project_id: String,
+    mode: String,
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+) -> Result<QueueRunStartResult, String> {
+    let mode_upper = mode.to_ascii_uppercase();
+    if mode_upper != "FAST" && mode_upper != "SOLID" {
+        return Err("Mode must be FAST or SOLID".into());
+    }
+    let items = state
+        .db
+        .list_verification_queue(&project_id)
+        .map_err(|e| e.to_string())?;
+    if items.is_empty() {
+        return Err("Queue is empty".into());
+    }
+    let queue_run_id = format!("queue-{}", uuid::Uuid::new_v4());
+    let child_job_ids: Vec<String> = items
+        .iter()
+        .map(|item| format!("{}-{:02}", queue_run_id, item.idx))
+        .collect();
+
+    let app_state = state.inner().clone();
+    let (queue_job_id, queue_cancel) = app_state
+        .job_manager
+        .create_job("verification_queue", Some(queue_run_id.clone()));
+    app_state
+        .job_manager
+        .mark_running(&queue_job_id, "Verification queue started");
+    emit_job_state(&app, &app_state.job_manager, &queue_job_id);
+
+    let app_clone = app.clone();
+    tokio::spawn(async move {
+        let total = items.len().max(1);
+        let mut completed = 0usize;
+        let mut failed_count = 0usize;
+        let mut cancelled = false;
+
+        for (n, item) in items.iter().enumerate() {
+            if crate::jobs::JobManager::is_cancelled(&queue_cancel) {
+                cancelled = true;
+                for pending in items.iter().skip(n) {
+                    let cancelled_job_id = format!("{}-{:02}", queue_job_id, pending.idx);
+                    let _ = upsert_cancelled_verification_job(
+                        &app_state.db,
+                        &project_id,
+                        &cancelled_job_id,
+                        pending,
+                        &mode_upper,
+                    );
+                    let _ = app_state
+                        .db
+                        .attach_queue_job(&project_id, pending.idx, &cancelled_job_id);
+                }
+                break;
+            }
+
+            let child_job_id = format!("{}-{:02}", queue_job_id, item.idx);
+            let _ = app_state
+                .db
+                .attach_queue_job(&project_id, item.idx, &child_job_id);
+            let (source_label, dest_label) = derive_labels(item.label.clone(), item.idx);
+            let (created_id, child_cancel) = app_state
+                .job_manager
+                .create_job("verification", Some(child_job_id.clone()));
+            app_state
+                .job_manager
+                .mark_running(&created_id, &format!("Queue check {:02} started", item.idx));
+            emit_job_state(&app_clone, &app_state.job_manager, &created_id);
+
+            let app_state_watch = app_state.clone();
+            let queue_cancel_watch = queue_cancel.clone();
+            let child_job_id_watch = child_job_id.clone();
+            let child_cancel_watch = child_cancel.clone();
+            let watcher = tokio::spawn(async move {
+                loop {
+                    if crate::jobs::JobManager::is_cancelled(&queue_cancel_watch) {
+                        let _ = app_state_watch.job_manager.cancel_job(&child_job_id_watch);
+                        break;
+                    }
+                    if crate::jobs::JobManager::is_cancelled(&child_cancel_watch) {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+                }
+            });
+
+            let result = verification::run_verification(
+                app_clone.clone(),
+                Arc::new(app_state.db.clone()),
+                child_job_id.clone(),
+                project_id.clone(),
+                item.source_path.clone(),
+                source_label,
+                item.dest_path.clone(),
+                dest_label,
+                mode_upper.clone(),
+                child_cancel.clone(),
+            )
+            .await;
+            watcher.abort();
+
+            if crate::jobs::JobManager::is_cancelled(&child_cancel) {
+                let _ = app_state.job_manager.cancel_job(&child_job_id);
+            } else if let Err(err) = result {
+                failed_count += 1;
+                app_state.job_manager.mark_failed(&child_job_id, &err);
+            } else {
+                let status = app_state
+                    .db
+                    .get_verification_job(&child_job_id)
+                    .ok()
+                    .flatten()
+                    .map(|j| j.status)
+                    .unwrap_or_else(|| "FAILED".to_string());
+                if status == "DONE" {
+                    app_state.job_manager.mark_done(&child_job_id, "Verification complete");
+                } else if status == "CANCELLED" {
+                    let _ = app_state.job_manager.cancel_job(&child_job_id);
+                } else {
+                    failed_count += 1;
+                    app_state.job_manager.mark_failed(&child_job_id, "Verification failed");
+                }
+            }
+            emit_job_state(&app_clone, &app_state.job_manager, &child_job_id);
+
+            completed += 1;
+            app_state.job_manager.update_progress(
+                &queue_job_id,
+                completed as f32 / total as f32,
+                Some(format!("Completed {}/{} checks", completed, total)),
+            );
+            emit_job_state(&app_clone, &app_state.job_manager, &queue_job_id);
+        }
+
+        if cancelled {
+            let _ = app_state.job_manager.cancel_job(&queue_job_id);
+            emit_job_state(&app_clone, &app_state.job_manager, &queue_job_id);
+            return;
+        }
+        if failed_count > 0 {
+            app_state.job_manager.mark_done(
+                &queue_job_id,
+                &format!("Queue complete with {} failure(s)", failed_count),
+            );
+        } else {
+            app_state
+                .job_manager
+                .mark_done(&queue_job_id, "Queue verification complete");
+        }
+        emit_job_state(&app_clone, &app_state.job_manager, &queue_job_id);
+    });
+
+    Ok(QueueRunStartResult {
+        queue_run_id,
+        job_ids: child_job_ids,
+    })
+}
+
+#[tauri::command]
+pub async fn list_verification_jobs_for_project(
+    project_id: String,
+    limit: Option<i64>,
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<VerificationJob>, String> {
+    state
+        .db
+        .list_verification_jobs_for_project(&project_id, limit.unwrap_or(100))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn export_verification_report_json(
     job_id: String,
     save_path: String,
@@ -485,9 +746,9 @@ pub async fn export_verification_report_json(
 #[tauri::command]
 pub async fn export_verification_report_markdown(
     job_id: String,
-    save_path: String,
+    out_dir: String,
     state: State<'_, Arc<AppState>>,
-) -> Result<(), String> {
+) -> Result<serde_json::Value, String> {
     let job = state
         .db
         .get_verification_job(&job_id)
@@ -518,16 +779,22 @@ pub async fn export_verification_report_markdown(
     if issues.len() > 100 {
         md.push_str(&format!("\n- ... and {} more issues\n", issues.len() - 100));
     }
-    std::fs::write(save_path, md).map_err(|e| e.to_string())?;
-    Ok(())
+    std::fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
+    let path = format!(
+        "{}/Verification_Report_{}.md",
+        out_dir,
+        &job_id.chars().take(8).collect::<String>()
+    );
+    std::fs::write(&path, md).map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({ "path": path }))
 }
 
 #[tauri::command]
 pub async fn export_verification_report_pdf(
     job_id: String,
-    save_path: String,
+    out_dir: String,
     state: State<'_, Arc<AppState>>,
-) -> Result<(), String> {
+) -> Result<serde_json::Value, String> {
     let job = state
         .db
         .get_verification_job(&job_id)
@@ -546,9 +813,12 @@ pub async fn export_verification_report_pdf(
         *y_mm -= 5.0;
     };
 
-    line("Wrap Preview Verification Report".to_string(), &mut y, &layer, &font);
+    let created = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string();
+    line("Wrap Preview".to_string(), &mut y, &layer, &font);
+    line("Verification Report".to_string(), &mut y, &layer, &font);
+    line(format!("Date created: {}", created), &mut y, &layer, &font);
     line(format!("App: Wrap Preview v{}", env!("CARGO_PKG_VERSION")), &mut y, &layer, &font);
-    line(format!("Date: {}", chrono::Utc::now().to_rfc3339()), &mut y, &layer, &font);
+    line("This report was created with Wrap Preview — a professional offline tool for creatives to verify, review, and prepare footage for post-production.".to_string(), &mut y, &layer, &font);
     line(format!("Source: {} ({})", job.source_label, job.source_root), &mut y, &layer, &font);
     line(format!("Destination: {} ({})", job.dest_label, job.dest_root), &mut y, &layer, &font);
     line(format!("Mode: {}", job.mode), &mut y, &layer, &font);
@@ -565,44 +835,83 @@ pub async fn export_verification_report_pdf(
         if y < 12.0 { break; }
         line(format!("[{}] {}", item.status, item.rel_path), &mut y, &layer, &font);
     }
-    line("© Alan Alves. All rights reserved.".to_string(), &mut y, &layer, &font);
+    layer.use_text("© Alan Alves. All rights reserved.", 9.0, Mm(10.0), Mm(8.0), &font);
 
-    let mut writer = std::io::BufWriter::new(std::fs::File::create(save_path).map_err(|e| e.to_string())?);
+    std::fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
+    let path = format!(
+        "{}/Verification_Report_{}.pdf",
+        out_dir,
+        &job_id.chars().take(8).collect::<String>()
+    );
+    let mut writer = std::io::BufWriter::new(std::fs::File::create(&path).map_err(|e| e.to_string())?);
     doc.save(&mut writer).map_err(|e| e.to_string())?;
-    Ok(())
+    Ok(serde_json::json!({ "path": path }))
 }
 
 #[tauri::command]
 pub async fn export_verification_queue_report_markdown(
-    job_ids: Vec<String>,
-    save_path: String,
+    project_id: String,
+    out_dir: String,
     state: State<'_, Arc<AppState>>,
-) -> Result<(), String> {
-    if job_ids.is_empty() {
+) -> Result<serde_json::Value, String> {
+    let queue_items = state
+        .db
+        .list_verification_queue(&project_id)
+        .map_err(|e| e.to_string())?;
+    if queue_items.is_empty() {
         return Err("No verification jobs provided".into());
     }
+    let queue_with_jobs: Vec<(VerificationQueueItem, VerificationJob)> = queue_items
+        .into_iter()
+        .filter_map(|item| {
+            let job = item
+                .last_job_id
+                .as_ref()
+                .and_then(|job_id| state.db.get_verification_job(job_id).ok().flatten());
+            job.map(|j| (item, j))
+        })
+        .collect();
+    if queue_with_jobs.is_empty() {
+        return Err("Queue has no completed checks with job data.".into());
+    }
     let mut md = String::new();
-    md.push_str("# Wrap Preview Verification Queue Report\n\n");
+    md.push_str("# Wrap Preview — Safe Copy Verification (Queue)\n\n");
     md.push_str(&format!("- App: Wrap Preview v{}\n", env!("CARGO_PKG_VERSION")));
-    md.push_str(&format!("- Date: {}\n", chrono::Utc::now().to_rfc3339()));
-    md.push_str(&format!("- Checks: {}\n\n", job_ids.len()));
+    md.push_str(&format!("- Date: {}\n", chrono::Local::now().format("%Y-%m-%d %H:%M:%S %Z")));
+    md.push_str(&format!(
+        "- Smart Copy: This report was created with Wrap Preview v{} — a professional offline tool for creatives to verify, review, and prepare footage for post-production.\n",
+        env!("CARGO_PKG_VERSION")
+    ));
+    md.push_str(&format!("- Checks: {}\n\n", queue_with_jobs.len()));
 
     let mut totals = (0u32, 0u32, 0u32, 0u32, 0u32, 0u32);
-    for (idx, job_id) in job_ids.iter().enumerate() {
-        let Some(job) = state.db.get_verification_job(job_id).map_err(|e| e.to_string())? else {
-            continue;
-        };
+    let mut passed = 0u32;
+    let mut failed = 0u32;
+    let mut cancelled = 0u32;
+    for (item, job) in &queue_with_jobs {
         totals.0 += job.verified_ok_count;
         totals.1 += job.missing_count;
         totals.2 += job.size_mismatch_count;
         totals.3 += job.hash_mismatch_count;
         totals.4 += job.unreadable_count;
         totals.5 += job.extra_in_dest_count;
-        md.push_str(&format!("## Check {:02}\n\n", idx + 1));
+        match job.status.as_str() {
+            "DONE" => passed += 1,
+            "CANCELLED" => cancelled += 1,
+            _ => failed += 1,
+        }
+        md.push_str(&format!(
+            "## Check {:02} — {}\n\n",
+            item.idx,
+            item.label
+                .clone()
+                .unwrap_or_else(|| format!("{} → {}", job.source_label, job.dest_label))
+        ));
         md.push_str(&format!("- Source: {} ({})\n", job.source_label, job.source_root));
         md.push_str(&format!("- Destination: {} ({})\n", job.dest_label, job.dest_root));
         md.push_str(&format!("- Mode: {}\n", job.mode));
         md.push_str(&format!("- Status: {}\n", job.status));
+        md.push_str(&format!("- Duration (ms): {}\n", job.duration_ms.unwrap_or(0)));
         md.push_str(&format!(
             "- Summary: Verified {} | Missing {} | Size {} | Hash {} | Unreadable {} | Extra {}\n\n",
             job.verified_ok_count,
@@ -613,18 +922,21 @@ pub async fn export_verification_queue_report_markdown(
             job.extra_in_dest_count
         ));
 
-        let items = state.db.get_verification_items(job_id).map_err(|e| e.to_string())?;
+        let items = state.db.get_verification_items(&job.id).map_err(|e| e.to_string())?;
         let issues: Vec<_> = items.iter().filter(|i| i.status != "OK").collect();
-        for item in issues.iter().take(50) {
-            md.push_str(&format!("- [{}] `{}` {}\n", item.status, item.rel_path, item.error_message.clone().unwrap_or_default()));
+        for issue in issues.iter().take(20) {
+            md.push_str(&format!("- [{}] `{}` {}\n", issue.status, issue.rel_path, issue.error_message.clone().unwrap_or_default()));
         }
-        if issues.len() > 50 {
-            md.push_str(&format!("- ... and {} more\n", issues.len() - 50));
+        if issues.len() > 20 {
+            md.push_str(&format!("- ... and {} more\n", issues.len() - 20));
         }
         md.push_str("\n");
     }
 
     md.push_str("## Queue Totals\n\n");
+    md.push_str(&format!("- Passed: {}\n", passed));
+    md.push_str(&format!("- Failed: {}\n", failed));
+    md.push_str(&format!("- Cancelled: {}\n", cancelled));
     md.push_str(&format!("- Verified: {}\n", totals.0));
     md.push_str(&format!("- Missing: {}\n", totals.1));
     md.push_str(&format!("- Size Mismatch: {}\n", totals.2));
@@ -632,19 +944,41 @@ pub async fn export_verification_queue_report_markdown(
     md.push_str(&format!("- Unreadable: {}\n", totals.4));
     md.push_str(&format!("- Extra in Destination: {}\n\n", totals.5));
     md.push_str("© Alan Alves. All rights reserved.\n");
-
-    std::fs::write(save_path, md).map_err(|e| e.to_string())?;
-    Ok(())
+    std::fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
+    let path = format!(
+        "{}/SafeCopy_Queue_Report_{}.md",
+        out_dir,
+        chrono::Local::now().format("%Y%m%d_%H%M%S")
+    );
+    std::fs::write(&path, md).map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({ "path": path }))
 }
 
 #[tauri::command]
 pub async fn export_verification_queue_report_pdf(
-    job_ids: Vec<String>,
-    save_path: String,
+    project_id: String,
+    out_dir: String,
     state: State<'_, Arc<AppState>>,
-) -> Result<(), String> {
-    if job_ids.is_empty() {
+) -> Result<serde_json::Value, String> {
+    let queue_items = state
+        .db
+        .list_verification_queue(&project_id)
+        .map_err(|e| e.to_string())?;
+    if queue_items.is_empty() {
         return Err("No verification jobs provided".into());
+    }
+    let queue_with_jobs: Vec<(VerificationQueueItem, VerificationJob)> = queue_items
+        .into_iter()
+        .filter_map(|item| {
+            let job = item
+                .last_job_id
+                .as_ref()
+                .and_then(|job_id| state.db.get_verification_job(job_id).ok().flatten());
+            job.map(|j| (item, j))
+        })
+        .collect();
+    if queue_with_jobs.is_empty() {
+        return Err("Queue has no completed checks with job data.".into());
     }
     use printpdf::{BuiltinFont, Mm, PdfDocument};
     let (doc, page1, layer1) = PdfDocument::new("Verification Queue Report", Mm(210.0), Mm(297.0), "Layer 1");
@@ -657,26 +991,46 @@ pub async fn export_verification_queue_report_pdf(
             *y_mm -= 5.0;
         }
     };
-    line("Wrap Preview Verification Queue Report".to_string(), &mut y, &layer, &font);
+    let created = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string();
+    line("Wrap Preview".to_string(), &mut y, &layer, &font);
+    line("Verification Queue Report".to_string(), &mut y, &layer, &font);
+    line(format!("Date created: {}", created), &mut y, &layer, &font);
     line(format!("App: Wrap Preview v{}", env!("CARGO_PKG_VERSION")), &mut y, &layer, &font);
-    line(format!("Date: {}", chrono::Utc::now().to_rfc3339()), &mut y, &layer, &font);
+    line("This report was created with Wrap Preview — a professional offline tool for creatives to verify, review, and prepare footage for post-production.".to_string(), &mut y, &layer, &font);
     y -= 4.0;
-    for (idx, job_id) in job_ids.iter().enumerate() {
-        let Some(job) = state.db.get_verification_job(job_id).map_err(|e| e.to_string())? else {
-            continue;
-        };
+    for (item, job) in &queue_with_jobs {
         if y < 24.0 {
             break;
         }
-        line(format!("Check {:02}: {} -> {}", idx + 1, job.source_label, job.dest_label), &mut y, &layer, &font);
+        line(
+            format!(
+                "Check {:02}: {}",
+                item.idx,
+                item.label
+                    .clone()
+                    .unwrap_or_else(|| format!("{} -> {}", job.source_label, job.dest_label))
+            ),
+            &mut y,
+            &layer,
+            &font,
+        );
+        line(format!("  Source: {}", job.source_root), &mut y, &layer, &font);
+        line(format!("  Destination: {}", job.dest_root), &mut y, &layer, &font);
+        line(format!("  Status: {} | Mode: {} | Duration(ms): {}", job.status, job.mode, job.duration_ms.unwrap_or(0)), &mut y, &layer, &font);
         line(format!("  Verified {} | Missing {} | Size {} | Hash {} | Unreadable {} | Extra {}",
             job.verified_ok_count, job.missing_count, job.size_mismatch_count, job.hash_mismatch_count, job.unreadable_count, job.extra_in_dest_count
         ), &mut y, &layer, &font);
     }
-    line("© Alan Alves. All rights reserved.".to_string(), &mut y, &layer, &font);
-    let mut writer = std::io::BufWriter::new(std::fs::File::create(save_path).map_err(|e| e.to_string())?);
+    layer.use_text("© Alan Alves. All rights reserved.", 9.0, Mm(10.0), Mm(8.0), &font);
+    std::fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
+    let path = format!(
+        "{}/SafeCopy_Queue_Report_{}.pdf",
+        out_dir,
+        chrono::Local::now().format("%Y%m%d_%H%M%S")
+    );
+    let mut writer = std::io::BufWriter::new(std::fs::File::create(&path).map_err(|e| e.to_string())?);
     doc.save(&mut writer).map_err(|e| e.to_string())?;
-    Ok(())
+    Ok(serde_json::json!({ "path": path }))
 }
 
 #[tauri::command]
@@ -1079,6 +1433,29 @@ pub struct AppInfo {
     pub macos_version: String,
     pub arch: String,
     pub braw_bridge_active: bool,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+pub struct VerificationQueueItemView {
+    pub id: String,
+    pub project_id: String,
+    pub idx: i32,
+    pub label: Option<String>,
+    pub source_path: String,
+    pub dest_path: String,
+    pub last_job_id: Option<String>,
+    pub status: String,
+    pub mode: Option<String>,
+    pub duration_ms: Option<i64>,
+    pub counts_json: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(serde::Serialize)]
+pub struct QueueRunStartResult {
+    pub queue_run_id: String,
+    pub job_ids: Vec<String>,
 }
 
 #[tauri::command]
@@ -1499,6 +1876,7 @@ fn resolve_clips_for_scope(
 
     Ok(clips
         .into_iter()
+        .filter(|c| c.flag != "reject")
         .filter(|c| match scope {
             "picks" => c.flag == "pick",
             "rated" => c.rating > 0,
@@ -1534,21 +1912,42 @@ fn write_simple_contact_sheet_pdf(
         .map_err(|e| e.to_string())?;
 
     layer.use_text(
-        format!("Project: {}", project_name),
+        "Wrap Preview",
         16.0,
         Mm(10.0),
         Mm(198.0),
         &font,
     );
     layer.use_text(
-        format!("Clips: {}", clips.len()),
-        12.0,
+        format!("Project: {}", project_name),
+        16.0,
         Mm(10.0),
         Mm(190.0),
         &font,
     );
+    layer.use_text(
+        format!("Date created: {}", chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC")),
+        12.0,
+        Mm(10.0),
+        Mm(182.0),
+        &font,
+    );
+    layer.use_text(
+        format!("Clips: {}", clips.len()),
+        12.0,
+        Mm(10.0),
+        Mm(176.0),
+        &font,
+    );
+    layer.use_text(
+        format!("This report was created with Wrap Preview v{}.", env!("CARGO_PKG_VERSION")),
+        10.0,
+        Mm(10.0),
+        Mm(170.0),
+        &font,
+    );
 
-    let mut y = 182.0;
+    let mut y = 162.0;
     for clip in clips.iter().take(40) {
         let line = format!(
             "{} | {} | rating:{} | flag:{}",
@@ -1560,6 +1959,8 @@ fn write_simple_contact_sheet_pdf(
             break;
         }
     }
+
+    layer.use_text("© Alan Alves. All rights reserved.", 9.0, Mm(10.0), Mm(8.0), &font);
 
     let mut writer = std::io::BufWriter::new(
         std::fs::File::create(output_path).map_err(|e| e.to_string())?,
@@ -1574,6 +1975,68 @@ fn emit_job_state(app: &AppHandle, manager: &crate::jobs::JobManager, job_id: &s
             eprintln!("job-progress emit failed: {}", e);
         }
     }
+}
+
+fn derive_labels(label: Option<String>, idx: i32) -> (String, String) {
+    let default = format!("Check {:02}", idx);
+    let raw = label.unwrap_or(default);
+    if let Some((left, right)) = raw.split_once("→") {
+        return (left.trim().to_string(), right.trim().to_string());
+    }
+    if let Some((left, right)) = raw.split_once("->") {
+        return (left.trim().to_string(), right.trim().to_string());
+    }
+    (format!("{} Source", raw), format!("{} Destination", raw))
+}
+
+fn upsert_cancelled_verification_job(
+    db: &Database,
+    project_id: &str,
+    job_id: &str,
+    item: &VerificationQueueItem,
+    mode: &str,
+) -> Result<(), String> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let (source_label, dest_label) = derive_labels(item.label.clone(), item.idx);
+    let job = VerificationJob {
+        id: job_id.to_string(),
+        project_id: project_id.to_string(),
+        created_at: now.clone(),
+        source_path: item.source_path.clone(),
+        source_root: item.source_path.clone(),
+        source_label,
+        dest_path: item.dest_path.clone(),
+        dest_root: item.dest_path.clone(),
+        dest_label,
+        mode: mode.to_string(),
+        status: "CANCELLED".to_string(),
+        started_at: Some(now.clone()),
+        ended_at: Some(now),
+        duration_ms: Some(0),
+        counts_json: Some(
+            serde_json::json!({
+                "verified": 0,
+                "missing": 0,
+                "size_mismatch": 0,
+                "hash_mismatch": 0,
+                "unreadable": 0,
+                "extra_in_dest": 0
+            })
+            .to_string(),
+        ),
+        issues_json: Some("[]".to_string()),
+        total_files: 0,
+        total_bytes: 0,
+        verified_ok_count: 0,
+        missing_count: 0,
+        size_mismatch_count: 0,
+        hash_mismatch_count: 0,
+        unreadable_count: 0,
+        extra_in_dest_count: 0,
+    };
+    db.insert_verification_job(&job)
+        .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 fn synthetic_cut_points(duration_ms: u64, threshold: f64) -> Vec<u64> {
@@ -1697,6 +2160,7 @@ mod tests {
         }).unwrap();
         db.upsert_clip(&sample_clip(project_id, "c1", 5, "pick")).unwrap();
         db.upsert_clip(&sample_clip(project_id, "c2", 2, "none")).unwrap();
+        db.upsert_clip(&sample_clip(project_id, "c3", 5, "reject")).unwrap();
 
         let picks = resolve_clips_for_scope(&db, project_id, "picks", None, None).unwrap();
         assert_eq!(picks.len(), 1);
@@ -1704,5 +2168,20 @@ mod tests {
         assert_eq!(rated_min.len(), 1);
         let all = resolve_clips_for_scope(&db, project_id, "all", None, None).unwrap();
         assert_eq!(all.len(), 2);
+    }
+
+    #[test]
+    fn derive_labels_parses_arrow_or_falls_back() {
+        let (s1, d1) = derive_labels(Some("CARD A -> SSD 01".to_string()), 1);
+        assert_eq!(s1, "CARD A");
+        assert_eq!(d1, "SSD 01");
+
+        let (s2, d2) = derive_labels(Some("CAM A → RAID".to_string()), 2);
+        assert_eq!(s2, "CAM A");
+        assert_eq!(d2, "RAID");
+
+        let (s3, d3) = derive_labels(Some("Check Label".to_string()), 3);
+        assert_eq!(s3, "Check Label Source");
+        assert_eq!(d3, "Check Label Destination");
     }
 }

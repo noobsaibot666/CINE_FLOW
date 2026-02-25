@@ -97,13 +97,21 @@ pub struct Thumbnail {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VerificationJob {
     pub id: String,
+    pub project_id: String,
     pub created_at: String,
+    pub source_path: String,
     pub source_root: String,
     pub source_label: String,
+    pub dest_path: String,
     pub dest_root: String,
     pub dest_label: String,
     pub mode: String, // "FAST", "SOLID"
     pub status: String, // "RUNNING", "DONE", "FAILED", "CANCELLED"
+    pub started_at: Option<String>,
+    pub ended_at: Option<String>,
+    pub duration_ms: Option<i64>,
+    pub counts_json: Option<String>,
+    pub issues_json: Option<String>,
     pub total_files: u32,
     pub total_bytes: u64,
     pub verified_ok_count: u32,
@@ -112,6 +120,19 @@ pub struct VerificationJob {
     pub hash_mismatch_count: u32,
     pub unreadable_count: u32,
     pub extra_in_dest_count: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VerificationQueueItem {
+    pub id: String,
+    pub project_id: String,
+    pub idx: i32,
+    pub label: Option<String>,
+    pub source_path: String,
+    pub dest_path: String,
+    pub last_job_id: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -275,6 +296,47 @@ impl Database {
             if !verification_columns.contains(&"dest_label".to_string()) {
                 conn.execute("ALTER TABLE verification_jobs ADD COLUMN dest_label TEXT NOT NULL DEFAULT 'Destination'", [])?;
             }
+            if !verification_columns.contains(&"project_id".to_string()) {
+                conn.execute("ALTER TABLE verification_jobs ADD COLUMN project_id TEXT NOT NULL DEFAULT '__global__'", [])?;
+            }
+            if !verification_columns.contains(&"source_path".to_string()) {
+                conn.execute("ALTER TABLE verification_jobs ADD COLUMN source_path TEXT NOT NULL DEFAULT ''", [])?;
+            }
+            if !verification_columns.contains(&"dest_path".to_string()) {
+                conn.execute("ALTER TABLE verification_jobs ADD COLUMN dest_path TEXT NOT NULL DEFAULT ''", [])?;
+            }
+            if !verification_columns.contains(&"started_at".to_string()) {
+                conn.execute("ALTER TABLE verification_jobs ADD COLUMN started_at TEXT", [])?;
+            }
+            if !verification_columns.contains(&"ended_at".to_string()) {
+                conn.execute("ALTER TABLE verification_jobs ADD COLUMN ended_at TEXT", [])?;
+            }
+            if !verification_columns.contains(&"duration_ms".to_string()) {
+                conn.execute("ALTER TABLE verification_jobs ADD COLUMN duration_ms INTEGER", [])?;
+            }
+            if !verification_columns.contains(&"counts_json".to_string()) {
+                conn.execute("ALTER TABLE verification_jobs ADD COLUMN counts_json TEXT", [])?;
+            }
+            if !verification_columns.contains(&"issues_json".to_string()) {
+                conn.execute("ALTER TABLE verification_jobs ADD COLUMN issues_json TEXT", [])?;
+            }
+
+            conn.execute_batch(
+                "
+                CREATE TABLE IF NOT EXISTS verification_queue_items (
+                    id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL,
+                    idx INTEGER NOT NULL,
+                    label TEXT,
+                    source_path TEXT NOT NULL,
+                    dest_path TEXT NOT NULL,
+                    last_job_id TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(project_id, idx)
+                );
+                ",
+            )?;
         }
 
         Ok(db)
@@ -375,13 +437,21 @@ impl Database {
 
             CREATE TABLE IF NOT EXISTS verification_jobs (
                 id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL DEFAULT '__global__',
                 created_at TEXT NOT NULL,
+                source_path TEXT NOT NULL DEFAULT '',
                 source_root TEXT NOT NULL,
                 source_label TEXT NOT NULL DEFAULT 'Source',
+                dest_path TEXT NOT NULL DEFAULT '',
                 dest_root TEXT NOT NULL,
                 dest_label TEXT NOT NULL DEFAULT 'Destination',
                 mode TEXT NOT NULL,
                 status TEXT NOT NULL,
+                started_at TEXT,
+                ended_at TEXT,
+                duration_ms INTEGER,
+                counts_json TEXT,
+                issues_json TEXT,
                 total_files INTEGER NOT NULL,
                 total_bytes INTEGER NOT NULL,
                 verified_ok_count INTEGER NOT NULL,
@@ -390,6 +460,19 @@ impl Database {
                 hash_mismatch_count INTEGER NOT NULL,
                 unreadable_count INTEGER NOT NULL,
                 extra_in_dest_count INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS verification_queue_items (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                idx INTEGER NOT NULL,
+                label TEXT,
+                source_path TEXT NOT NULL,
+                dest_path TEXT NOT NULL,
+                last_job_id TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(project_id, idx)
             );
 
             CREATE TABLE IF NOT EXISTS verification_items (
@@ -481,13 +564,19 @@ impl Database {
 
     pub fn upsert_project_root(&self, root: &ProjectRoot) -> SqlResult<()> {
         let conn = self.conn.lock().unwrap();
-        conn.execute(
-            "INSERT INTO project_roots (id, project_id, root_path, label, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)
-             ON CONFLICT(project_id, root_path) DO UPDATE SET
-                label = excluded.label",
-            params![root.id, root.project_id, root.root_path, root.label, root.created_at],
+        // Avoid relying on a UNIQUE(project_id, root_path) migration in legacy DBs.
+        // First try to update an existing row, then insert if nothing changed.
+        let updated = conn.execute(
+            "UPDATE project_roots SET label = ?1 WHERE project_id = ?2 AND root_path = ?3",
+            params![root.label, root.project_id, root.root_path],
         )?;
+        if updated == 0 {
+            conn.execute(
+                "INSERT OR IGNORE INTO project_roots (id, project_id, root_path, label, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![root.id, root.project_id, root.root_path, root.label, root.created_at],
+            )?;
+        }
         Ok(())
     }
 
@@ -1118,12 +1207,41 @@ impl Database {
     pub fn insert_verification_job(&self, job: &VerificationJob) -> SqlResult<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT INTO verification_jobs (id, created_at, source_root, source_label, dest_root, dest_label, mode, status, total_files, total_bytes, verified_ok_count, missing_count, size_mismatch_count, hash_mismatch_count, unreadable_count, extra_in_dest_count)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+            "INSERT INTO verification_jobs (
+                id, project_id, created_at, source_path, source_root, source_label, dest_path, dest_root, dest_label,
+                mode, status, started_at, ended_at, duration_ms, counts_json, issues_json,
+                total_files, total_bytes, verified_ok_count, missing_count, size_mismatch_count, hash_mismatch_count, unreadable_count, extra_in_dest_count
+             )
+             VALUES (
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9,
+                ?10, ?11, ?12, ?13, ?14, ?15, ?16,
+                ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24
+             )",
             params![
-                job.id, job.created_at, job.source_root, job.source_label, job.dest_root, job.dest_label, job.mode, job.status,
-                job.total_files, job.total_bytes as i64, job.verified_ok_count, job.missing_count,
-                job.size_mismatch_count, job.hash_mismatch_count, job.unreadable_count, job.extra_in_dest_count
+                job.id,
+                job.project_id,
+                job.created_at,
+                job.source_path,
+                job.source_root,
+                job.source_label,
+                job.dest_path,
+                job.dest_root,
+                job.dest_label,
+                job.mode,
+                job.status,
+                job.started_at,
+                job.ended_at,
+                job.duration_ms,
+                job.counts_json,
+                job.issues_json,
+                job.total_files,
+                job.total_bytes as i64,
+                job.verified_ok_count,
+                job.missing_count,
+                job.size_mismatch_count,
+                job.hash_mismatch_count,
+                job.unreadable_count,
+                job.extra_in_dest_count
             ],
         )?;
         Ok(())
@@ -1141,12 +1259,14 @@ impl Database {
             "UPDATE verification_jobs SET 
                 verified_ok_count = ?1, missing_count = ?2, size_mismatch_count = ?3, 
                 hash_mismatch_count = ?4, unreadable_count = ?5, extra_in_dest_count = ?6,
-                total_files = ?7, total_bytes = ?8
-             WHERE id = ?9",
+                total_files = ?7, total_bytes = ?8, started_at = ?9, ended_at = ?10,
+                duration_ms = ?11, counts_json = ?12, issues_json = ?13, status = ?14
+             WHERE id = ?15",
             params![
                 job.verified_ok_count, job.missing_count, job.size_mismatch_count, 
                 job.hash_mismatch_count, job.unreadable_count, job.extra_in_dest_count,
-                job.total_files, job.total_bytes as i64, job.id
+                job.total_files, job.total_bytes as i64, job.started_at, job.ended_at,
+                job.duration_ms, job.counts_json, job.issues_json, job.status, job.id
             ],
         )?;
         Ok(())
@@ -1175,33 +1295,207 @@ impl Database {
     pub fn get_verification_job(&self, id: &str) -> SqlResult<Option<VerificationJob>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, created_at, source_root, source_label, dest_root, dest_label, mode, status, total_files, total_bytes, verified_ok_count, missing_count, size_mismatch_count, hash_mismatch_count, unreadable_count, extra_in_dest_count 
+            "SELECT id, project_id, created_at, source_path, source_root, source_label, dest_path, dest_root, dest_label,
+                    mode, status, started_at, ended_at, duration_ms, counts_json, issues_json,
+                    total_files, total_bytes, verified_ok_count, missing_count, size_mismatch_count, hash_mismatch_count, unreadable_count, extra_in_dest_count
              FROM verification_jobs WHERE id = ?1"
         )?;
         let mut rows = stmt.query_map(params![id], |row| {
             Ok(VerificationJob {
                 id: row.get(0)?,
-                created_at: row.get(1)?,
-                source_root: row.get(2)?,
-                source_label: row.get(3)?,
-                dest_root: row.get(4)?,
-                dest_label: row.get(5)?,
-                mode: row.get(6)?,
-                status: row.get(7)?,
-                total_files: row.get(8)?,
-                total_bytes: row.get::<_, i64>(9)? as u64,
-                verified_ok_count: row.get(10)?,
-                missing_count: row.get(11)?,
-                size_mismatch_count: row.get(12)?,
-                hash_mismatch_count: row.get(13)?,
-                unreadable_count: row.get(14)?,
-                extra_in_dest_count: row.get(15)?,
+                project_id: row.get(1)?,
+                created_at: row.get(2)?,
+                source_path: row.get(3)?,
+                source_root: row.get(4)?,
+                source_label: row.get(5)?,
+                dest_path: row.get(6)?,
+                dest_root: row.get(7)?,
+                dest_label: row.get(8)?,
+                mode: row.get(9)?,
+                status: row.get(10)?,
+                started_at: row.get(11)?,
+                ended_at: row.get(12)?,
+                duration_ms: row.get(13)?,
+                counts_json: row.get(14)?,
+                issues_json: row.get(15)?,
+                total_files: row.get(16)?,
+                total_bytes: row.get::<_, i64>(17)? as u64,
+                verified_ok_count: row.get(18)?,
+                missing_count: row.get(19)?,
+                size_mismatch_count: row.get(20)?,
+                hash_mismatch_count: row.get(21)?,
+                unreadable_count: row.get(22)?,
+                extra_in_dest_count: row.get(23)?,
             })
         })?;
         match rows.next() {
             Some(Ok(job)) => Ok(Some(job)),
             _ => Ok(None),
         }
+    }
+
+    pub fn list_verification_jobs_for_project(
+        &self,
+        project_id: &str,
+        limit: i64,
+    ) -> SqlResult<Vec<VerificationJob>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, project_id, created_at, source_path, source_root, source_label, dest_path, dest_root, dest_label,
+                    mode, status, started_at, ended_at, duration_ms, counts_json, issues_json,
+                    total_files, total_bytes, verified_ok_count, missing_count, size_mismatch_count, hash_mismatch_count, unreadable_count, extra_in_dest_count
+             FROM verification_jobs
+             WHERE project_id = ?1
+             ORDER BY created_at DESC
+             LIMIT ?2",
+        )?;
+        let jobs = stmt
+            .query_map(params![project_id, limit], |row| {
+                Ok(VerificationJob {
+                    id: row.get(0)?,
+                    project_id: row.get(1)?,
+                    created_at: row.get(2)?,
+                    source_path: row.get(3)?,
+                    source_root: row.get(4)?,
+                    source_label: row.get(5)?,
+                    dest_path: row.get(6)?,
+                    dest_root: row.get(7)?,
+                    dest_label: row.get(8)?,
+                    mode: row.get(9)?,
+                    status: row.get(10)?,
+                    started_at: row.get(11)?,
+                    ended_at: row.get(12)?,
+                    duration_ms: row.get(13)?,
+                    counts_json: row.get(14)?,
+                    issues_json: row.get(15)?,
+                    total_files: row.get(16)?,
+                    total_bytes: row.get::<_, i64>(17)? as u64,
+                    verified_ok_count: row.get(18)?,
+                    missing_count: row.get(19)?,
+                    size_mismatch_count: row.get(20)?,
+                    hash_mismatch_count: row.get(21)?,
+                    unreadable_count: row.get(22)?,
+                    extra_in_dest_count: row.get(23)?,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(jobs)
+    }
+
+    pub fn list_verification_queue(&self, project_id: &str) -> SqlResult<Vec<VerificationQueueItem>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, project_id, idx, label, source_path, dest_path, last_job_id, created_at, updated_at
+             FROM verification_queue_items
+             WHERE project_id = ?1
+             ORDER BY idx ASC",
+        )?;
+        let items = stmt
+            .query_map(params![project_id], |row| {
+                Ok(VerificationQueueItem {
+                    id: row.get(0)?,
+                    project_id: row.get(1)?,
+                    idx: row.get(2)?,
+                    label: row.get(3)?,
+                    source_path: row.get(4)?,
+                    dest_path: row.get(5)?,
+                    last_job_id: row.get(6)?,
+                    created_at: row.get(7)?,
+                    updated_at: row.get(8)?,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(items)
+    }
+
+    pub fn upsert_verification_queue_item(
+        &self,
+        project_id: &str,
+        idx: i32,
+        source_path: &str,
+        dest_path: &str,
+        label: Option<&str>,
+    ) -> SqlResult<VerificationQueueItem> {
+        let conn = self.conn.lock().unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+        let existing: Option<(String, Option<String>, Option<String>)> = conn
+            .query_row(
+                "SELECT id, created_at, last_job_id
+                 FROM verification_queue_items
+                 WHERE project_id = ?1 AND idx = ?2",
+                params![project_id, idx],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .ok();
+        let id = existing
+            .as_ref()
+            .map(|v| v.0.clone())
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let created_at = existing
+            .as_ref()
+            .and_then(|v| v.1.clone())
+            .unwrap_or_else(|| now.clone());
+        let last_job_id = existing.as_ref().and_then(|v| v.2.clone());
+        conn.execute(
+            "INSERT INTO verification_queue_items (id, project_id, idx, label, source_path, dest_path, last_job_id, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             ON CONFLICT(project_id, idx) DO UPDATE SET
+                label = excluded.label,
+                source_path = excluded.source_path,
+                dest_path = excluded.dest_path,
+                updated_at = excluded.updated_at",
+            params![id, project_id, idx, label, source_path, dest_path, last_job_id, created_at, now],
+        )?;
+        Ok(VerificationQueueItem {
+            id,
+            project_id: project_id.to_string(),
+            idx,
+            label: label.map(|s| s.to_string()),
+            source_path: source_path.to_string(),
+            dest_path: dest_path.to_string(),
+            last_job_id,
+            created_at,
+            updated_at: now,
+        })
+    }
+
+    pub fn remove_verification_queue_item(&self, project_id: &str, idx: i32) -> SqlResult<()> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "DELETE FROM verification_queue_items WHERE project_id = ?1 AND idx = ?2",
+            params![project_id, idx],
+        )?;
+        tx.execute(
+            "UPDATE verification_queue_items
+             SET idx = idx - 1, updated_at = ?3
+             WHERE project_id = ?1 AND idx > ?2",
+            params![project_id, idx, chrono::Utc::now().to_rfc3339()],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn clear_verification_queue(&self, project_id: &str) -> SqlResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM verification_queue_items WHERE project_id = ?1",
+            params![project_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn attach_queue_job(&self, project_id: &str, idx: i32, job_id: &str) -> SqlResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE verification_queue_items
+             SET last_job_id = ?1, updated_at = ?4
+             WHERE project_id = ?2 AND idx = ?3",
+            params![job_id, project_id, idx, chrono::Utc::now().to_rfc3339()],
+        )?;
+        Ok(())
     }
 
     pub fn get_verification_items(&self, job_id: &str) -> SqlResult<Vec<VerificationItem>> {

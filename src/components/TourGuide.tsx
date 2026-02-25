@@ -120,7 +120,7 @@ export function TourGuide({ run, steps, onComplete, onClose }: TourGuideProps) {
         <div className="tour-actions">
           <button className="btn btn-secondary btn-sm" onClick={onClose}>Skip</button>
           <div style={{ display: "flex", gap: 8 }}>
-            <button className="btn btn-secondary btn-sm" onClick={back} disabled={index === 0}>Back</button>
+            <button className="btn btn-secondary btn-sm" onClick={back} disabled={index === 0}>Prev</button>
             <button className="btn btn-primary btn-sm" onClick={next}>{index + 1 >= steps.length ? "Finish" : "Next"}</button>
           </div>
         </div>
@@ -128,4 +128,3 @@ export function TourGuide({ run, steps, onComplete, onClose }: TourGuideProps) {
     </>
   );
 }
-

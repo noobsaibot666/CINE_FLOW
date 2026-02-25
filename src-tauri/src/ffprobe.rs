@@ -34,6 +34,8 @@ struct FfprobeOutput {
 struct FfprobeStream {
     codec_type: Option<String>,
     codec_name: Option<String>,
+    codec_long_name: Option<String>,
+    codec_tag_string: Option<String>,
     width: Option<u32>,
     height: Option<u32>,
     r_frame_rate: Option<String>,
@@ -119,9 +121,26 @@ pub fn probe_file(file_path: &str) -> Result<ClipMetadata, String> {
         .map(|f| f.to_string_lossy().to_string())
         .unwrap_or_else(|| file_path.to_string());
 
+    let extension = std::path::Path::new(file_path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase());
+
     // Video codec
     let video_codec = video_stream
-        .and_then(|s| s.codec_name.clone())
+        .and_then(|s| {
+            s.codec_name
+                .clone()
+                .or_else(|| s.codec_tag_string.clone())
+                .or_else(|| s.codec_long_name.clone())
+        })
+        .or_else(|| {
+            if extension.as_deref() == Some("braw") {
+                Some("braw".to_string())
+            } else {
+                None
+            }
+        })
         .unwrap_or_else(|| "unknown".to_string());
 
     // Resolution
@@ -167,35 +186,103 @@ pub fn probe_file(file_path: &str) -> Result<ClipMetadata, String> {
         .and_then(|s| s.parse::<u64>().ok())
         .or_else(|| format.bit_rate.as_ref().and_then(|s| s.parse::<u64>().ok()))
         .unwrap_or(0);
-    let format_name = format
-        .format_name
-        .clone()
-        .unwrap_or_else(|| "unknown".to_string());
+    let format_name = if extension.as_deref() == Some("braw") {
+        "braw".to_string()
+    } else {
+        format
+            .format_name
+            .as_deref()
+            .and_then(|name| {
+                name.split(',')
+                    .map(|part| part.trim())
+                    .find(|part| !part.is_empty())
+            })
+            .map(|part| part.to_ascii_lowercase())
+            .or(extension.clone())
+            .unwrap_or_else(|| "unknown".to_string())
+    };
 
     let camera_iso = video_stream
         .and_then(|s| s.tags.as_ref())
-        .and_then(|t| {
-            t.get("iso")
-                .or_else(|| t.get("ISO"))
-                .and_then(|v| v.as_str().map(|s| s.to_string()))
-        });
+        .and_then(|tags| {
+            get_tag_value_ci(
+                tags,
+                &[
+                    "iso",
+                    "com.apple.quicktime.iso",
+                    "ISO",
+                    "camera_iso",
+                ],
+            )
+        })
+        .or_else(|| {
+            format.tags.as_ref().and_then(|tags| {
+                get_tag_value_ci(
+                    tags,
+                    &[
+                        "iso",
+                        "com.apple.quicktime.iso",
+                        "ISO",
+                        "camera_iso",
+                    ],
+                )
+            })
+        })
+        .and_then(|raw| extract_numeric_like(&raw));
+
     let camera_white_balance = video_stream
         .and_then(|s| s.tags.as_ref())
-        .and_then(|t| {
-            t.get("white_balance")
-                .or_else(|| t.get("WB"))
-                .or_else(|| t.get("whitebalance"))
-                .and_then(|v| v.as_str().map(|s| s.to_string()))
-        });
+        .and_then(|tags| {
+            get_tag_value_ci(
+                tags,
+                &[
+                    "white_balance",
+                    "wb",
+                    "com.apple.quicktime.whitebalance",
+                    "kelvin",
+                ],
+            )
+        })
+        .or_else(|| {
+            format.tags.as_ref().and_then(|tags| {
+                get_tag_value_ci(
+                    tags,
+                    &[
+                        "white_balance",
+                        "wb",
+                        "com.apple.quicktime.whitebalance",
+                        "kelvin",
+                    ],
+                )
+            })
+        })
+        .and_then(|raw| extract_numeric_like(&raw));
 
-    // Timecode — check video stream tags, then format tags
+    // Timecode — check video stream tags, then any stream tags, then format tags
     let timecode = video_stream
         .and_then(|s| s.tags.as_ref())
-        .and_then(|t| t.get("timecode").and_then(|v| v.as_str().map(|s| s.to_string())))
+        .and_then(|tags| {
+            get_tag_value_ci(
+                tags,
+                &["timecode", "com.apple.quicktime.timecode"],
+            )
+        })
         .or_else(|| {
-            format.tags.as_ref().and_then(|t| {
-                t.get("timecode")
-                    .and_then(|v| v.as_str().map(|s| s.to_string()))
+            streams.iter().find_map(|stream| {
+                stream.tags.as_ref().and_then(|tags| {
+                    get_tag_value_ci(
+                        tags,
+                        &["timecode", "com.apple.quicktime.timecode"],
+                    )
+                })
+            })
+        })
+        .or_else(|| {
+            format.tags.as_ref().and_then(|tags| {
+                get_tag_value_ci(
+                    tags,
+                    &["timecode", "com.apple.quicktime.timecode"],
+                )
             })
         });
 
@@ -248,5 +335,51 @@ fn parse_frame_rate(rate: &str) -> f64 {
         }
     } else {
         rate.parse().unwrap_or(0.0)
+    }
+}
+
+fn get_tag_value_ci(tags: &serde_json::Value, aliases: &[&str]) -> Option<String> {
+    let object = tags.as_object()?;
+    for alias in aliases {
+        let alias_lower = alias.to_ascii_lowercase();
+        for (key, value) in object {
+            if key.to_ascii_lowercase() == alias_lower {
+                if let Some(s) = value.as_str() {
+                    let trimmed = s.trim();
+                    if !trimmed.is_empty() {
+                        return Some(trimmed.to_string());
+                    }
+                } else if let Some(n) = value.as_i64() {
+                    return Some(n.to_string());
+                } else if let Some(n) = value.as_u64() {
+                    return Some(n.to_string());
+                } else if let Some(n) = value.as_f64() {
+                    return Some(n.round().to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+fn extract_numeric_like(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let mut digits = String::new();
+    let mut started = false;
+    for ch in trimmed.chars() {
+        if ch.is_ascii_digit() {
+            digits.push(ch);
+            started = true;
+        } else if started {
+            break;
+        }
+    }
+    if !digits.is_empty() {
+        Some(digits)
+    } else {
+        Some(trimmed.to_string())
     }
 }

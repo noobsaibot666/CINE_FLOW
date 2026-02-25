@@ -418,3 +418,19 @@ Validation rerun:
 
 Notes:
 - Non-blocking warnings remain (`dead_code` in existing legacy fields/functions), but no build/test failures.
+
+## Addendum: Filmstrip RAW Metadata Expansion (2026-02-25)
+
+- Extended ffprobe metadata extraction in `src-tauri/src/ffprobe.rs`:
+  - Case-insensitive ISO keys: `iso`, `com.apple.quicktime.iso`, `ISO`, `camera_iso`
+  - Case-insensitive WB keys: `white_balance`, `wb`, `com.apple.quicktime.whitebalance`, `kelvin`
+  - Timecode lookup from video stream tags, any stream tags, and format tags (`timecode`, `com.apple.quicktime.timecode`)
+  - Codec fallback uses `codec_name`, then `codec_tag_string` / `codec_long_name`, with `.braw` safeguard
+  - Container format fallback respects `.braw` and extension fallback when ffprobe format is unavailable
+- Unified filmstrip metadata tag row in `src/components/ClipList.tsx` using existing `metadata-tag` style and wrapping behavior.
+- Added shared formatter utilities in `src/utils/clipMetadata.ts` for:
+  - `formatCodecLabel`
+  - `formatTimecode`
+  - unified metadata tag assembly (Duration/FMT/CODEC/ISO/WB/TC/Mbps/Audio/Res/FPS/Size)
+- Updated `src/components/PrintLayout.tsx` to use the same metadata tag builder so PDF/image exports reflect the same tag set shown in UI.
+- Existing DB fields (`format_name`, `video_codec`, `camera_iso`, `camera_white_balance`, `timecode`) were reused; no destructive schema changes required.

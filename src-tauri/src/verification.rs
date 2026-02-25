@@ -91,6 +91,7 @@ pub async fn run_verification(
     app: AppHandle,
     db: Arc<Database>,
     job_id: String,
+    project_id: String,
     source_root: String,
     source_label: String,
     dest_root: String,
@@ -99,15 +100,24 @@ pub async fn run_verification(
     cancel_flag: Arc<AtomicBool>,
 ) -> Result<(), String> {
     let now = Utc::now().to_rfc3339();
+    let started_at_epoch = Utc::now().timestamp_millis();
     let mut job = VerificationJob {
         id: job_id.clone(),
+        project_id,
         created_at: now,
+        source_path: source_root.clone(),
         source_root: source_root.clone(),
         source_label: source_label.clone(),
+        dest_path: dest_root.clone(),
         dest_root: dest_root.clone(),
         dest_label: dest_label.clone(),
         mode: mode.clone(),
         status: "RUNNING".to_string(),
+        started_at: Some(Utc::now().to_rfc3339()),
+        ended_at: None,
+        duration_ms: None,
+        counts_json: None,
+        issues_json: None,
         total_files: 0,
         total_bytes: 0,
         verified_ok_count: 0,
@@ -321,6 +331,34 @@ pub async fn run_verification(
     } else {
         "DONE".to_string()
     };
+    final_job.ended_at = Some(Utc::now().to_rfc3339());
+    final_job.duration_ms = Some(Utc::now().timestamp_millis() - started_at_epoch);
+    final_job.counts_json = Some(
+        serde_json::json!({
+            "verified": final_job.verified_ok_count,
+            "missing": final_job.missing_count,
+            "size_mismatch": final_job.size_mismatch_count,
+            "hash_mismatch": final_job.hash_mismatch_count,
+            "unreadable": final_job.unreadable_count,
+            "extra_in_dest": final_job.extra_in_dest_count
+        })
+        .to_string(),
+    );
+    let top_issues: Vec<serde_json::Value> = db
+        .get_verification_items(&job_id)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .filter(|i| i.status != "OK")
+        .take(20)
+        .map(|i| {
+            serde_json::json!({
+                "status": i.status,
+                "path": i.rel_path,
+                "error": i.error_message
+            })
+        })
+        .collect();
+    final_job.issues_json = Some(serde_json::to_string(&top_issues).map_err(|e| e.to_string())?);
     db.update_verification_job_counts(&final_job)
         .map_err(|e| e.to_string())?;
     db.update_verification_job_status(&job_id, &final_job.status)
