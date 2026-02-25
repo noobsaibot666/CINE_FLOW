@@ -6,15 +6,18 @@ interface FilmStripProps {
     thumbnailCache: Record<string, string>;
     status: string;
     count: number;
+    aspectRatio?: number;
     isExtracting?: boolean;
+    onDoubleClick?: () => void;
 }
 
-export function FilmStrip({ clipId, thumbnails, thumbnailCache, status, count, isExtracting = false }: FilmStripProps) {
+export function FilmStrip({ clipId, thumbnails, thumbnailCache, status, count, aspectRatio = 16 / 9, isExtracting = false, onDoubleClick }: FilmStripProps) {
     const indices = Array.from({ length: count }, (_, i) => i);
+    const orientationClass = aspectRatio > 0 && aspectRatio < 1 ? "is-vertical" : "is-horizontal";
 
     if (status === "fail") {
         return (
-            <div className="film-strip">
+            <div className={`film-strip ${orientationClass}`} onDoubleClick={(e) => { e.stopPropagation(); onDoubleClick?.(); }}>
                 {indices.map((i) => (
                     <div key={i} className="film-strip-placeholder">
                         {i === Math.floor(count / 2) ? "Failed" : ""}
@@ -26,7 +29,7 @@ export function FilmStrip({ clipId, thumbnails, thumbnailCache, status, count, i
 
     if (thumbnails.length === 0) {
         return (
-            <div className="film-strip">
+            <div className={`film-strip ${orientationClass}`} onDoubleClick={(e) => { e.stopPropagation(); onDoubleClick?.(); }}>
                 {indices.map((i) => (
                     <div key={i} className="film-strip-placeholder">
                         {i === Math.floor(count / 2) && (
@@ -41,7 +44,7 @@ export function FilmStrip({ clipId, thumbnails, thumbnailCache, status, count, i
     }
 
     return (
-        <div className="film-strip">
+        <div className={`film-strip ${orientationClass}`} onDoubleClick={(e) => { e.stopPropagation(); onDoubleClick?.(); }}>
             {indices.map((idx) => {
                 const thumb = thumbnails.find((t) => t.index === idx);
                 const cacheKey = `${clipId}_${idx}`;

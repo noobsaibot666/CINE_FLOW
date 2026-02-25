@@ -1,5 +1,5 @@
 import { Component, ReactNode, useState, useEffect, useCallback } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { openPath } from "@tauri-apps/plugin-opener";
@@ -7,17 +7,20 @@ import {
   Camera,
   FolderOpen,
   FileText,
+  FileDown,
   Info,
   ShieldCheck,
   ArrowRight,
   Clock,
   Star,
-  Volume2,
   Boxes,
   BriefcaseBusiness,
   MessageCircleWarning,
   BadgeInfo,
   CircleHelp,
+  MoreHorizontal,
+  LayoutGrid,
+  Image as ImageIcon,
 } from "lucide-react";
 import { ClipList } from "./components/ClipList";
 import { PrintLayout } from "./components/PrintLayout";
@@ -30,6 +33,13 @@ import { TourGuide, TourStep } from "./components/TourGuide";
 import { exportElementAsImage } from "./utils/ExportUtils";
 import appLogo from "./assets/Icon_square_rounded.svg";
 import { AppInfo, Clip, ClipWithThumbnails, JobInfo, ScanResult, ThumbnailProgress } from "./types";
+import {
+  LookbookSortMode,
+  MOVEMENT_CANONICAL,
+  SHOT_SIZE_CANONICAL,
+  SHOT_SIZE_OPTIONAL,
+  sortLookbookClips,
+} from "./lookbook";
 
 // --- Error Boundary ---
 class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; error: any }> {
@@ -70,10 +80,11 @@ function AppContent() {
   const [extractProgress, setExtractProgress] = useState({ done: 0, total: 0 });
   const [showPrint, setShowPrint] = useState(false);
   const [printingForImage, setPrintingForImage] = useState(false);
+  const [preparingExport, setPreparingExport] = useState<{ kind: "pdf" | "image"; message: string } | null>(null);
   const [thumbnailCache, setThumbnailCache] = useState<Record<string, string>>({});
-  const [activeTab, setActiveTab] = useState<"home" | "contact" | "blocks" | "safe-copy">(() => {
+  const [activeTab, setActiveTab] = useState<"home" | "shot-planner" | "media-workspace" | "contact" | "blocks" | "safe-copy">(() => {
     const saved = localStorage.getItem("wp_active_tab");
-    if (saved === "home" || saved === "contact" || saved === "blocks" || saved === "safe-copy") {
+    if (saved === "home" || saved === "shot-planner" || saved === "media-workspace" || saved === "contact" || saved === "blocks" || saved === "safe-copy") {
       return saved;
     }
     return "home";
@@ -89,17 +100,28 @@ function AppContent() {
   const [lastVerificationJobId, setLastVerificationJobId] = useState<string | null>(null);
   const [uiError, setUiError] = useState<{ title: string; hint: string } | null>(null);
   const [tourRun, setTourRun] = useState(false);
+  const [helpMenuOpen, setHelpMenuOpen] = useState(false);
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const [lookbookSortMode, setLookbookSortMode] = useState<LookbookSortMode>(() => {
+    const saved = localStorage.getItem("wp_lookbook_sort_mode");
+    return saved === "custom" ? "custom" : "canonical";
+  });
+  const [groupByShotSize, setGroupByShotSize] = useState<boolean>(() => {
+    return localStorage.getItem("wp_group_shot_size") !== "false";
+  });
+  const [enableOptionalShotTags, setEnableOptionalShotTags] = useState<boolean>(() => {
+    return localStorage.getItem("wp_enable_optional_shot_tags") === "true";
+  });
+  const [sequenceMovementFilter, setSequenceMovementFilter] = useState<string>(() => {
+    return localStorage.getItem("wp_sequence_movement_filter") || "all";
+  });
+  const [shotSizeFilter, setShotSizeFilter] = useState<string>(() => localStorage.getItem("wp_shot_size_filter") || "all");
+  const [processingWaveforms, setProcessingWaveforms] = useState(false);
 
   // Settings with Persistence
   const [thumbCount, setThumbCount] = useState<number>(() => {
     const saved = localStorage.getItem("wp_thumbCount");
     return saved ? parseInt(saved, 10) : 5;
-  });
-  const [sortBy, setSortBy] = useState<string>(() => {
-    return localStorage.getItem("wp_sortBy") || "name";
-  });
-  const [sortOrder, setSortOrder] = useState<"asc" | "desc">(() => {
-    return (localStorage.getItem("wp_sortOrder") as "asc" | "desc") || "asc";
   });
   const [namingTemplate, setNamingTemplate] = useState<string>(() => {
     return localStorage.getItem("wp_namingTemplate") || "ContactSheet_{PROJECT}_{DATE}";
@@ -107,10 +129,16 @@ function AppContent() {
 
   useEffect(() => {
     localStorage.setItem("wp_thumbCount", thumbCount.toString());
-    localStorage.setItem("wp_sortBy", sortBy);
-    localStorage.setItem("wp_sortOrder", sortOrder);
     localStorage.setItem("wp_namingTemplate", namingTemplate);
-  }, [thumbCount, sortBy, sortOrder, namingTemplate]);
+  }, [thumbCount, namingTemplate]);
+
+  useEffect(() => {
+    localStorage.setItem("wp_lookbook_sort_mode", lookbookSortMode);
+    localStorage.setItem("wp_group_shot_size", String(groupByShotSize));
+    localStorage.setItem("wp_enable_optional_shot_tags", String(enableOptionalShotTags));
+    localStorage.setItem("wp_sequence_movement_filter", sequenceMovementFilter);
+    localStorage.setItem("wp_shot_size_filter", shotSizeFilter);
+  }, [lookbookSortMode, groupByShotSize, enableOptionalShotTags, sequenceMovementFilter, shotSizeFilter]);
 
   useEffect(() => {
     localStorage.setItem("wp_active_tab", activeTab);
@@ -152,8 +180,7 @@ function AppContent() {
   }, []);
 
   // State for delayed actions
-  const [openExportAfterScan, setOpenExportAfterScan] = useState(false);
-  const [postScanTab, setPostScanTab] = useState<"contact" | "blocks" | null>(null);
+  const [postScanTab, setPostScanTab] = useState<"shot-planner" | "media-workspace" | "contact" | "blocks" | null>(null);
 
   const [hoveredClipId, setHoveredClipId] = useState<string | null>(null);
 
@@ -166,7 +193,7 @@ function AppContent() {
     });
   }, []);
 
-  const handleUpdateMetadata = useCallback(async (clipId: string, updates: Partial<Pick<Clip, 'rating' | 'flag' | 'notes'>>) => {
+  const handleUpdateMetadata = useCallback(async (clipId: string, updates: Partial<Pick<Clip, 'rating' | 'flag' | 'notes' | 'shot_size' | 'movement' | 'manual_order'>>) => {
     // Optimistic UI update
     setClips((prevClips) =>
       prevClips.map(clipItem => {
@@ -185,7 +212,10 @@ function AppContent() {
         clipId,
         rating: updates.rating ?? null,
         flag: updates.flag ?? null,
-        notes: updates.notes ?? null
+        notes: updates.notes ?? null,
+        shotSize: updates.shot_size ?? null,
+        movement: updates.movement ?? null,
+        manualOrder: updates.manual_order ?? null,
       });
     } catch (err) {
       console.error("Failed to persist metadata:", err);
@@ -215,12 +245,23 @@ function AppContent() {
 
       if (!targetId) return;
 
+      if (key === "p") {
+        e.preventDefault();
+        handleExport();
+        return;
+      }
+      if (key === "i") {
+        e.preventDefault();
+        handleExportImage();
+        return;
+      }
+
       if (key >= '0' && key <= '5') {
         handleUpdateMetadata(targetId, { rating: parseInt(key) });
-      } else if (key === 'p') {
-        handleUpdateMetadata(targetId, { flag: 'pick' });
-      } else if (key === 'x') {
+      } else if (key === 'r' || key === 'x') {
         handleUpdateMetadata(targetId, { flag: 'reject' });
+      } else if (key === 's') {
+        toggleClipSelection(targetId);
       } else if (key === 'u' || key === ' ') {
         e.preventDefault();
         handleUpdateMetadata(targetId, { flag: 'none' });
@@ -229,38 +270,36 @@ function AppContent() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [hoveredClipId, clips, handleUpdateMetadata, tourRun]);
+  }, [hoveredClipId, clips, handleUpdateMetadata, tourRun, toggleClipSelection]);
 
   // Automatic Audio Analysis Trigger
   useEffect(() => {
     const processClips = async () => {
-      const clipsToProcess = clips.filter(c => !c.clip.audio_envelope);
+      if (!projectId || processingWaveforms) return;
+      const clipsToProcess = clips.filter(c => !c.clip.audio_envelope && c.clip.audio_codec !== "none");
       if (clipsToProcess.length === 0) return;
 
-      for (const item of clipsToProcess) {
-        try {
-          const envelope = await invoke<number[]>("extract_audio_waveform", { clipId: item.clip.id });
-          setClips(prev => prev.map(c =>
-            c.clip.id === item.clip.id ? { ...c, clip: { ...c.clip, audio_envelope: envelope } } : c
-          ));
-        } catch (err) {
-          console.warn(`Failed to extract waveform for ${item.clip.id}:`, err);
+      setProcessingWaveforms(true);
+      try {
+        for (const item of clipsToProcess) {
+          try {
+            const envelope = await invoke<number[]>("extract_audio_waveform", { clipId: item.clip.id });
+            setClips(prev => prev.map(c =>
+              c.clip.id === item.clip.id ? { ...c, clip: { ...c.clip, audio_envelope: envelope } } : c
+            ));
+          } catch (err) {
+            console.warn(`Failed to extract waveform for ${item.clip.id}:`, err);
+          }
         }
+      } finally {
+        setProcessingWaveforms(false);
       }
     };
 
-    if (clips.length > 0 && !scanning) {
+    if (clips.length > 0 && !scanning && !processingWaveforms) {
       processClips();
     }
-  }, [clips, scanning]);
-
-  // Handle delayed export panel opening
-  useEffect(() => {
-    if (projectId && openExportAfterScan) {
-      setShowExportPanel(true);
-      setOpenExportAfterScan(false);
-    }
-  }, [projectId, openExportAfterScan]);
+  }, [projectId, clips.length, scanning, processingWaveforms]);
 
   useEffect(() => {
     if (projectId && postScanTab) {
@@ -278,21 +317,19 @@ function AppContent() {
     );
     if (thumbEntries.length === 0) return;
 
-    const results = await Promise.all(
-      thumbEntries.map(async ({ key, path }) => {
-        try {
-          const dataUrl = await invoke<string>("read_thumbnail", { path });
-          return { key, dataUrl };
-        } catch (error) {
-          console.warn(`Thumbnail load failed for ${path}`, error);
-          return null;
-        }
-      })
-    );
+    const results = thumbEntries.map(({ key, path }) => {
+      try {
+        const url = convertFileSrc(path);
+        return { key, url };
+      } catch (error) {
+        console.warn(`Thumbnail load failed for ${path}`, error);
+        return null;
+      }
+    });
 
     const nextCache: Record<string, string> = {};
     for (const item of results) {
-      if (item) nextCache[item.key] = item.dataUrl;
+      if (item) nextCache[item.key] = item.url;
     }
     if (Object.keys(nextCache).length > 0) {
       setThumbnailCache((prev) => ({ ...prev, ...nextCache }));
@@ -327,23 +364,22 @@ function AppContent() {
             )
           );
 
-          Promise.all(thumbnails.map(async (thumb) => {
+          const results = thumbnails.map((thumb) => {
             try {
-              const dataUrl = await invoke<string>("read_thumbnail", { path: thumb.file_path });
-              return { key: `${thumb.clip_id}_${thumb.index}`, dataUrl };
+              const url = convertFileSrc(thumb.file_path);
+              return { key: `${thumb.clip_id}_${thumb.index}`, url };
             } catch (e) {
               console.warn("Failed to load thumbnail:", e);
               return null;
             }
-          })).then(results => {
-            const newEntries: Record<string, string> = {};
-            results.forEach(res => {
-              if (res) newEntries[res.key] = res.dataUrl;
-            });
-            if (Object.keys(newEntries).length > 0) {
-              setThumbnailCache(prev => ({ ...prev, ...newEntries }));
-            }
           });
+          const newEntries: Record<string, string> = {};
+          results.forEach(res => {
+            if (res) newEntries[res.key] = res.url;
+          });
+          if (Object.keys(newEntries).length > 0) {
+            setThumbnailCache(prev => ({ ...prev, ...newEntries }));
+          }
         }
       });
 
@@ -363,7 +399,7 @@ function AppContent() {
     };
   }, [projectId, refreshProjectClips]);
 
-  const handleSelectFolder = useCallback(async (targetTab?: "contact" | "blocks") => {
+  const handleSelectFolder = useCallback(async (targetTab?: "shot-planner" | "media-workspace" | "contact" | "blocks") => {
     const selected = await open({
       directory: true,
       multiple: false,
@@ -483,12 +519,12 @@ function AppContent() {
   }, []);
 
 
-  const selectAll = () => {
+  const toggleSelectAll = () => {
+    if (selectedClipIds.size === sortedClips.length) {
+      setSelectedClipIds(new Set());
+      return;
+    }
     setSelectedClipIds(new Set(sortedClips.map((c) => c.clip.id)));
-  };
-
-  const selectNone = () => {
-    setSelectedClipIds(new Set());
   };
 
   const getExportFilename = () => {
@@ -499,22 +535,88 @@ function AppContent() {
       .replace("{COUNT}", selectedClipIds.size.toString());
   };
 
+  const waitForPrintAssets = useCallback(async () => {
+    const waitForMount = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+    await waitForMount(120);
+    const printArea = document.getElementById("print-area");
+    if (!printArea) {
+      throw new Error("Print layout not ready.");
+    }
+
+    const clipRows = Array.from(printArea.querySelectorAll(".print-clip-row"));
+    if (clipRows.length === 0) {
+      throw new Error("No clip rows are available for export.");
+    }
+
+    const thumbImages = Array.from(printArea.querySelectorAll(".print-thumb img")) as HTMLImageElement[];
+    const waitForImage = (img: HTMLImageElement) =>
+      new Promise<void>((resolve) => {
+        if (img.complete) {
+          resolve();
+          return;
+        }
+        const done = () => {
+          img.removeEventListener("load", done);
+          img.removeEventListener("error", done);
+          resolve();
+        };
+        img.addEventListener("load", done);
+        img.addEventListener("error", done);
+      });
+
+    await Promise.all(thumbImages.map(waitForImage));
+    const loadedThumbs = thumbImages.filter((img) => img.naturalWidth > 0).length;
+    if (loadedThumbs === 0) {
+      throw new Error("No thumbnails were available for export.");
+    }
+  }, []);
+
   const handleExportImage = async () => {
     if (selectedClipIds.size === 0) return;
     setPrintingForImage(true);
-    setTimeout(async () => {
-      const element = document.getElementById('print-area');
-      if (element) {
-        try {
-          await exportElementAsImage(element, getExportFilename());
-          setUiError(null);
-        } catch (err) {
-          console.error(err);
-          setUiError({ title: "Image export failed", hint: "Retry with a writable destination folder." });
-        }
+    setPreparingExport({ kind: "image", message: "Preparing image export..." });
+    try {
+      await waitForPrintAssets();
+      const element = document.getElementById("print-area");
+      if (!element) {
+        throw new Error("Export layout unavailable.");
       }
+      await exportElementAsImage(element, getExportFilename());
+      setUiError(null);
+    } catch (err) {
+      console.error(err);
+      setUiError({
+        title: "Image export failed",
+        hint: "Retry after thumbnails load. If it persists, export diagnostics and check folder permissions.",
+      });
+    } finally {
+      setPreparingExport(null);
       setPrintingForImage(false);
-    }, 500);
+    }
+  };
+
+  const handlePromoteClip = async (clipId: string) => {
+    try {
+      await invoke("promote_clip_to_block", { projectId, clipId });
+      if (projectId) {
+        await refreshProjectClips(projectId);
+      }
+    } catch (error) {
+      console.error("Failed to promote clip:", error);
+      setUiError({ title: "Promotion Failed", hint: String(error) });
+    }
+  };
+
+  const handlePlayClip = async (clipId: string) => {
+    const clip = clips.find(c => c.clip.id === clipId);
+    if (clip) {
+      try {
+        await openPath(clip.clip.file_path);
+      } catch (error) {
+        console.error("Failed to play clip:", error);
+        setUiError({ title: "Playback Failed", hint: String(error) });
+      }
+    }
   };
 
   const handleExport = useCallback(() => {
@@ -522,12 +624,30 @@ function AppContent() {
       alert("Please select at least one clip to export.");
       return;
     }
-    setShowPrint(true);
-    setTimeout(() => {
-      window.print();
-      setTimeout(() => setShowPrint(false), 500);
-    }, 300);
-  }, [selectedClipIds]);
+    const run = async () => {
+      setShowPrint(true);
+      setPreparingExport({ kind: "pdf", message: "Preparing PDF export..." });
+      try {
+        await waitForPrintAssets();
+        window.print();
+        setUiError(null);
+      } catch (err) {
+        console.error(err);
+        setUiError({
+          title: "PDF export blocked",
+          hint: "No thumbnails/data were ready for export. Re-run check clips and try again.",
+        });
+      } finally {
+        setPreparingExport(null);
+        setTimeout(() => setShowPrint(false), 350);
+      }
+    };
+    run().catch((err) => {
+      console.error(err);
+      setPreparingExport(null);
+      setShowPrint(false);
+    });
+  }, [selectedClipIds, waitForPrintAssets]);
 
   const totalClips = clips.length;
   const okClips = clips.filter((c) => c.clip.status === "ok").length;
@@ -536,19 +656,16 @@ function AppContent() {
   const totalDuration = clips.reduce((acc, c) => acc + c.clip.duration_ms, 0);
 
   const visibleClips = clips.filter(({ clip }) => {
-    if (viewFilter === "picks") return clip.flag === "pick";
-    if (viewFilter === "rated_min") return clip.rating >= viewMinRating;
-    return true;
+    const viewMatch =
+      viewFilter === "picks" ? clip.flag === "pick" :
+        viewFilter === "rated_min" ? clip.rating >= viewMinRating :
+          true;
+    const movementMatch = sequenceMovementFilter === "all" ? true : clip.movement === sequenceMovementFilter;
+    const shotSizeMatch = shotSizeFilter === "all" ? true : clip.shot_size === shotSizeFilter;
+    return viewMatch && movementMatch && shotSizeMatch;
   });
-
-  const sortedClips = [...visibleClips].sort((a, b) => {
-    let result = 0;
-    if (sortBy === "name") result = a.clip.filename.localeCompare(b.clip.filename);
-    else if (sortBy === "duration") result = a.clip.duration_ms - b.clip.duration_ms;
-    else if (sortBy === "size") result = a.clip.size_bytes - b.clip.size_bytes;
-
-    return sortOrder === "asc" ? result : -result;
-  });
+  const lookbookSorted = sortLookbookClips(visibleClips, lookbookSortMode);
+  const sortedClips = lookbookSorted;
 
   const thumbnailsByClipId = clips.reduce<Record<string, ClipWithThumbnails["thumbnails"]>>((acc, row) => {
     acc[row.clip.id] = row.thumbnails;
@@ -572,6 +689,15 @@ function AppContent() {
           />
         </div>
       )}
+      {preparingExport && (
+        <div className="export-preparing-overlay" role="status" aria-live="polite">
+          <div className="export-preparing-card">
+            <div className="spinner" />
+            <strong>{preparingExport.kind === "pdf" ? "Preparing PDF" : "Preparing Image"}</strong>
+            <span>{preparingExport.message}</span>
+          </div>
+        </div>
+      )}
 
       <header className="app-header">
         <div className="app-header-left">
@@ -581,24 +707,46 @@ function AppContent() {
             </div>
             <span>Wrap Preview</span>
           </div>
-          <div className="app-tabs">
-            <button className={`tab-btn ${activeTab === 'home' ? 'active' : ''}`} onClick={() => setActiveTab('home')}>Modules</button>
-            <button className={`tab-btn ${activeTab === 'contact' ? 'active' : ''}`} onClick={() => setActiveTab('contact')}>Contact Sheet</button>
-            <button className={`tab-btn tour-blocks-tab ${activeTab === 'blocks' ? 'active' : ''}`} onClick={() => setActiveTab('blocks')} disabled={!projectId}>Blocks</button>
-            <button className={`tab-btn ${activeTab === 'safe-copy' ? 'active' : ''}`} onClick={() => setActiveTab('safe-copy')}>Safe Copy</button>
-          </div>
+          {activeTab !== "home" && (
+            <nav className="app-tabs-nav">
+              <button className="nav-tab" onClick={() => setActiveTab('home')}>
+                <LayoutGrid size={15} /> Modules
+              </button>
+              <button className={`nav-tab ${activeTab === 'shot-planner' ? 'active' : ''}`} onClick={() => setActiveTab('shot-planner')}>
+                <ImageIcon size={15} /> Shot Planner
+              </button>
+              <button className={`nav-tab ${activeTab === 'media-workspace' ? 'active' : ''}`} onClick={() => setActiveTab('media-workspace')}>
+                <BriefcaseBusiness size={15} /> Media Workspace
+              </button>
+              <button className={`nav-tab ${activeTab === 'contact' ? 'active' : ''}`} onClick={() => setActiveTab('contact')}>
+                <Camera size={15} /> Contact Sheet
+              </button>
+              <button className={`nav-tab tour-blocks-tab ${activeTab === 'blocks' ? 'active' : ''}`} onClick={() => setActiveTab('blocks')} disabled={!projectId}>
+                <Boxes size={15} /> Blocks
+              </button>
+              <button className={`nav-tab ${activeTab === 'safe-copy' ? 'active' : ''}`} onClick={() => setActiveTab('safe-copy')} title="Safe Copy (Verification)">
+                <ShieldCheck size={15} /> Safe Copy (Verification)
+              </button>
+            </nav>
+          )}
           {(activeTab === 'contact' || activeTab === 'blocks') && projectName && (
-            <span style={{ color: "var(--text-muted)", fontSize: "var(--font-size-sm)", marginLeft: '12px' }}>
-              / {projectName}
-            </span>
+            <span className="header-project-name">/ {projectName}</span>
           )}
         </div>
         <div className="app-header-right">
-          {(activeTab === 'home' || activeTab === 'contact' || activeTab === 'blocks') && (
+          {(activeTab === 'shot-planner' || activeTab === 'media-workspace' || activeTab === 'contact' || activeTab === 'blocks') && (
             <>
               <button
                 className="btn btn-primary"
-                onClick={() => handleSelectFolder(activeTab === "blocks" ? "blocks" : "contact")}
+                onClick={() => handleSelectFolder(
+                  activeTab === "blocks"
+                    ? "blocks"
+                    : activeTab === "shot-planner"
+                      ? "shot-planner"
+                      : activeTab === "media-workspace"
+                        ? "media-workspace"
+                        : "contact"
+                )}
                 disabled={scanning}
                 title="Check clips and generate metadata/thumbnails for a media folder."
               >
@@ -608,47 +756,62 @@ function AppContent() {
               <button className="btn btn-secondary" onClick={() => setJobsOpen(true)}>
                 <BriefcaseBusiness size={16} /> Jobs
               </button>
-              <button className="btn btn-secondary" onClick={() => setAboutOpen(true)}>
-                <BadgeInfo size={16} /> About
-              </button>
-              <button
-                className="btn btn-secondary"
-                onClick={async () => {
-                  const dest = await open({ directory: true, multiple: false, title: "Export Feedback Bundle" });
-                  if (!dest) return;
-                  try {
-                    const zip = await invoke<string>("export_feedback_bundle", {
-                      outputRoot: dest,
-                      lastVerificationJobId
-                    });
+              {projectId && (
+                <button
+                  className="btn btn-secondary"
+                  onClick={async () => {
                     try {
-                      await openPath(zip);
-                    } catch (openErr) {
-                      console.warn("openPath failed for feedback bundle", openErr);
-                      setUiError({ title: "Feedback bundle exported", hint: `Saved at ${zip}. Use Finder to open if auto-open is blocked.` });
+                      await invoke("auto_analyze_lookbook", { projectId, recompute: false });
+                      await refreshProjectClips(projectId);
+                    } catch (e) {
+                      console.error(e);
+                      setUiError({ title: "Auto Analyze failed", hint: "Retry analysis or export diagnostics if it persists." });
                     }
-                  } catch (e) {
-                    console.error(e);
-                    setUiError({ title: "Diagnostics export failed", hint: "Retry and verify destination folder is writable." });
-                  }
-                }}
-              >
-                <MessageCircleWarning size={16} /> Send Feedback
-              </button>
-              {activeTab === "contact" && projectId && clips.length > 0 && !extracting && (
-                <button className="btn btn-primary btn-export tour-open-export" onClick={handleExport} disabled={selectedClipIds.size === 0}>
-                  <FileText size={16} /> Export PDF
+                  }}
+                >
+                  <Star size={16} /> Auto Analyze
                 </button>
               )}
-              <button
-                className="btn btn-secondary"
-                onClick={() => {
-                  if (tourRun) completeTour();
-                  else setTourRun(true);
-                }}
-              >
-                <CircleHelp size={16} /> {tourRun ? "Hide Tips" : "Show Tour"}
-              </button>
+              <div className="help-menu-wrapper">
+                <button className="btn btn-icon" onClick={() => setHelpMenuOpen(!helpMenuOpen)} title="Help & Info">
+                  <MoreHorizontal size={18} />
+                </button>
+                {helpMenuOpen && (
+                  <>
+                    <div className="dropdown-backdrop" onClick={() => setHelpMenuOpen(false)} />
+                    <div className="help-dropdown">
+                      <button className="dropdown-item" onClick={() => { setAboutOpen(true); setHelpMenuOpen(false); }}>
+                        <BadgeInfo size={15} /> About Wrap Preview
+                      </button>
+                      <button className="dropdown-item" onClick={async () => {
+                        setHelpMenuOpen(false);
+                        const dest = await open({ directory: true, multiple: false, title: "Export Feedback Bundle" });
+                        if (!dest) return;
+                        try {
+                          const zip = await invoke<string>("export_feedback_bundle", { outputRoot: dest, lastVerificationJobId });
+                          try { await openPath(zip); } catch (openErr) {
+                            console.warn("openPath failed for feedback bundle", openErr);
+                            setUiError({ title: "Feedback bundle exported", hint: `Saved at ${zip}. Use Finder to open if auto-open is blocked.` });
+                          }
+                        } catch (e) {
+                          console.error(e);
+                          setUiError({ title: "Diagnostics export failed", hint: "Retry and verify destination folder is writable." });
+                        }
+                      }}>
+                        <MessageCircleWarning size={15} /> Send Feedback
+                      </button>
+                      <div className="dropdown-divider" />
+                      <button className="dropdown-item" onClick={() => {
+                        setHelpMenuOpen(false);
+                        if (tourRun) completeTour();
+                        else setTourRun(true);
+                      }}>
+                        <CircleHelp size={15} /> {tourRun ? "Hide Tour" : "Show Tour"}
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
             </>
           )}
         </div>
@@ -662,71 +825,112 @@ function AppContent() {
         )}
         {activeTab === 'safe-copy' ? (
           <SafeCopy onJobCreated={setLastVerificationJobId} onError={setUiError} />
+        ) : activeTab === 'media-workspace' ? (
+          <div className="onboarding-container">
+            <div className="onboarding-header">
+              <h1>Media Workspace</h1>
+              <p>Verify, review, organize, export.</p>
+            </div>
+            <div className="onboarding-grid">
+              {!projectId ? (
+                <div className="module-card" onClick={() => handleSelectFolder("contact")}>
+                  <div className="module-icon"><FolderOpen size={32} strokeWidth={1.5} /></div>
+                  <div className="module-info">
+                    <h3>Open Workspace Folder</h3>
+                    <p>Select footage to load production modules.</p>
+                    <span className="module-action">Select Folder <ArrowRight size={14} /></span>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <div className="module-card" onClick={() => setActiveTab("contact")}>
+                    <div className="module-icon"><Camera size={32} strokeWidth={1.5} /></div>
+                    <div className="module-info">
+                      <h3>Contact Sheet</h3>
+                      <p>Review clips and metadata.</p>
+                      <span className="module-action">Open <ArrowRight size={14} /></span>
+                    </div>
+                  </div>
+                  <div className="module-card" onClick={() => setActiveTab("blocks")}>
+                    <div className="module-icon"><Boxes size={32} strokeWidth={1.5} /></div>
+                    <div className="module-info">
+                      <h3>Scene Blocks</h3>
+                      <p>Group clips into editorial moments.</p>
+                      <span className="module-action">Open <ArrowRight size={14} /></span>
+                    </div>
+                  </div>
+                  <div className="module-card" onClick={() => setShowExportPanel(true)}>
+                    <div className="module-icon"><FileDown size={32} strokeWidth={1.5} /></div>
+                    <div className="module-info">
+                      <h3>Resolve / Director Pack</h3>
+                      <p>Prepare edit handoff and delivery package.</p>
+                      <span className="module-action">Export <ArrowRight size={14} /></span>
+                    </div>
+                  </div>
+                  <div className="module-card" onClick={() => setActiveTab("safe-copy")}>
+                    <div className="module-icon"><ShieldCheck size={32} strokeWidth={1.5} /></div>
+                    <div className="module-info">
+                      <h3>Safe Copy (Verification)</h3>
+                      <p>Validate copied media integrity.</p>
+                      <span className="module-action">Verify <ArrowRight size={14} /></span>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
         ) : activeTab === 'home' || !projectId ? (
           <div className="onboarding-container">
             <div className="onboarding-header">
-              <h1>Professional Workflow</h1>
-              <p>Select a workspace to begin.</p>
+              <h1>Wrap Preview Suite</h1>
+              <p>Select a phase to begin.</p>
             </div>
-            <div className="onboarding-grid">
-              <div className={`module-card tour-contact-module ${scanning ? 'disabled' : ''}`} onClick={scanning ? undefined : () => handleSelectFolder("contact")}>
-                <div className="module-icon">
-                  {scanning ? <div className="spinner" /> : <Camera size={32} strokeWidth={1.5} />}
-                </div>
-                <div className="module-info">
-                  <h3>1. Ingest + Contact Sheet</h3>
-                  <p>Scan media and build a printable visual index.</p>
-                  <span className="module-action">
-                    {scanning ? "Scanning..." : "Scan"} <ArrowRight size={14} />
-                  </span>
-                </div>
-              </div>
-
-              <div className={`module-card ${scanning ? 'disabled' : ''}`} onClick={scanning ? undefined : () => handleSelectFolder("contact")}>
-                <div className="module-icon"><Star size={32} strokeWidth={1.5} /></div>
-                <div className="module-info">
-                  <h3>2. Rate + Director Selects</h3>
-                  <p>Apply stars and pick/reject flags with hotkeys.</p>
-                  <span className="module-action">Open <ArrowRight size={14} /></span>
-                </div>
-              </div>
-
-              <div className={`module-card ${scanning ? 'disabled' : ''}`} onClick={scanning ? undefined : () => handleSelectFolder("contact")}>
-                <div className="module-icon"><Volume2 size={32} strokeWidth={1.5} /></div>
-                <div className="module-info">
-                  <h3>3. Audio Summary Strip</h3>
-                  <p>Generate waveform previews and audio health hints.</p>
-                  <span className="module-action">Analyze <ArrowRight size={14} /></span>
+            <div className="onboarding-phases-wrapper">
+              <div className="onboarding-phase">
+                <h2 className="toolbar-label" style={{ marginBottom: 10 }}>Creative Planning</h2>
+                <div className="onboarding-grid">
+                  <div
+                    className={`module-card tour-contact-module ${scanning ? 'disabled' : ''}`}
+                    onClick={scanning ? undefined : () => {
+                      setPostScanTab("shot-planner");
+                      handleSelectFolder("shot-planner");
+                    }}
+                  >
+                    <div className="module-icon">
+                      {scanning ? <div className="spinner" /> : <ImageIcon size={32} strokeWidth={1.5} />}
+                    </div>
+                    <div className="module-info">
+                      <h3>Shot Planner</h3>
+                      <p>References, sequencing, vertical plans.</p>
+                      <span className="module-action">
+                        {scanning ? "Scanning..." : "Open"} <ArrowRight size={14} />
+                      </span>
+                    </div>
+                  </div>
                 </div>
               </div>
 
-              <div className={`module-card ${scanning ? 'disabled' : ''}`} onClick={scanning ? undefined : () => handleSelectFolder("blocks")}>
-                <div className="module-icon"><Boxes size={32} strokeWidth={1.5} /></div>
-                <div className="module-info">
-                  <h3>4. Scene Blocks</h3>
-                  <p>Auto-cluster moments by shoot time gaps and camera tags.</p>
-                  <span className="module-action">Cluster <ArrowRight size={14} /></span>
-                </div>
-              </div>
-
-              <div className={`module-card ${scanning ? 'disabled' : ''}`} onClick={scanning ? undefined : () => {
-                setOpenExportAfterScan(true);
-                handleSelectFolder("contact");
-              }}>
-                <div className="module-icon"><FileText size={32} strokeWidth={1.5} /></div>
-                <div className="module-info">
-                  <h3>5. Resolve Export</h3>
-                  <p>Export All/Picks/Rating/Selected Blocks to FCPXML.</p>
-                  <span className="module-action">Export <ArrowRight size={14} /></span>
-                </div>
-              </div>
-
-              <div className="module-card tour-safe-copy-module" onClick={() => { setProjectId(null); setActiveTab('safe-copy'); }}>
-                <div className="module-icon"><ShieldCheck size={32} strokeWidth={1.5} /></div>
-                <div className="module-info">
-                  <h3>6. Safe Copy</h3>
-                  <p>Bit-accurate verification logs via BLAKE3.</p>
-                  <span className="module-action">Verify <ArrowRight size={14} /></span>
+              <div className="onboarding-phase">
+                <h2 className="toolbar-label" style={{ marginBottom: 10 }}>Media Control</h2>
+                <div className="onboarding-grid">
+                  <div
+                    className={`module-card tour-safe-copy-module ${scanning ? 'disabled' : ''}`}
+                    onClick={scanning ? undefined : () => {
+                      setPostScanTab("media-workspace");
+                      handleSelectFolder("media-workspace");
+                    }}
+                  >
+                    <div className="module-icon">
+                      {scanning ? <div className="spinner" /> : <BriefcaseBusiness size={32} strokeWidth={1.5} />}
+                    </div>
+                    <div className="module-info">
+                      <h3>Media Workspace</h3>
+                      <p>Verify, review, organize, export.</p>
+                      <span className="module-action">
+                        {scanning ? "Scanning..." : "Open"} <ArrowRight size={14} />
+                      </span>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -752,11 +956,11 @@ function AppContent() {
         ) : (
           <>
             <div className="stats-bar">
-              <div className="stat-card">
+              <div className={`stat-card ${selectedClipIds.size > 0 ? 'stat-card-highlight' : ''}`}>
                 <div className="stat-header">
                   <span className="stat-label">Selection</span>
                 </div>
-                <span className="stat-value">{selectedClipIds.size} / {totalClips}</span>
+                <span className="stat-value stat-value-xl">{selectedClipIds.size}<span className="stat-value-total"> / {totalClips}</span></span>
                 <span className="stat-sub">Selected for Export</span>
               </div>
               <div className="stat-card">
@@ -800,30 +1004,30 @@ function AppContent() {
               </div>
             )}
 
-            <div className="toolbar premium-toolbar toolbar-row">
+            <div className="toolbar premium-toolbar">
               <div className="toolbar-left-group">
                 <div className="toolbar-segment">
                   <span className="toolbar-label">Layout</span>
-                  <div className="layout-picker">
+                  <div className="segmented-control">
                     {[3, 5, 7].map((n) => (
                       <button key={n} className={`btn-toggle ${thumbCount === n ? 'active' : ''}`} onClick={() => setThumbCount(n)}>{n}</button>
                     ))}
                   </div>
                 </div>
 
+                <div className="toolbar-divider" />
+
                 <div className="toolbar-segment">
                   <span className="toolbar-label">Sort</span>
                   <div className="sort-group">
-                    <select className="input-select" value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
-                      <option value="name">Name</option>
-                      <option value="duration">Duration</option>
-                      <option value="size">Size</option>
+                    <select className="input-select" value={lookbookSortMode} onChange={(e) => setLookbookSortMode(e.target.value as LookbookSortMode)}>
+                      <option value="canonical">Canonical</option>
+                      <option value="custom">Custom Manual</option>
                     </select>
-                    <button className="btn-toggle sort-dir" onClick={() => setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc')}>
-                      {sortOrder === 'asc' ? '↑' : '↓'}
-                    </button>
                   </div>
                 </div>
+
+                <div className="toolbar-divider" />
 
                 <div className="toolbar-segment">
                   <span className="toolbar-label">Filter</span>
@@ -840,21 +1044,23 @@ function AppContent() {
                         ))}
                       </select>
                     )}
+                    <select className="input-select" value={sequenceMovementFilter} onChange={(e) => setSequenceMovementFilter(e.target.value)}>
+                      <option value="all">All Movements</option>
+                      {MOVEMENT_CANONICAL.map((m) => (
+                        <option key={m} value={m}>{m}</option>
+                      ))}
+                    </select>
+                    <select className="input-select" value={shotSizeFilter} onChange={(e) => setShotSizeFilter(e.target.value)}>
+                      <option value="all">All Shot Sizes</option>
+                      {[...SHOT_SIZE_CANONICAL, ...(enableOptionalShotTags ? SHOT_SIZE_OPTIONAL : [])].map((size) => (
+                        <option key={size} value={size}>{size}</option>
+                      ))}
+                    </select>
                   </div>
                 </div>
               </div>
-            </div>
 
-            <div className="toolbar premium-toolbar toolbar-row">
-              <div className="toolbar-left-group">
-                <div className="toolbar-segment">
-                  <span className="toolbar-label">Selection</span>
-                  <div className="toolbar-actions">
-                    <button className="btn-link" onClick={selectAll}>Select All</button>
-                    <button className="btn-link" onClick={selectNone}>Clear</button>
-                  </div>
-                </div>
-
+              <div className="toolbar-right-group">
                 <div className="toolbar-segment naming-segment">
                   <span className="toolbar-label">Export Name</span>
                   <div className="naming-input-group">
@@ -871,20 +1077,58 @@ function AppContent() {
                     </div>
                   </div>
                 </div>
+
+                <div className="toolbar-divider" />
+
+                {projectId && clips.length > 0 && !extracting && (
+                  <div className="export-dropdown-wrapper">
+                    <button
+                      className="btn btn-primary btn-export tour-open-export"
+                      onClick={() => setExportMenuOpen(!exportMenuOpen)}
+                      disabled={selectedClipIds.size === 0}
+                    >
+                      <FileDown size={16} /> Export ▾
+                    </button>
+                    {exportMenuOpen && (
+                      <>
+                        <div className="dropdown-backdrop" onClick={() => setExportMenuOpen(false)} />
+                        <div className="export-dropdown">
+                          <button className="dropdown-item" onClick={() => { handleExport(); setExportMenuOpen(false); }}>
+                            <FileText size={15} /> Export as PDF
+                          </button>
+                          <button className="dropdown-item" onClick={() => { handleExportImage(); setExportMenuOpen(false); }}>
+                            <ImageIcon size={15} /> Export as Image
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="view-settings-bar">
+              <div className="toolbar-segment">
+                <span className="toolbar-label">Lookbook View</span>
+                <div className="sort-group">
+                  <label className="clip-selection-label">
+                    <input type="checkbox" className="clip-checkbox" checked={groupByShotSize} onChange={(e) => setGroupByShotSize(e.target.checked)} />
+                    Group by Shot Size
+                  </label>
+                  <label className="clip-selection-label">
+                    <input type="checkbox" className="clip-checkbox" checked={enableOptionalShotTags} onChange={(e) => setEnableOptionalShotTags(e.target.checked)} />
+                    Enable American/Cowboy
+                  </label>
+                </div>
               </div>
 
-              <div className="toolbar-right-group">
-                <button
-                  className="btn btn-secondary btn-image-export"
-                  onClick={handleExportImage}
-                  disabled={selectedClipIds.size === 0}
-                  title="Save image export for current selection."
-                >
-                  <Camera size={16} /> Save Image
-                </button>
-                {clips.length === 0 && !scanning && (
-                  <span className="empty-warning">No media found.</span>
-                )}
+              <div className="toolbar-divider" />
+
+              <div className="toolbar-segment">
+                <span className="toolbar-label">Selection</span>
+                <div className="toolbar-actions">
+                  <button className="btn-link" onClick={toggleSelectAll}>{selectedClipIds.size === sortedClips.length ? "Clear" : "All"}</button>
+                </div>
               </div>
             </div>
 
@@ -897,6 +1141,12 @@ function AppContent() {
               thumbCount={thumbCount}
               onUpdateMetadata={handleUpdateMetadata}
               onHoverClip={setHoveredClipId}
+              shotSizeOptions={[...SHOT_SIZE_CANONICAL, ...(enableOptionalShotTags ? SHOT_SIZE_OPTIONAL : [])]}
+              movementOptions={[...MOVEMENT_CANONICAL]}
+              lookbookSortMode={lookbookSortMode}
+              groupByShotSize={groupByShotSize}
+              onPromoteClip={handlePromoteClip}
+              onPlayClip={handlePlayClip}
             />
           </>
         )}

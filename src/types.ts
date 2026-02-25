@@ -10,12 +10,29 @@ export interface Clip {
     width: number;
     height: number;
     video_codec: string;
+    video_bitrate: number;
+    format_name: string;
+    audio_codec: string;
+    audio_channels: number;
+    audio_sample_rate: number;
+    camera_iso?: string | null;
+    camera_white_balance?: string | null;
     audio_summary: string;
     timecode: string | null;
     status: string;
     rating: number;
     flag: "none" | "pick" | "reject";
     notes?: string;
+    shot_size?: string | null;
+    movement?: string | null;
+    manual_order?: number | null;
+    auto_motion?: string | null;
+    auto_brightness?: string | null;
+    auto_contrast?: string | null;
+    auto_temp?: string | null;
+    auto_tags_json?: string | null;
+    auto_analyzed_at?: string | null;
+    auto_analyzer_version?: string | null;
     audio_envelope?: number[]; // Represented as byte array/number array from Rust Vec<u8>
 }
 
@@ -92,4 +109,5 @@ export interface AppInfo {
     ffprobe_version: string;
     macos_version: string;
     arch: string;
+    braw_bridge_active?: boolean;
 }

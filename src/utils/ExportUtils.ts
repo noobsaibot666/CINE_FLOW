@@ -1,6 +1,6 @@
 import { toJpeg, toPng } from 'html-to-image';
-import { invoke } from "@tauri-apps/api/core";
 import { save } from '@tauri-apps/plugin-dialog';
+import { invoke } from '@tauri-apps/api/core';
 
 /**
  * Captures an element and saves it as an image via Tauri's save dialog.
@@ -11,20 +11,9 @@ export async function exportElementAsImage(
     format: 'jpeg' | 'png' = 'jpeg'
 ) {
     try {
-        const images = Array.from(element.querySelectorAll("img"));
-        await Promise.all(
-            images.map((img) => {
-                if (img.complete) return Promise.resolve();
-                return new Promise<void>((resolve) => {
-                    img.onload = () => resolve();
-                    img.onerror = () => resolve();
-                });
-            })
-        );
-
         const dataUrl = format === 'jpeg'
-            ? await toJpeg(element, { quality: 0.95, backgroundColor: '#ffffff' })
-            : await toPng(element);
+            ? await toJpeg(element, { quality: 0.95, backgroundColor: '#ffffff', cacheBust: true, pixelRatio: 2 })
+            : await toPng(element, { cacheBust: true, pixelRatio: 2, backgroundColor: '#ffffff' });
 
         // Prompt user for save location
         const filePath = await save({
@@ -36,10 +25,7 @@ export async function exportElementAsImage(
         });
 
         if (filePath) {
-            await invoke("save_image_data_url", {
-                path: filePath,
-                dataUrl
-            });
+            await invoke("save_image_data_url", { path: filePath, dataUrl });
             return true;
         }
     } catch (error) {

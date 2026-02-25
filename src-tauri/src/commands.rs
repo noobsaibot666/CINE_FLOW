@@ -82,12 +82,29 @@ pub async fn scan_folder(
                     width: m.width,
                     height: m.height,
                     video_codec: m.video_codec,
+                    video_bitrate: m.video_bitrate,
+                    format_name: m.format_name,
+                    audio_codec: m.audio_codec,
+                    audio_channels: m.audio_channels,
+                    audio_sample_rate: m.audio_sample_rate,
+                    camera_iso: m.camera_iso,
+                    camera_white_balance: m.camera_white_balance,
                     audio_summary: m.audio_summary,
                     timecode: m.timecode,
                     status: status.to_string(),
                     rating: 0,
                     flag: "none".to_string(),
                     notes: None,
+                    shot_size: None,
+                    movement: None,
+                    manual_order: 0,
+                    auto_motion: None,
+                    auto_brightness: None,
+                    auto_contrast: None,
+                    auto_temp: None,
+                    auto_tags_json: None,
+                    auto_analyzed_at: None,
+                    auto_analyzer_version: None,
                     audio_envelope: None,
                 }
             }
@@ -109,12 +126,29 @@ pub async fn scan_folder(
                     width: 0,
                     height: 0,
                     video_codec: "unknown".to_string(),
+                    video_bitrate: 0,
+                    format_name: "unknown".to_string(),
+                    audio_codec: "none".to_string(),
+                    audio_channels: 0,
+                    audio_sample_rate: 0,
+                    camera_iso: None,
+                    camera_white_balance: None,
                     audio_summary: format!("Error: {}", e),
                     timecode: None,
                     status: "fail".to_string(),
                     rating: 0,
                     flag: "none".to_string(),
                     notes: None,
+                    shot_size: None,
+                    movement: None,
+                    manual_order: 0,
+                    auto_motion: None,
+                    auto_brightness: None,
+                    auto_contrast: None,
+                    auto_temp: None,
+                    auto_tags_json: None,
+                    auto_analyzed_at: None,
+                    auto_analyzer_version: None,
                     audio_envelope: None,
                 }
             }
@@ -504,15 +538,96 @@ pub async fn extract_audio_waveform(
 }
 
 #[tauri::command]
+pub async fn auto_analyze_lookbook(
+    project_id: String,
+    recompute: Option<bool>,
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+) -> Result<String, String> {
+    let (job_id, cancel_flag) = state.job_manager.create_job("auto_analyze", None);
+    state.job_manager.mark_running(&job_id, "Auto analyze started");
+    emit_job_state(&app, &state.job_manager, &job_id);
+
+    let clips = state.db.get_clips(&project_id).map_err(|e| e.to_string())?;
+    let total = clips.len().max(1);
+    for (idx, clip) in clips.iter().enumerate() {
+        if cancel_flag.load(Ordering::Relaxed) {
+            let _ = state.job_manager.cancel_job(&job_id);
+            emit_job_state(&app, &state.job_manager, &job_id);
+            return Ok(job_id);
+        }
+        if !recompute.unwrap_or(false) && clip.auto_motion.is_some() && clip.auto_brightness.is_some() {
+            continue;
+        }
+
+        // Cheap deterministic heuristics from existing metadata.
+        let motion = if clip.fps >= 48.0 {
+            "high-motion"
+        } else if clip.fps >= 30.0 {
+            "moving"
+        } else {
+            "static"
+        };
+        let brightness = if clip.video_bitrate > 250_000_000 {
+            "bright"
+        } else if clip.video_bitrate > 0 {
+            "normal"
+        } else {
+            "low"
+        };
+        let contrast = if clip.video_codec.contains("raw") || clip.video_codec.contains("braw") {
+            "flat"
+        } else {
+            "normal"
+        };
+        let temp = "neutral";
+        let tags_json = serde_json::json!({
+            "auto_motion": motion,
+            "auto_brightness": brightness,
+            "auto_contrast": contrast,
+            "auto_temp": temp,
+        })
+        .to_string();
+
+        state
+            .db
+            .update_auto_tags(
+                &clip.id,
+                Some(motion.to_string()),
+                Some(brightness.to_string()),
+                Some(contrast.to_string()),
+                Some(temp.to_string()),
+                Some(tags_json),
+                Some("v1-lite".to_string()),
+            )
+            .map_err(|e| e.to_string())?;
+
+        state.job_manager.update_progress(
+            &job_id,
+            (idx + 1) as f32 / total as f32,
+            Some(format!("Analyzed {}/{} clips", idx + 1, total)),
+        );
+        emit_job_state(&app, &state.job_manager, &job_id);
+    }
+
+    state.job_manager.mark_done(&job_id, "Auto analyze complete");
+    emit_job_state(&app, &state.job_manager, &job_id);
+    Ok(job_id)
+}
+
+#[tauri::command]
 pub async fn update_clip_metadata(
     clip_id: String,
     rating: Option<i32>,
     flag: Option<String>,
     notes: Option<String>,
+    shot_size: Option<String>,
+    movement: Option<String>,
+    manual_order: Option<i32>,
     state: State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
     let db = &state.db;
-    db.update_clip_metadata(&clip_id, rating, flag, notes)
+    db.update_clip_metadata(&clip_id, rating, flag, notes, shot_size, movement, manual_order)
         .map_err(|e| format!("Failed to update clip metadata: {}", e))
 }
 
@@ -730,6 +845,7 @@ pub struct AppInfo {
     pub ffprobe_version: String,
     pub macos_version: String,
     pub arch: String,
+    pub braw_bridge_active: bool,
 }
 
 #[tauri::command]
@@ -824,6 +940,7 @@ pub async fn get_app_info() -> Result<AppInfo, String> {
         ffprobe_version: command_first_line("ffprobe", &["-version"]).unwrap_or_else(|| "Unavailable".to_string()),
         macos_version: command_first_line("sw_vers", &["-productVersion"]).unwrap_or_else(|| "Unknown".to_string()),
         arch: std::env::consts::ARCH.to_string(),
+        braw_bridge_active: command_exists("braw-decode"),
     })
 }
 
@@ -1057,6 +1174,14 @@ fn command_first_line(bin: &str, args: &[&str]) -> Option<String> {
     stdout.lines().next().map(|s| s.trim().to_string())
 }
 
+fn command_exists(bin: &str) -> bool {
+    Command::new("sh")
+        .args(["-lc", &format!("command -v {} >/dev/null 2>&1", bin)])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
 fn last_export_metadata_path(cache_dir: &str) -> String {
     format!("{}/last_export.json", cache_dir)
 }
@@ -1108,12 +1233,29 @@ mod tests {
             width: 1920,
             height: 1080,
             video_codec: "h264".to_string(),
+            video_bitrate: 100_000_000,
+            format_name: "mov".to_string(),
+            audio_codec: "aac".to_string(),
+            audio_channels: 2,
+            audio_sample_rate: 48000,
+            camera_iso: None,
+            camera_white_balance: None,
             audio_summary: "AAC".to_string(),
             timecode: None,
             status: "ok".to_string(),
             rating,
             flag: flag.to_string(),
             notes: None,
+            shot_size: None,
+            movement: None,
+            manual_order: 0,
+            auto_motion: None,
+            auto_brightness: None,
+            auto_contrast: None,
+            auto_temp: None,
+            auto_tags_json: None,
+            auto_analyzed_at: None,
+            auto_analyzer_version: None,
             audio_envelope: None,
         }
     }

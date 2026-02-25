@@ -9,10 +9,13 @@ interface WaveformProps {
 
 export const Waveform: React.FC<WaveformProps> = ({
     envelope,
-    color = "var(--accent)",
+    color = "var(--color-accent)",
     height = 32,
     width = "100%"
 }) => {
+    const id = React.useId();
+    const gradientId = `waveform-gradient-${id.replace(/:/g, '')}`;
+
     if (!envelope || envelope.length === 0) return null;
 
     // Calculate points for the SVG polyline/path
@@ -34,16 +37,16 @@ export const Waveform: React.FC<WaveformProps> = ({
                 style={{ width: '100%', height: '100%', display: 'block' }}
             >
                 <defs>
-                    <linearGradient id="waveform-gradient" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor={color} stopOpacity="0.8" />
-                        <stop offset="100%" stopColor={color} stopOpacity="0.1" />
+                    <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor={color} stopOpacity="1.0" />
+                        <stop offset="100%" stopColor={color} stopOpacity="0.2" />
                     </linearGradient>
                 </defs>
 
                 {/* Fill */}
                 <polyline
                     points={fillPath}
-                    fill="url(#waveform-gradient)"
+                    fill={`url(#${gradientId})`}
                     stroke="none"
                 />
 
@@ -52,12 +55,13 @@ export const Waveform: React.FC<WaveformProps> = ({
                     points={points}
                     fill="none"
                     stroke={color}
-                    strokeWidth="1.5"
+                    strokeWidth="2.0"
                     vectorEffect="non-scaling-stroke"
                     strokeLinejoin="round"
                     strokeLinecap="round"
                 />
             </svg>
+
         </div>
     );
 };

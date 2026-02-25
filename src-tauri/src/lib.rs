@@ -57,6 +57,7 @@ pub fn run() {
             commands::get_verification_items,
             commands::export_verification_report_json,
             commands::extract_audio_waveform,
+            commands::auto_analyze_lookbook,
             commands::update_clip_metadata,
             commands::export_to_fcpxml,
             commands::export_director_pack,

@@ -13,6 +13,13 @@ pub struct ClipMetadata {
     pub width: u32,
     pub height: u32,
     pub video_codec: String,
+    pub video_bitrate: u64,
+    pub format_name: String,
+    pub audio_codec: String,
+    pub audio_channels: u32,
+    pub audio_sample_rate: u32,
+    pub camera_iso: Option<String>,
+    pub camera_white_balance: Option<String>,
     pub audio_summary: String,
     pub timecode: Option<String>,
 }
@@ -32,14 +39,17 @@ struct FfprobeStream {
     r_frame_rate: Option<String>,
     channels: Option<u32>,
     sample_rate: Option<String>,
+    bit_rate: Option<String>,
     tags: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
 struct FfprobeFormat {
     filename: Option<String>,
+    format_name: Option<String>,
     duration: Option<String>,
     size: Option<String>,
+    bit_rate: Option<String>,
     tags: Option<serde_json::Value>,
 }
 
@@ -142,6 +152,42 @@ pub fn probe_file(file_path: &str) -> Result<ClipMetadata, String> {
         }
     };
 
+    let audio_codec = audio_streams
+        .first()
+        .and_then(|s| s.codec_name.clone())
+        .unwrap_or_else(|| "none".to_string());
+    let audio_channels = audio_streams.first().and_then(|s| s.channels).unwrap_or(0);
+    let audio_sample_rate = audio_streams
+        .first()
+        .and_then(|s| s.sample_rate.as_ref())
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(0);
+    let video_bitrate = video_stream
+        .and_then(|s| s.bit_rate.as_ref())
+        .and_then(|s| s.parse::<u64>().ok())
+        .or_else(|| format.bit_rate.as_ref().and_then(|s| s.parse::<u64>().ok()))
+        .unwrap_or(0);
+    let format_name = format
+        .format_name
+        .clone()
+        .unwrap_or_else(|| "unknown".to_string());
+
+    let camera_iso = video_stream
+        .and_then(|s| s.tags.as_ref())
+        .and_then(|t| {
+            t.get("iso")
+                .or_else(|| t.get("ISO"))
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+        });
+    let camera_white_balance = video_stream
+        .and_then(|s| s.tags.as_ref())
+        .and_then(|t| {
+            t.get("white_balance")
+                .or_else(|| t.get("WB"))
+                .or_else(|| t.get("whitebalance"))
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+        });
+
     // Timecode — check video stream tags, then format tags
     let timecode = video_stream
         .and_then(|s| s.tags.as_ref())
@@ -179,6 +225,13 @@ pub fn probe_file(file_path: &str) -> Result<ClipMetadata, String> {
         width,
         height,
         video_codec,
+        video_bitrate,
+        format_name,
+        audio_codec,
+        audio_channels,
+        audio_sample_rate,
+        camera_iso,
+        camera_white_balance,
         audio_summary,
         timecode,
     })

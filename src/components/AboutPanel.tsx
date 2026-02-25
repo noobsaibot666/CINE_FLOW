@@ -26,6 +26,7 @@ export function AboutPanel({ open, info, onResetTour, onClose }: AboutPanelProps
               <div><strong>Build Date</strong><p>{info.build_date}</p></div>
               <div><strong>FFmpeg</strong><p>{info.ffmpeg_version}</p></div>
               <div><strong>ffprobe</strong><p>{info.ffprobe_version}</p></div>
+              <div><strong>BRAW Bridge</strong><p>{info.braw_bridge_active ? "Active" : "Not Detected"}</p></div>
               <div><strong>macOS</strong><p>{info.macos_version}</p></div>
               <div><strong>Architecture</strong><p>{info.arch}</p></div>
             </div>

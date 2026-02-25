@@ -175,6 +175,7 @@ export function BlocksView({
                       thumbnailCache={thumbnailCache}
                       status={clip.status}
                       count={5}
+                      aspectRatio={clip.width > 0 && clip.height > 0 ? clip.width / clip.height : 16 / 9}
                     />
                   </div>
                 ))}
