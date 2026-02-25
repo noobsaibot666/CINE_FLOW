@@ -16,6 +16,7 @@ interface ExportPanelProps {
 }
 
 type ExportScope = "all" | "picks" | "rated" | "rated_min" | "selected_blocks" | "current_filter";
+type DeliveryType = "resolve" | "director_pack";
 
 export const ExportPanel: React.FC<ExportPanelProps> = ({
   projectId,
@@ -26,7 +27,8 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({
   onError,
   onClose
 }) => {
-  const [scope, setScope] = useState<ExportScope>("all");
+  const [deliveryType, setDeliveryType] = useState<DeliveryType | null>(null);
+  const [scope, setScope] = useState<ExportScope | null>(null);
   const [minRating, setMinRating] = useState<number>(3);
   const [isExporting, setIsExporting] = useState(false);
   const [result, setResult] = useState<{ success: boolean; message: string } | null>(null);
@@ -37,6 +39,13 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({
   const allCount = clips.length;
 
   const resolveScope = () => {
+    if (!scope) {
+      return {
+        scope: "all" as ExportScope,
+        minRating: null,
+        blockIds: null
+      };
+    }
     if (scope === "current_filter") {
       return {
         scope: currentFilterMode,
@@ -161,6 +170,22 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({
         </div>
 
         <div className="space-y-4 mb-8">
+          <label className="text-xs font-medium text-white/50 uppercase tracking-wider ml-1">Step 1: Delivery Type</label>
+          <div className="grid grid-cols-2 gap-2">
+            <button onClick={() => setDeliveryType("resolve")} className={`p-3 rounded-lg border text-sm ${deliveryType === "resolve" ? "bg-white text-black border-white" : "bg-white/5 border-white/10 text-white"}`}>Resolve FCPXML</button>
+            <button onClick={() => setDeliveryType("director_pack")} className={`p-3 rounded-lg border text-sm ${deliveryType === "director_pack" ? "bg-amber-400 text-black border-amber-300" : "bg-white/5 border-white/10 text-white"}`}>Director Pack</button>
+          </div>
+          <button
+            className="text-xs text-white/70 underline"
+            onClick={() => {
+              setDeliveryType("director_pack");
+              setScope("current_filter");
+            }}
+          >
+            Most common preset
+          </button>
+
+          <label className="text-xs font-medium text-white/50 uppercase tracking-wider ml-1">Step 2: Scope</label>
           <label className="text-xs font-medium text-white/50 uppercase tracking-wider ml-1">Export Scope</label>
 
           <button onClick={() => setScope("picks")} disabled={picksCount === 0} className={`w-full flex items-center p-4 rounded-xl border transition-all text-left ${scope === "picks" ? "bg-emerald-500/10 border-emerald-500/50" : "bg-white/5 border-transparent"} ${picksCount === 0 ? "opacity-50 cursor-not-allowed" : ""}`}>
@@ -199,6 +224,9 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({
             <div className="flex-1"><div className="font-medium text-white">All Media</div><div className="text-sm text-white/40">{allCount} clips</div></div>
           </button>
         </div>
+        {(!deliveryType || !scope) && (
+          <div className="mb-4 text-xs text-amber-300">Choose one type and one scope to continue.</div>
+        )}
 
         {result && (
           <div className={`mb-6 p-4 rounded-xl flex items-center gap-3 ${result.success ? "bg-green-500/10 text-green-400 border border-green-500/20" : "bg-red-500/10 text-red-400 border border-red-500/20"}`}>
@@ -211,12 +239,12 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({
           <button onClick={onClose} className="flex-1 px-4 py-3 bg-white/5 hover:bg-white/10 text-white font-medium rounded-xl transition-colors">
             Cancel
           </button>
-          <button onClick={handleDirectorPack} disabled={isExporting} className="tour-director-pack-btn flex-1 px-4 py-3 bg-amber-400 text-black font-bold rounded-xl transition-transform shadow-lg shadow-amber-300/20 flex items-center justify-center gap-2 disabled:opacity-60">
+          <button onClick={handleDirectorPack} disabled={isExporting || !deliveryType || !scope || deliveryType !== "director_pack"} className="tour-director-pack-btn flex-1 px-4 py-3 bg-amber-400 text-black font-bold rounded-xl transition-transform shadow-lg shadow-amber-300/20 flex items-center justify-center gap-2 disabled:opacity-60">
             Director Pack
             <Package size={18} />
           </button>
-          <button onClick={handleExport} disabled={isExporting} className="flex-1 px-4 py-3 bg-white text-black font-bold rounded-xl hover:scale-[1.02] active:scale-[0.98] transition-transform shadow-lg shadow-white/10 flex items-center justify-center gap-2 disabled:opacity-60">
-            {isExporting ? "Exporting..." : "Export FCPXML"}
+          <button onClick={handleExport} disabled={isExporting || !deliveryType || !scope || deliveryType !== "resolve"} className="flex-1 px-4 py-3 bg-white text-black font-bold rounded-xl hover:scale-[1.02] active:scale-[0.98] transition-transform shadow-lg shadow-white/10 flex items-center justify-center gap-2 disabled:opacity-60">
+            {isExporting ? "Exporting..." : "Export Resolve FCPXML"}
             {!isExporting && <FileDown size={18} />}
           </button>
         </div>

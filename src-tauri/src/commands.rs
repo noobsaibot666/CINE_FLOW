@@ -1,5 +1,5 @@
 use crate::clustering;
-use crate::db::{Clip, Database, Project, SceneBlock, Thumbnail, VerificationJob, VerificationItem};
+use crate::db::{Clip, Database, Project, ProjectRoot, SceneBlock, Thumbnail, VerificationJob, VerificationItem};
 use crate::audio;
 use crate::ffprobe;
 use crate::jobs::JobInfo;
@@ -19,6 +19,7 @@ pub struct AppState {
     pub db: Database,
     pub cache_dir: String,
     pub job_manager: crate::jobs::JobManager,
+    pub perf_log: crate::perf::PerfLog,
 }
 
 // ─── Tauri Commands ───
@@ -28,6 +29,9 @@ pub async fn scan_folder(
     folder_path: String,
     state: State<'_, Arc<AppState>>,
 ) -> Result<ScanResult, String> {
+    let perf_id = state
+        .perf_log
+        .start("scan_folder", Some(folder_path.clone()));
     let db = &state.db;
 
     // Create project
@@ -48,119 +52,94 @@ pub async fn scan_folder(
 
     db.upsert_project(&project)
         .map_err(|e| format!("Failed to create project: {}", e))?;
+    let initial_root = ProjectRoot {
+        id: hash_string(&format!("{}::{}", project_id, folder_path)),
+        project_id: project_id.clone(),
+        root_path: folder_path.clone(),
+        label: "Root 01".to_string(),
+        created_at: chrono::Utc::now().to_rfc3339(),
+    };
+    db.upsert_project_root(&initial_root)
+        .map_err(|e| format!("Failed to create initial project root: {}", e))?;
 
-    // Scan for video files
-    let video_files = scanner::scan_folder(&folder_path);
+    let clips = rescan_project_internal(db, &project_id)?;
 
-    // Probe each file
-    let mut clips: Vec<Clip> = Vec::new();
-    for file_path in &video_files {
-        let meta = ffprobe::probe_file(file_path);
-
-        // Calculate relative path for stable ID
-        let relative_path = std::path::Path::new(file_path)
-            .strip_prefix(&folder_path)
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|_| file_path.clone());
-
-        let clip = match meta {
-            Ok(m) => {
-                let clip_id = generate_clip_id(file_path, Some(&relative_path));
-
-                // Determine status
-                let status = if m.timecode.is_none() { "warn" } else { "ok" };
-
-                Clip {
-                    id: clip_id,
-                    project_id: project_id.clone(),
-                    filename: m.filename,
-                    file_path: m.file_path,
-                    size_bytes: m.size_bytes,
-                    created_at: m.created_at,
-                    duration_ms: m.duration_ms,
-                    fps: m.fps,
-                    width: m.width,
-                    height: m.height,
-                    video_codec: m.video_codec,
-                    video_bitrate: m.video_bitrate,
-                    format_name: m.format_name,
-                    audio_codec: m.audio_codec,
-                    audio_channels: m.audio_channels,
-                    audio_sample_rate: m.audio_sample_rate,
-                    camera_iso: m.camera_iso,
-                    camera_white_balance: m.camera_white_balance,
-                    audio_summary: m.audio_summary,
-                    timecode: m.timecode,
-                    status: status.to_string(),
-                    rating: 0,
-                    flag: "none".to_string(),
-                    notes: None,
-                    shot_size: None,
-                    movement: None,
-                    manual_order: 0,
-                    auto_motion: None,
-                    auto_brightness: None,
-                    auto_contrast: None,
-                    auto_temp: None,
-                    auto_tags_json: None,
-                    auto_analyzed_at: None,
-                    auto_analyzer_version: None,
-                    audio_envelope: None,
-                }
-            }
-            Err(e) => {
-                let filename = std::path::Path::new(file_path)
-                    .file_name()
-                    .map(|f| f.to_string_lossy().to_string())
-                    .unwrap_or_default();
-
-                Clip {
-                    id: generate_clip_id(file_path, Some(&relative_path)),
-                    project_id: project_id.clone(),
-                    filename,
-                    file_path: file_path.clone(),
-                    size_bytes: 0,
-                    created_at: String::new(),
-                    duration_ms: 0,
-                    fps: 0.0,
-                    width: 0,
-                    height: 0,
-                    video_codec: "unknown".to_string(),
-                    video_bitrate: 0,
-                    format_name: "unknown".to_string(),
-                    audio_codec: "none".to_string(),
-                    audio_channels: 0,
-                    audio_sample_rate: 0,
-                    camera_iso: None,
-                    camera_white_balance: None,
-                    audio_summary: format!("Error: {}", e),
-                    timecode: None,
-                    status: "fail".to_string(),
-                    rating: 0,
-                    flag: "none".to_string(),
-                    notes: None,
-                    shot_size: None,
-                    movement: None,
-                    manual_order: 0,
-                    auto_motion: None,
-                    auto_brightness: None,
-                    auto_contrast: None,
-                    auto_temp: None,
-                    auto_tags_json: None,
-                    auto_analyzed_at: None,
-                    auto_analyzer_version: None,
-                    audio_envelope: None,
-                }
-            }
-        };
-
-        db.upsert_clip(&clip).ok();
-        clips.push(clip);
-    }
-
-    Ok(ScanResult {
+    let result = ScanResult {
         project_id,
         project_name,
+        clip_count: clips.len(),
+        clips,
+    };
+    state.perf_log.end(&perf_id, "ok", None);
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn list_project_roots(
+    project_id: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<ProjectRoot>, String> {
+    state.db.list_project_roots(&project_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn add_project_root(
+    project_id: String,
+    root_path: String,
+    label: Option<String>,
+    state: State<'_, Arc<AppState>>,
+) -> Result<ProjectRoot, String> {
+    let root = ProjectRoot {
+        id: hash_string(&format!("{}::{}", project_id, root_path)),
+        project_id,
+        root_path,
+        label: label.unwrap_or_else(|| "Root".to_string()),
+        created_at: chrono::Utc::now().to_rfc3339(),
+    };
+    state
+        .db
+        .upsert_project_root(&root)
+        .map_err(|e| format!("Failed to add project root: {}", e))?;
+    Ok(root)
+}
+
+#[tauri::command]
+pub async fn remove_project_root(
+    root_id: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<(), String> {
+    state
+        .db
+        .remove_project_root(&root_id)
+        .map_err(|e| format!("Failed removing project root: {}", e))
+}
+
+#[tauri::command]
+pub async fn update_project_root_label(
+    root_id: String,
+    label: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<(), String> {
+    state
+        .db
+        .update_project_root_label(&root_id, &label)
+        .map_err(|e| format!("Failed updating root label: {}", e))
+}
+
+#[tauri::command]
+pub async fn rescan_project(
+    project_id: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<ScanResult, String> {
+    let project = state
+        .db
+        .get_project(&project_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("Project not found")?;
+    let clips = rescan_project_internal(&state.db, &project_id)?;
+    Ok(ScanResult {
+        project_id,
+        project_name: project.name,
         clip_count: clips.len(),
         clips,
     })
@@ -190,6 +169,7 @@ pub async fn extract_thumbnails(
     app: AppHandle,
     state: State<'_, Arc<AppState>>,
 ) -> Result<String, String> {
+    let perf_id = state.perf_log.start("extract_thumbnails", Some(project_id.clone()));
     let db = &state.db;
     let cache_dir = state.cache_dir.clone();
     let (job_id, cancel_flag) = state.job_manager.create_job("thumbnails", None);
@@ -288,6 +268,7 @@ pub async fn extract_thumbnails(
             .mark_done(&job_id, "Thumbnail extraction complete");
     }
     emit_job_state(&app, &state.job_manager, &job_id);
+    state.perf_log.end(&perf_id, "ok", None);
     Ok(job_id)
 }
 
@@ -414,6 +395,9 @@ pub async fn start_verification(
     app: AppHandle,
     state: State<'_, Arc<AppState>>,
 ) -> Result<String, String> {
+    let perf_id = state
+        .perf_log
+        .start("start_verification", Some(format!("{} -> {}", source_root, dest_root)));
     let app_state = state.inner().clone();
     let (job_id, cancel_flag) = app_state.job_manager.create_job("verification", None);
     app_state.job_manager.mark_running(&job_id, "Verification started");
@@ -451,6 +435,7 @@ pub async fn start_verification(
         emit_job_state(&app_clone, &app_state_for_task.job_manager, &job_id_clone);
     });
 
+    state.perf_log.end(&perf_id, "ok", Some(format!("job_id={}", job_id)));
     Ok(job_id)
 }
 
@@ -499,6 +484,7 @@ pub async fn extract_audio_waveform(
     app: AppHandle,
     state: State<'_, Arc<AppState>>,
 ) -> Result<Vec<u8>, String> {
+    let perf_id = state.perf_log.start("extract_audio_waveform", Some(clip_id.clone()));
     let (job_id, _cancel_flag) = state
         .job_manager
         .create_job("waveform", Some(format!("waveform-{}", clip_id)));
@@ -534,6 +520,7 @@ pub async fn extract_audio_waveform(
         .job_manager
         .mark_done(&job_id, "Waveform extraction complete");
     emit_job_state(&app, &state.job_manager, &job_id);
+    state.perf_log.end(&perf_id, "ok", None);
     Ok(result.envelope)
 }
 
@@ -642,6 +629,7 @@ pub async fn export_to_fcpxml(
     app: AppHandle,
     state: State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
+    let perf_id = state.perf_log.start("export_to_fcpxml", Some(project_id.clone()));
     let (job_id, _cancel_flag) = state.job_manager.create_job("resolve_export", None);
     state.job_manager.mark_running(&job_id, "Resolve export started");
     emit_job_state(&app, &state.job_manager, &job_id);
@@ -683,16 +671,20 @@ pub async fn export_to_fcpxml(
 
     state.job_manager.mark_done(&job_id, "Resolve export complete");
     emit_job_state(&app, &state.job_manager, &job_id);
+    state.perf_log.end(&perf_id, "ok", Some(output_path));
     Ok(())
 }
 
 #[tauri::command]
 pub async fn build_scene_blocks(
     project_id: String,
+    mode: Option<String>,
     gap_seconds: Option<i64>,
+    overlap_window_seconds: Option<i64>,
     app: AppHandle,
     state: State<'_, Arc<AppState>>,
 ) -> Result<Vec<SceneBlockWithClips>, String> {
+    let perf_id = state.perf_log.start("build_scene_blocks", Some(project_id.clone()));
     let (job_id, cancel_flag) = state.job_manager.create_job("clustering", None);
     state.job_manager.mark_running(&job_id, "Block clustering started");
     emit_job_state(&app, &state.job_manager, &job_id);
@@ -703,12 +695,20 @@ pub async fn build_scene_blocks(
     }
     let db = &state.db;
     let clips = db.get_clips(&project_id).map_err(|e| e.to_string())?;
-    let built = clustering::build_scene_blocks(&project_id, &clips, gap_seconds.unwrap_or(60));
+    let built = clustering::build_scene_blocks(
+        &project_id,
+        &clips,
+        mode.as_deref().unwrap_or("time_gap"),
+        gap_seconds.unwrap_or(60),
+        overlap_window_seconds.unwrap_or(30),
+    );
     db.replace_scene_blocks(&project_id, &built.blocks, &built.memberships)
         .map_err(|e| format!("Failed to persist scene blocks: {}", e))?;
     state.job_manager.mark_done(&job_id, "Block clustering complete");
     emit_job_state(&app, &state.job_manager, &job_id);
-    get_scene_blocks(project_id, state).await
+    let blocks = get_scene_blocks(project_id, state.clone()).await;
+    state.perf_log.end(&perf_id, if blocks.is_ok() { "ok" } else { "error" }, None);
+    blocks
 }
 
 #[tauri::command]
@@ -857,6 +857,7 @@ pub async fn export_director_pack(
     app: AppHandle,
     state: State<'_, Arc<AppState>>,
 ) -> Result<DirectorPackResult, String> {
+    let perf_id = state.perf_log.start("export_director_pack", Some(project_id.clone()));
     let (job_id, _cancel_flag) = state.job_manager.create_job("director_pack", None);
     state.job_manager.mark_running(&job_id, "Director Pack export started");
     emit_job_state(&app, &state.job_manager, &job_id);
@@ -868,9 +869,9 @@ pub async fn export_director_pack(
         .ok_or("Project not found")?;
 
     let pack_root = format!("{}/DirectorPack", output_root);
-    let contact_dir = format!("{}/ContactSheet", pack_root);
-    let resolve_dir = format!("{}/Resolve", pack_root);
-    let reports_dir = format!("{}/Reports", pack_root);
+    let contact_dir = format!("{}/01_Contact_Sheet", pack_root);
+    let resolve_dir = format!("{}/02_Resolve_Project", pack_root);
+    let reports_dir = format!("{}/03_Reports", pack_root);
     std::fs::create_dir_all(&contact_dir).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&resolve_dir).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&reports_dir).map_err(|e| e.to_string())?;
@@ -921,12 +922,14 @@ pub async fn export_director_pack(
     state.job_manager.mark_done(&job_id, "Director Pack export complete");
     emit_job_state(&app, &state.job_manager, &job_id);
 
-    Ok(DirectorPackResult {
+    let result = DirectorPackResult {
         root: pack_root,
         contact_sheet_pdf: pdf_path,
         resolve_fcpxml: fcpxml_path,
         json_summary: report_path,
-    })
+    };
+    state.perf_log.end(&perf_id, "ok", Some(result.root.clone()));
+    Ok(result)
 }
 
 #[tauri::command]
@@ -1010,6 +1013,58 @@ pub async fn export_feedback_bundle(
     Ok(output_path)
 }
 
+#[tauri::command]
+pub async fn list_perf_events(state: State<'_, Arc<AppState>>) -> Result<Vec<crate::perf::PerfEvent>, String> {
+    Ok(state.perf_log.list())
+}
+
+#[tauri::command]
+pub async fn clear_perf_events(state: State<'_, Arc<AppState>>) -> Result<(), String> {
+    state.perf_log.clear();
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn export_perf_report(
+    output_root: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<serde_json::Value, String> {
+    let events = state.perf_log.list();
+    let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S").to_string();
+    let base = format!("{}/WrapPreview_Perf_{}", output_root, timestamp);
+    let md_path = format!("{}.md", base);
+    let json_path = format!("{}.json", base);
+
+    let json = serde_json::json!({
+        "app_version": env!("CARGO_PKG_VERSION"),
+        "exported_at": chrono::Utc::now().to_rfc3339(),
+        "events": events
+    });
+    let json_text = serde_json::to_string_pretty(&json).map_err(|e| e.to_string())?;
+    std::fs::write(&json_path, json_text).map_err(|e| e.to_string())?;
+
+    let mut md = String::new();
+    md.push_str("# Wrap Preview Performance Report\n\n");
+    md.push_str(&format!("- Exported: {}\n", chrono::Utc::now().to_rfc3339()));
+    md.push_str(&format!("- Events: {}\n\n", json["events"].as_array().map(|a| a.len()).unwrap_or(0)));
+    md.push_str("| Name | Status | Duration (ms) | Started |\n");
+    md.push_str("|---|---:|---:|---|\n");
+    if let Some(arr) = json["events"].as_array() {
+        for ev in arr {
+            md.push_str(&format!(
+                "| {} | {} | {} | {} |\n",
+                ev["name"].as_str().unwrap_or(""),
+                ev["status"].as_str().unwrap_or(""),
+                ev["duration_ms"].as_u64().map(|v| v.to_string()).unwrap_or_else(|| "-".to_string()),
+                ev["started_at"].as_str().unwrap_or("")
+            ));
+        }
+    }
+    std::fs::write(&md_path, md).map_err(|e| e.to_string())?;
+
+    Ok(serde_json::json!({ "md_path": md_path, "json_path": json_path }))
+}
+
 // ─── Types ───
 
 #[derive(serde::Serialize)]
@@ -1043,27 +1098,147 @@ pub struct ThumbnailProgress {
 
 // ─── Helpers ───
 
+fn rescan_project_internal(db: &Database, project_id: &str) -> Result<Vec<Clip>, String> {
+    let roots = db
+        .list_project_roots(project_id)
+        .map_err(|e| format!("Failed listing project roots: {}", e))?;
+    if roots.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let mut clips: Vec<Clip> = Vec::new();
+    let mut seen_ids: Vec<String> = Vec::new();
+    for root in roots {
+        let files = scanner::scan_folder(&root.root_path);
+        for file_path in files {
+            let rel_path = std::path::Path::new(&file_path)
+                .strip_prefix(&root.root_path)
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|_| file_path.clone());
+            let clip = build_clip_from_file(db, project_id, &root, &file_path, &rel_path);
+            seen_ids.push(clip.id.clone());
+            if let Err(e) = db.upsert_clip(&clip) {
+                eprintln!("scan: failed to upsert clip {}: {}", clip.id, e);
+            }
+            clips.push(clip);
+        }
+    }
+
+    if let Err(e) = db.prune_project_clips(project_id, &seen_ids) {
+        eprintln!("scan: prune project clips failed: {}", e);
+    }
+    db.get_clips(project_id)
+        .map_err(|e| format!("Failed to load rescanned clips: {}", e))
+}
+
+fn build_clip_from_file(
+    _db: &Database,
+    project_id: &str,
+    root: &ProjectRoot,
+    file_path: &str,
+    rel_path: &str,
+) -> Clip {
+    let meta = ffprobe::probe_file(file_path);
+    let clip_id = generate_clip_id(&root.id, rel_path);
+    match meta {
+        Ok(m) => {
+            let status = if m.timecode.is_none() { "warn" } else { "ok" };
+            Clip {
+                id: clip_id,
+                project_id: project_id.to_string(),
+                root_id: root.id.clone(),
+                rel_path: rel_path.to_string(),
+                filename: m.filename,
+                file_path: m.file_path,
+                size_bytes: m.size_bytes,
+                created_at: m.created_at,
+                duration_ms: m.duration_ms,
+                fps: m.fps,
+                width: m.width,
+                height: m.height,
+                video_codec: m.video_codec,
+                video_bitrate: m.video_bitrate,
+                format_name: m.format_name,
+                audio_codec: m.audio_codec,
+                audio_channels: m.audio_channels,
+                audio_sample_rate: m.audio_sample_rate,
+                camera_iso: m.camera_iso,
+                camera_white_balance: m.camera_white_balance,
+                audio_summary: m.audio_summary,
+                timecode: m.timecode,
+                status: status.to_string(),
+                rating: 0,
+                flag: "none".to_string(),
+                notes: None,
+                shot_size: None,
+                movement: None,
+                manual_order: 0,
+                auto_motion: None,
+                auto_brightness: None,
+                auto_contrast: None,
+                auto_temp: None,
+                auto_tags_json: None,
+                auto_analyzed_at: None,
+                auto_analyzer_version: None,
+                audio_envelope: None,
+            }
+        }
+        Err(e) => {
+            let filename = std::path::Path::new(file_path)
+                .file_name()
+                .map(|f| f.to_string_lossy().to_string())
+                .unwrap_or_default();
+            Clip {
+                id: clip_id,
+                project_id: project_id.to_string(),
+                root_id: root.id.clone(),
+                rel_path: rel_path.to_string(),
+                filename,
+                file_path: file_path.to_string(),
+                size_bytes: 0,
+                created_at: String::new(),
+                duration_ms: 0,
+                fps: 0.0,
+                width: 0,
+                height: 0,
+                video_codec: "unknown".to_string(),
+                video_bitrate: 0,
+                format_name: "unknown".to_string(),
+                audio_codec: "none".to_string(),
+                audio_channels: 0,
+                audio_sample_rate: 0,
+                camera_iso: None,
+                camera_white_balance: None,
+                audio_summary: format!("Error: {}", e),
+                timecode: None,
+                status: "fail".to_string(),
+                rating: 0,
+                flag: "none".to_string(),
+                notes: None,
+                shot_size: None,
+                movement: None,
+                manual_order: 0,
+                auto_motion: None,
+                auto_brightness: None,
+                auto_contrast: None,
+                auto_temp: None,
+                auto_tags_json: None,
+                auto_analyzed_at: None,
+                auto_analyzer_version: None,
+                audio_envelope: None,
+            }
+        }
+    }
+}
+
 fn hash_string(input: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(input.as_bytes());
     format!("{:x}", hasher.finalize())[..16].to_string()
 }
 
-fn generate_clip_id(file_path: &str, relative_path: Option<&str>) -> String {
-    let metadata = std::fs::metadata(file_path).ok();
-    let size = metadata.as_ref().map(|m| m.len()).unwrap_or(0);
-    let modified = metadata
-        .and_then(|m| m.modified().ok())
-        .map(|t| {
-            let dt: chrono::DateTime<chrono::Utc> = t.into();
-            dt.timestamp().to_string()
-        })
-        .unwrap_or_default();
-
-    // Use relative path if available for portability (e.g. project moved or accessed from different root)
-    let path_key = relative_path.unwrap_or(file_path);
-
-    let input = format!("{}:{}:{}", path_key, size, modified);
+fn generate_clip_id(root_id: &str, rel_path: &str) -> String {
+    let input = format!("{}:{}", root_id, rel_path);
     hash_string(&input)
 }
 
@@ -1224,6 +1399,8 @@ mod tests {
         Clip {
             id: id.to_string(),
             project_id: project_id.to_string(),
+            root_id: "root-1".to_string(),
+            rel_path: format!("{}.mov", id),
             filename: format!("{}.mov", id),
             file_path: format!("/tmp/{}.mov", id),
             size_bytes: 10,

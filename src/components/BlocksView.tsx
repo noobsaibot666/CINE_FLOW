@@ -21,7 +21,9 @@ export function BlocksView({
 }: BlocksViewProps) {
   const [blocks, setBlocks] = useState<SceneBlockWithClips[]>([]);
   const [loading, setLoading] = useState(false);
+  const [buildMode, setBuildMode] = useState<"time_gap" | "scene_change" | "multicam_overlap">("time_gap");
   const [gapSeconds, setGapSeconds] = useState(60);
+  const [overlapWindowSeconds, setOverlapWindowSeconds] = useState(30);
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const selectedIds = useMemo(() => Array.from(selected), [selected]);
@@ -43,7 +45,12 @@ export function BlocksView({
   const buildBlocks = async () => {
     setLoading(true);
     try {
-      const result = await invoke<SceneBlockWithClips[]>("build_scene_blocks", { projectId, gapSeconds });
+      const result = await invoke<SceneBlockWithClips[]>("build_scene_blocks", {
+        projectId,
+        mode: buildMode,
+        gapSeconds,
+        overlapWindowSeconds
+      });
       setBlocks(result);
       setSelected(new Set());
     } finally {
@@ -92,6 +99,19 @@ export function BlocksView({
       <div className="toolbar premium-toolbar" style={{ marginBottom: 16 }}>
         <div className="toolbar-left-group">
           <div className="toolbar-segment">
+            <span className="toolbar-label">Mode</span>
+            <select
+              className="input-select"
+              value={buildMode}
+              onChange={(e) => setBuildMode(e.target.value as "time_gap" | "scene_change" | "multicam_overlap")}
+              style={{ width: 180 }}
+            >
+              <option value="time_gap">Time Gap</option>
+              <option value="scene_change">Scene Change</option>
+              <option value="multicam_overlap">Multicam Overlap</option>
+            </select>
+          </div>
+          <div className="toolbar-segment">
             <span className="toolbar-label">Gap Threshold (sec)</span>
             <input
               className="input-text"
@@ -104,6 +124,21 @@ export function BlocksView({
               style={{ width: 100 }}
             />
           </div>
+          {buildMode === "multicam_overlap" && (
+            <div className="toolbar-segment">
+              <span className="toolbar-label">Overlap Window (sec)</span>
+              <input
+                className="input-text"
+                type="number"
+                min={5}
+                max={300}
+                step={5}
+                value={overlapWindowSeconds}
+                onChange={(e) => setOverlapWindowSeconds(Math.max(5, Number(e.target.value || 30)))}
+                style={{ width: 100 }}
+              />
+            </div>
+          )}
         </div>
         <div className="toolbar-right-group">
           <button className="btn btn-secondary" onClick={refreshBlocks} disabled={loading}>

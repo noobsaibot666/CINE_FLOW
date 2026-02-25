@@ -1,6 +1,8 @@
 export interface Clip {
     id: string;
     project_id: string;
+    root_id: string;
+    rel_path: string;
     filename: string;
     file_path: string;
     size_bytes: number;
@@ -53,6 +55,14 @@ export interface ScanResult {
     project_name: string;
     clip_count: number;
     clips: Clip[];
+}
+
+export interface ProjectRoot {
+    id: string;
+    project_id: string;
+    root_path: string;
+    label: string;
+    created_at: string;
 }
 
 export interface ThumbnailProgress {

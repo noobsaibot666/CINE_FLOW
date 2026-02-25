@@ -1,4 +1,6 @@
 import { BrandProfile, ClipWithThumbnails } from "../types";
+import { PdfHeader } from "./print/PdfHeader";
+import { PdfFooter } from "./print/PdfFooter";
 
 interface PrintLayoutProps {
   projectName: string;
@@ -6,18 +8,12 @@ interface PrintLayoutProps {
   thumbnailCache: Record<string, string>;
   brandProfile: BrandProfile | null;
   logoSrc?: string;
+  appVersion?: string;
   thumbCount: number;
   onClose: () => void;
 }
 
-const APP_LOGO_SVG = `
-<svg width="250" height="250" viewBox="0 0 250 250" fill="none" xmlns="http://www.w3.org/2000/svg">
-<rect width="250" height="250" rx="20" fill="black"/>
-<path d="M164.987 124.211H194L193.986 126.011L162.281 126.08C150.072 126.108 133.296 129.763 122.413 135.413C119.876 136.742 117.38 138.099 115.322 140.121L98.1655 157C97.6862 156.612 97.2492 156.169 96.8121 155.712L113.687 139.082C114.674 138.113 115.393 136.977 115.886 135.759C116.534 134.139 116.14 132.477 114.956 131.203C111.629 127.645 107.498 126.759 99.3356 126.219C98.1373 126.149 97.0941 126.039 95.8676 126.039H56V124.225L95.8958 124.141C108.527 124.114 125.684 120.347 136.849 114.31C139.245 113.009 141.501 111.61 143.447 109.699L160.194 93.1939L162.45 93L144.969 110.779C142.742 112.953 140.796 116.221 143.277 118.977C145.674 121.621 150.284 122.812 153.766 123.421C157.502 124.086 161.139 124.211 164.987 124.211Z" fill="#FFFEEF"/>
-</svg>
-`;
-
-export function PrintLayout({ projectName, clips, thumbnailCache, brandProfile, logoSrc, thumbCount, onClose }: PrintLayoutProps) {
+export function PrintLayout({ projectName, clips, thumbnailCache, brandProfile, logoSrc, appVersion = "unknown", thumbCount, onClose }: PrintLayoutProps) {
   const now = new Date();
   const dateStr = now.toLocaleDateString("en-GB", {
     day: "2-digit",
@@ -39,25 +35,7 @@ export function PrintLayout({ projectName, clips, thumbnailCache, brandProfile, 
       {/* Split clips into pages (roughly 3 clips per A4 landscape page) */}
       {chunkArray(clips, 3).map((pageClips, pageIdx, allPages) => (
         <div key={pageIdx} className="print-page">
-          {/* Header */}
-          <div className="print-header">
-            <div className="print-header-left">
-              {logoSrc ? (
-                <div className="print-logo-custom">
-                  <img src={logoSrc} alt="Logo" style={{ height: '32px' }} />
-                </div>
-              ) : (
-                <div className="print-logo-custom" dangerouslySetInnerHTML={{ __html: APP_LOGO_SVG }} />
-              )}
-            </div>
-            <div className="print-header-center">
-              <div className="print-project-name">{projectName}</div>
-              <div className="print-date">{dateStr}</div>
-            </div>
-            <div className="print-header-right">
-              <div className="print-subtitle">Contact Sheet</div>
-            </div>
-          </div>
+          <PdfHeader projectName={projectName} dateStr={dateStr} logoSrc={logoSrc} appVersion={appVersion} />
 
           {/* Clips */}
           <div className="print-clips">
@@ -72,10 +50,7 @@ export function PrintLayout({ projectName, clips, thumbnailCache, brandProfile, 
           </div>
 
           {/* Footer */}
-          <div className="print-footer">
-            <span>{brandProfile?.name || "Wrap Preview"}</span>
-            <span>Page {pageIdx + 1} of {allPages.length}</span>
-          </div>
+          <PdfFooter brandName={brandProfile?.name || "Wrap Preview"} page={pageIdx + 1} totalPages={allPages.length} />
         </div>
       ))}
     </div>
@@ -253,6 +228,15 @@ const printStyles = `
     font-weight: 700;
   }
 
+  .print-smart-copy {
+    margin-top: 4mm;
+    font-size: 8pt;
+    color: #333;
+    line-height: 1.35;
+    border-top: 1px solid #d4d4d8;
+    padding-top: 2mm;
+  }
+
   .print-clips {
     flex: 1;
     display: flex;
@@ -321,6 +305,8 @@ const printStyles = `
   .print-footer {
     display: flex;
     justify-content: space-between;
+    gap: 8mm;
+    align-items: center;
     padding-top: 4mm;
     margin-top: auto;
     border-top: 1.5pt solid #000;

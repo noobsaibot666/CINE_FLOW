@@ -353,6 +353,8 @@ mod tests {
         Clip {
             id: id.to_string(),
             project_id: "p1".to_string(),
+            root_id: "root-1".to_string(),
+            rel_path: filename.to_string(),
             filename: filename.to_string(),
             file_path: format!("/Volumes/Media/{}", filename),
             size_bytes: 100,

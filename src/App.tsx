@@ -21,6 +21,9 @@ import {
   MoreHorizontal,
   LayoutGrid,
   Image as ImageIcon,
+  Plus,
+  Trash2,
+  RefreshCw,
 } from "lucide-react";
 import { ClipList } from "./components/ClipList";
 import { PrintLayout } from "./components/PrintLayout";
@@ -32,7 +35,7 @@ import { AboutPanel } from "./components/AboutPanel";
 import { TourGuide, TourStep } from "./components/TourGuide";
 import { exportElementAsImage } from "./utils/ExportUtils";
 import appLogo from "./assets/Icon_square_rounded.svg";
-import { AppInfo, Clip, ClipWithThumbnails, JobInfo, ScanResult, ThumbnailProgress } from "./types";
+import { AppInfo, Clip, ClipWithThumbnails, JobInfo, ProjectRoot, ScanResult, ThumbnailProgress } from "./types";
 import {
   LookbookSortMode,
   MOVEMENT_CANONICAL,
@@ -91,6 +94,7 @@ function AppContent() {
   });
   const [showExportPanel, setShowExportPanel] = useState(false);
   const [selectedBlockIds, setSelectedBlockIds] = useState<string[]>([]);
+  const [projectRoots, setProjectRoots] = useState<ProjectRoot[]>([]);
   const [viewFilter, setViewFilter] = useState<"all" | "picks" | "rated_min">("all");
   const [viewMinRating, setViewMinRating] = useState<number>(3);
   const [jobsOpen, setJobsOpen] = useState(false);
@@ -102,6 +106,7 @@ function AppContent() {
   const [tourRun, setTourRun] = useState(false);
   const [helpMenuOpen, setHelpMenuOpen] = useState(false);
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const [openExportAfterScan, setOpenExportAfterScan] = useState(false);
   const [lookbookSortMode, setLookbookSortMode] = useState<LookbookSortMode>(() => {
     const saved = localStorage.getItem("wp_lookbook_sort_mode");
     return saved === "custom" ? "custom" : "canonical";
@@ -308,6 +313,13 @@ function AppContent() {
     }
   }, [projectId, postScanTab]);
 
+  useEffect(() => {
+    if (projectId && openExportAfterScan) {
+      setShowExportPanel(true);
+      setOpenExportAfterScan(false);
+    }
+  }, [projectId, openExportAfterScan]);
+
   const hydrateThumbnailCache = useCallback(async (items: ClipWithThumbnails[]) => {
     const thumbEntries = items.flatMap((item) =>
       item.thumbnails.map((thumb) => ({
@@ -346,6 +358,15 @@ function AppContent() {
       setUiError({ title: "Could not load clip previews", hint: "Retry scan. If this persists, export diagnostics." });
     }
   }, [hydrateThumbnailCache]);
+
+  const refreshProjectRoots = useCallback(async (nextProjectId: string) => {
+    try {
+      const roots = await invoke<ProjectRoot[]>("list_project_roots", { projectId: nextProjectId });
+      setProjectRoots(roots);
+    } catch (error) {
+      console.error("Failed loading project roots", error);
+    }
+  }, []);
 
   // Listen for thumbnail progress events
   useEffect(() => {
@@ -437,13 +458,24 @@ function AppContent() {
       refreshProjectClips(result.project_id).catch((err) => {
         console.warn("Initial clip refresh failed", err);
       });
+      refreshProjectRoots(result.project_id).catch((err) => {
+        console.warn("Initial roots refresh failed", err);
+      });
     } catch (e) {
       console.error("Scan error:", e);
       setUiError({ title: "Scan failed", hint: "Verify folder access and media formats, then retry." });
     } finally {
       setScanning(false);
     }
-  }, [refreshProjectClips]);
+  }, [refreshProjectClips, refreshProjectRoots]);
+
+  useEffect(() => {
+    if (!projectId) {
+      setProjectRoots([]);
+      return;
+    }
+    refreshProjectRoots(projectId).catch(console.error);
+  }, [projectId, refreshProjectRoots]);
 
   const handleGoHome = useCallback(() => {
     setProjectId(null);
@@ -682,6 +714,7 @@ function AppContent() {
             thumbnailCache={thumbnailCache}
             brandProfile={null}
             logoSrc={appLogo}
+            appVersion={appInfo?.version || "unknown"}
             thumbCount={thumbCount}
             onClose={() => {
               if (!printingForImage) setShowPrint(false);
@@ -712,20 +745,17 @@ function AppContent() {
               <button className="nav-tab" onClick={() => setActiveTab('home')}>
                 <LayoutGrid size={15} /> Modules
               </button>
-              <button className={`nav-tab ${activeTab === 'shot-planner' ? 'active' : ''}`} onClick={() => setActiveTab('shot-planner')}>
-                <ImageIcon size={15} /> Shot Planner
+              <button className={`nav-tab ${activeTab === 'safe-copy' ? 'active' : ''}`} onClick={() => setActiveTab('safe-copy')} title="Safe Copy (Verification)">
+                <ShieldCheck size={15} /> Safe Copy
               </button>
-              <button className={`nav-tab ${activeTab === 'media-workspace' ? 'active' : ''}`} onClick={() => setActiveTab('media-workspace')}>
-                <BriefcaseBusiness size={15} /> Media Workspace
-              </button>
-              <button className={`nav-tab ${activeTab === 'contact' ? 'active' : ''}`} onClick={() => setActiveTab('contact')}>
-                <Camera size={15} /> Contact Sheet
+              <button className={`nav-tab ${activeTab === 'contact' || activeTab === 'shot-planner' ? 'active' : ''}`} onClick={() => setActiveTab(activeTab === "shot-planner" ? 'shot-planner' : 'contact')}>
+                <Camera size={15} /> Review
               </button>
               <button className={`nav-tab tour-blocks-tab ${activeTab === 'blocks' ? 'active' : ''}`} onClick={() => setActiveTab('blocks')} disabled={!projectId}>
-                <Boxes size={15} /> Blocks
+                <Boxes size={15} /> Scene Blocks
               </button>
-              <button className={`nav-tab ${activeTab === 'safe-copy' ? 'active' : ''}`} onClick={() => setActiveTab('safe-copy')} title="Safe Copy (Verification)">
-                <ShieldCheck size={15} /> Safe Copy (Verification)
+              <button className={`nav-tab ${showExportPanel ? 'active' : ''}`} onClick={() => setShowExportPanel(true)} disabled={!projectId}>
+                <FileDown size={15} /> Delivery
               </button>
             </nav>
           )}
@@ -831,52 +861,118 @@ function AppContent() {
               <h1>Media Workspace</h1>
               <p>Verify, review, organize, export.</p>
             </div>
-            <div className="onboarding-grid">
-              {!projectId ? (
-                <div className="module-card" onClick={() => handleSelectFolder("contact")}>
-                  <div className="module-icon"><FolderOpen size={32} strokeWidth={1.5} /></div>
-                  <div className="module-info">
-                    <h3>Open Workspace Folder</h3>
-                    <p>Select footage to load production modules.</p>
-                    <span className="module-action">Select Folder <ArrowRight size={14} /></span>
+            {projectId && (
+              <div className="workspace-roots-panel">
+                <div className="workspace-roots-header">
+                  <span className="toolbar-label">Project Roots</span>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button
+                      className="btn btn-secondary btn-sm"
+                      onClick={async () => {
+                        const selected = await open({ directory: true, multiple: false, title: "Add Project Root" });
+                        if (!selected || typeof selected !== "string") return;
+                        await invoke("add_project_root", { projectId, rootPath: selected, label: `Root ${String(projectRoots.length + 1).padStart(2, "0")}` });
+                        await refreshProjectRoots(projectId);
+                      }}
+                    >
+                      <Plus size={14} /> Add Root
+                    </button>
+                    <button
+                      className="btn btn-secondary btn-sm"
+                      onClick={async () => {
+                        await invoke("rescan_project", { projectId });
+                        await refreshProjectClips(projectId);
+                      }}
+                    >
+                      <RefreshCw size={14} /> Rescan
+                    </button>
                   </div>
                 </div>
-              ) : (
-                <>
-                  <div className="module-card" onClick={() => setActiveTab("contact")}>
-                    <div className="module-icon"><Camera size={32} strokeWidth={1.5} /></div>
-                    <div className="module-info">
-                      <h3>Contact Sheet</h3>
-                      <p>Review clips and metadata.</p>
-                      <span className="module-action">Open <ArrowRight size={14} /></span>
+                <div className="workspace-roots-list">
+                  {projectRoots.map((root) => (
+                    <div key={root.id} className="workspace-root-item">
+                      <input
+                        className="input-text"
+                        defaultValue={root.label}
+                        onBlur={async (e) => {
+                          const nextLabel = e.currentTarget.value.trim();
+                          if (!nextLabel || nextLabel === root.label) return;
+                          await invoke("update_project_root_label", { rootId: root.id, label: nextLabel });
+                          await refreshProjectRoots(projectId);
+                        }}
+                      />
+                      <span className="workspace-root-path">{root.root_path}</span>
+                      <button
+                        className="btn btn-danger btn-sm"
+                        onClick={async () => {
+                          await invoke("remove_project_root", { rootId: root.id });
+                          await refreshProjectRoots(projectId);
+                          await invoke("rescan_project", { projectId });
+                          await refreshProjectClips(projectId);
+                        }}
+                      >
+                        <Trash2 size={14} />
+                      </button>
                     </div>
-                  </div>
-                  <div className="module-card" onClick={() => setActiveTab("blocks")}>
-                    <div className="module-icon"><Boxes size={32} strokeWidth={1.5} /></div>
-                    <div className="module-info">
-                      <h3>Scene Blocks</h3>
-                      <p>Group clips into editorial moments.</p>
-                      <span className="module-action">Open <ArrowRight size={14} /></span>
-                    </div>
-                  </div>
-                  <div className="module-card" onClick={() => setShowExportPanel(true)}>
-                    <div className="module-icon"><FileDown size={32} strokeWidth={1.5} /></div>
-                    <div className="module-info">
-                      <h3>Resolve / Director Pack</h3>
-                      <p>Prepare edit handoff and delivery package.</p>
-                      <span className="module-action">Export <ArrowRight size={14} /></span>
-                    </div>
-                  </div>
-                  <div className="module-card" onClick={() => setActiveTab("safe-copy")}>
-                    <div className="module-icon"><ShieldCheck size={32} strokeWidth={1.5} /></div>
-                    <div className="module-info">
-                      <h3>Safe Copy (Verification)</h3>
-                      <p>Validate copied media integrity.</p>
-                      <span className="module-action">Verify <ArrowRight size={14} /></span>
-                    </div>
-                  </div>
-                </>
-              )}
+                  ))}
+                </div>
+              </div>
+            )}
+            <div className="onboarding-grid workspace-apps-grid">
+              <div
+                className="module-card"
+                onClick={() => {
+                  if (projectId) setActiveTab("contact");
+                  else handleSelectFolder("contact");
+                }}
+              >
+                <div className="module-icon"><Camera size={32} strokeWidth={1.5} /></div>
+                <div className="module-info">
+                  <h3>Contact Sheet</h3>
+                  <p>Review clips and metadata.</p>
+                  <span className="module-action">Open <ArrowRight size={14} /></span>
+                </div>
+              </div>
+              <div
+                className="module-card"
+                onClick={() => {
+                  if (projectId) setActiveTab("blocks");
+                  else handleSelectFolder("blocks");
+                }}
+              >
+                <div className="module-icon"><Boxes size={32} strokeWidth={1.5} /></div>
+                <div className="module-info">
+                  <h3>Scene Blocks</h3>
+                  <p>Group clips into editorial moments.</p>
+                  <span className="module-action">Open <ArrowRight size={14} /></span>
+                </div>
+              </div>
+              <div
+                className="module-card"
+                onClick={() => {
+                  if (projectId) {
+                    setShowExportPanel(true);
+                  } else {
+                    setOpenExportAfterScan(true);
+                    handleSelectFolder("contact");
+                  }
+                }}
+              >
+                <div className="module-icon"><FileDown size={32} strokeWidth={1.5} /></div>
+                <div className="module-info">
+                  <h3>Resolve / Director Pack</h3>
+                  <p>Prepare edit handoff and delivery package.</p>
+                  <span className="module-action">Export <ArrowRight size={14} /></span>
+                </div>
+              </div>
+              <div className="module-card" onClick={() => setActiveTab("safe-copy")}>
+                <div className="module-icon"><ShieldCheck size={32} strokeWidth={1.5} /></div>
+                <div className="module-info">
+                  <h3>Safe Copy (Verification)</h3>
+                  <p>Validate copied media integrity.</p>
+                  <span className="module-action">Verify <ArrowRight size={14} /></span>
+                </div>
+              </div>
             </div>
           </div>
         ) : activeTab === 'home' || !projectId ? (

@@ -4,6 +4,7 @@ mod clustering;
 mod db;
 mod ffprobe;
 mod jobs;
+mod perf;
 mod scanner;
 mod thumbnail;
 mod verification;
@@ -29,6 +30,7 @@ pub fn run() {
         db: database,
         cache_dir,
         job_manager: crate::jobs::JobManager::new(),
+        perf_log: crate::perf::PerfLog::new(500),
     });
 
     tauri::Builder::default()
@@ -38,6 +40,11 @@ pub fn run() {
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
             commands::scan_folder,
+            commands::list_project_roots,
+            commands::add_project_root,
+            commands::remove_project_root,
+            commands::update_project_root_label,
+            commands::rescan_project,
             commands::get_clips,
             commands::extract_thumbnails,
             commands::get_project,
@@ -53,6 +60,9 @@ pub fn run() {
             commands::cancel_job,
             commands::get_app_info,
             commands::export_feedback_bundle,
+            commands::list_perf_events,
+            commands::clear_perf_events,
+            commands::export_perf_report,
             commands::get_verification_job,
             commands::get_verification_items,
             commands::export_verification_report_json,

@@ -8,7 +8,19 @@ pub struct BuiltBlocks {
     pub memberships: Vec<SceneBlockClip>,
 }
 
-pub fn build_scene_blocks(project_id: &str, clips: &[Clip], gap_seconds: i64) -> BuiltBlocks {
+pub fn build_scene_blocks(
+    project_id: &str,
+    clips: &[Clip],
+    mode: &str,
+    gap_seconds: i64,
+    overlap_window_seconds: i64,
+) -> BuiltBlocks {
+    let effective_gap = match mode {
+        "scene_change" => (gap_seconds / 2).max(10),
+        "multicam_overlap" => gap_seconds.max(overlap_window_seconds).max(15),
+        _ => gap_seconds.max(1),
+    };
+
     let mut ordered = clips.to_vec();
     ordered.sort_by_key(|clip| {
         let ts = clip_timestamp(clip);
@@ -21,7 +33,7 @@ pub fn build_scene_blocks(project_id: &str, clips: &[Clip], gap_seconds: i64) ->
             let last_ts = last_group.last().and_then(clip_timestamp);
             let current_ts = clip_timestamp(&clip);
             let should_split = match (last_ts, current_ts) {
-                (Some(prev), Some(cur)) => cur - prev > gap_seconds.max(1),
+                (Some(prev), Some(cur)) => cur - prev > effective_gap,
                 _ => false,
             };
             if should_split {
@@ -142,6 +154,8 @@ mod tests {
         Clip {
             id: id.to_string(),
             project_id: "p1".to_string(),
+            root_id: "root-1".to_string(),
+            rel_path: filename.to_string(),
             filename: filename.to_string(),
             file_path: "/tmp/none".to_string(),
             size_bytes: 1,
@@ -185,7 +199,7 @@ mod tests {
             make_clip("2", "A002_CamB.mov", "2026-01-01 10:00:10"),
             make_clip("3", "A003_CamA.mov", "2026-01-01 10:03:30"),
         ];
-        let built = build_scene_blocks("p1", &clips, 60);
+        let built = build_scene_blocks("p1", &clips, "time_gap", 60, 30);
         assert_eq!(built.blocks.len(), 2);
         assert_eq!(built.blocks[0].clip_count, 2);
         assert_eq!(built.blocks[1].clip_count, 1);

@@ -17,9 +17,20 @@ pub struct Project {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectRoot {
+    pub id: String,
+    pub project_id: String,
+    pub root_path: String,
+    pub label: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Clip {
     pub id: String,
     pub project_id: String,
+    pub root_id: String,
+    pub rel_path: String,
     pub filename: String,
     pub file_path: String,
     pub size_bytes: u64,
@@ -134,6 +145,12 @@ impl Database {
             if !columns.contains(&"rating".to_string()) {
                 conn.execute("ALTER TABLE clips ADD COLUMN rating INTEGER NOT NULL DEFAULT 0", [])?;
             }
+            if !columns.contains(&"root_id".to_string()) {
+                conn.execute("ALTER TABLE clips ADD COLUMN root_id TEXT NOT NULL DEFAULT 'legacy_root'", [])?;
+            }
+            if !columns.contains(&"rel_path".to_string()) {
+                conn.execute("ALTER TABLE clips ADD COLUMN rel_path TEXT NOT NULL DEFAULT ''", [])?;
+            }
             if !columns.contains(&"flag".to_string()) {
                 conn.execute("ALTER TABLE clips ADD COLUMN flag TEXT NOT NULL DEFAULT 'none'", [])?;
             }
@@ -195,6 +212,20 @@ impl Database {
                 conn.execute("ALTER TABLE clips ADD COLUMN auto_analyzer_version TEXT", [])?;
             }
 
+            conn.execute_batch(
+                "
+                CREATE TABLE IF NOT EXISTS project_roots (
+                    id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL,
+                    root_path TEXT NOT NULL,
+                    label TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(project_id, root_path),
+                    FOREIGN KEY(project_id) REFERENCES projects(id)
+                );
+                ",
+            )?;
+
             let mut block_stmt = conn.prepare("PRAGMA table_info(blocks)")?;
             let block_columns: Vec<String> = block_stmt
                 .query_map([], |row| row.get(1))?
@@ -240,6 +271,8 @@ impl Database {
             CREATE TABLE IF NOT EXISTS clips (
                 id TEXT PRIMARY KEY,
                 project_id TEXT NOT NULL,
+                root_id TEXT NOT NULL DEFAULT 'legacy_root',
+                rel_path TEXT NOT NULL DEFAULT '',
                 filename TEXT NOT NULL,
                 file_path TEXT NOT NULL,
                 size_bytes INTEGER NOT NULL,
@@ -274,6 +307,16 @@ impl Database {
                 auto_analyzer_version TEXT,
                 audio_envelope BLOB,
                 FOREIGN KEY (project_id) REFERENCES projects(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS project_roots (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                root_path TEXT NOT NULL,
+                label TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(project_id, root_path),
+                FOREIGN KEY(project_id) REFERENCES projects(id)
             );
 
             CREATE TABLE IF NOT EXISTS blocks (
@@ -378,26 +421,129 @@ impl Database {
         }
     }
 
+    pub fn list_project_roots(&self, project_id: &str) -> SqlResult<Vec<ProjectRoot>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, project_id, root_path, label, created_at
+             FROM project_roots
+             WHERE project_id = ?1
+             ORDER BY created_at ASC, root_path ASC",
+        )?;
+        let roots = stmt
+            .query_map(params![project_id], |row| {
+                Ok(ProjectRoot {
+                    id: row.get(0)?,
+                    project_id: row.get(1)?,
+                    root_path: row.get(2)?,
+                    label: row.get(3)?,
+                    created_at: row.get(4)?,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(roots)
+    }
+
+    pub fn upsert_project_root(&self, root: &ProjectRoot) -> SqlResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO project_roots (id, project_id, root_path, label, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(project_id, root_path) DO UPDATE SET
+                label = excluded.label",
+            params![root.id, root.project_id, root.root_path, root.label, root.created_at],
+        )?;
+        Ok(())
+    }
+
+    pub fn remove_project_root(&self, root_id: &str) -> SqlResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM project_roots WHERE id = ?1", params![root_id])?;
+        Ok(())
+    }
+
+    pub fn update_project_root_label(&self, root_id: &str, label: &str) -> SqlResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE project_roots SET label = ?1 WHERE id = ?2",
+            params![label, root_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_project_root(&self, root_id: &str) -> SqlResult<Option<ProjectRoot>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, project_id, root_path, label, created_at FROM project_roots WHERE id = ?1",
+        )?;
+        let mut rows = stmt.query_map(params![root_id], |row| {
+            Ok(ProjectRoot {
+                id: row.get(0)?,
+                project_id: row.get(1)?,
+                root_path: row.get(2)?,
+                label: row.get(3)?,
+                created_at: row.get(4)?,
+            })
+        })?;
+        match rows.next() {
+            Some(Ok(root)) => Ok(Some(root)),
+            _ => Ok(None),
+        }
+    }
+
     pub fn upsert_clip(&self, clip: &Clip) -> SqlResult<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT OR REPLACE INTO clips (
-                id, project_id, filename, file_path, size_bytes, created_at, duration_ms, fps, width, height,
+            "INSERT INTO clips (
+                id, project_id, root_id, rel_path, filename, file_path, size_bytes, created_at, duration_ms, fps, width, height,
                 video_codec, video_bitrate, format_name, audio_codec, audio_channels, audio_sample_rate,
                 camera_iso, camera_white_balance, audio_summary, timecode, status, rating, flag, notes,
                 shot_size, movement, manual_order, auto_motion, auto_brightness, auto_contrast, auto_temp,
                 auto_tags_json, auto_analyzed_at, auto_analyzer_version, audio_envelope
              )
              VALUES (
-                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
-                ?11, ?12, ?13, ?14, ?15, ?16,
-                ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24,
-                ?25, ?26, ?27, ?28, ?29, ?30, ?31,
-                ?32, ?33, ?34, ?35
-             )",
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
+                ?13, ?14, ?15, ?16, ?17, ?18,
+                ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26,
+                ?27, ?28, ?29, ?30, ?31, ?32, ?33,
+                ?34, ?35, ?36, ?37
+             )
+             ON CONFLICT(id) DO UPDATE SET
+                project_id = excluded.project_id,
+                root_id = excluded.root_id,
+                rel_path = excluded.rel_path,
+                filename = excluded.filename,
+                file_path = excluded.file_path,
+                size_bytes = excluded.size_bytes,
+                created_at = excluded.created_at,
+                duration_ms = excluded.duration_ms,
+                fps = excluded.fps,
+                width = excluded.width,
+                height = excluded.height,
+                video_codec = excluded.video_codec,
+                video_bitrate = excluded.video_bitrate,
+                format_name = excluded.format_name,
+                audio_codec = excluded.audio_codec,
+                audio_channels = excluded.audio_channels,
+                audio_sample_rate = excluded.audio_sample_rate,
+                camera_iso = excluded.camera_iso,
+                camera_white_balance = excluded.camera_white_balance,
+                audio_summary = excluded.audio_summary,
+                timecode = excluded.timecode,
+                status = excluded.status,
+                auto_motion = excluded.auto_motion,
+                auto_brightness = excluded.auto_brightness,
+                auto_contrast = excluded.auto_contrast,
+                auto_temp = excluded.auto_temp,
+                auto_tags_json = excluded.auto_tags_json,
+                auto_analyzed_at = excluded.auto_analyzed_at,
+                auto_analyzer_version = excluded.auto_analyzer_version,
+                audio_envelope = excluded.audio_envelope",
             params![
                 clip.id,
                 clip.project_id,
+                clip.root_id,
+                clip.rel_path,
                 clip.filename,
                 clip.file_path,
                 clip.size_bytes as i64,
@@ -440,7 +586,7 @@ impl Database {
         // ... (truncated for brevity in instructions, I'll provide full block)
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, project_id, filename, file_path, size_bytes, created_at, duration_ms, fps, width, height,
+            "SELECT id, project_id, root_id, rel_path, filename, file_path, size_bytes, created_at, duration_ms, fps, width, height,
                     video_codec, video_bitrate, format_name, audio_codec, audio_channels, audio_sample_rate,
                     camera_iso, camera_white_balance, audio_summary, timecode, status, rating, flag, notes,
                     shot_size, movement, manual_order, auto_motion, auto_brightness, auto_contrast, auto_temp,
@@ -452,39 +598,41 @@ impl Database {
                 Ok(Clip {
                     id: row.get(0)?,
                     project_id: row.get(1)?,
-                    filename: row.get(2)?,
-                    file_path: row.get(3)?,
-                    size_bytes: row.get::<_, i64>(4)? as u64,
-                    created_at: row.get(5)?,
-                    duration_ms: row.get::<_, i64>(6)? as u64,
-                    fps: row.get(7)?,
-                    width: row.get::<_, u32>(8)?,
-                    height: row.get::<_, u32>(9)?,
-                    video_codec: row.get(10)?,
-                    video_bitrate: row.get::<_, i64>(11)? as u64,
-                    format_name: row.get(12)?,
-                    audio_codec: row.get(13)?,
-                    audio_channels: row.get::<_, u32>(14)?,
-                    audio_sample_rate: row.get::<_, u32>(15)?,
-                    camera_iso: row.get(16)?,
-                    camera_white_balance: row.get(17)?,
-                    audio_summary: row.get(18)?,
-                    timecode: row.get(19)?,
-                    status: row.get(20)?,
-                    rating: row.get(21)?,
-                    flag: row.get(22)?,
-                    notes: row.get(23)?,
-                    shot_size: row.get(24)?,
-                    movement: row.get(25)?,
-                    manual_order: row.get(26)?,
-                    auto_motion: row.get(27)?,
-                    auto_brightness: row.get(28)?,
-                    auto_contrast: row.get(29)?,
-                    auto_temp: row.get(30)?,
-                    auto_tags_json: row.get(31)?,
-                    auto_analyzed_at: row.get(32)?,
-                    auto_analyzer_version: row.get(33)?,
-                    audio_envelope: row.get(34)?,
+                    root_id: row.get(2)?,
+                    rel_path: row.get(3)?,
+                    filename: row.get(4)?,
+                    file_path: row.get(5)?,
+                    size_bytes: row.get::<_, i64>(6)? as u64,
+                    created_at: row.get(7)?,
+                    duration_ms: row.get::<_, i64>(8)? as u64,
+                    fps: row.get(9)?,
+                    width: row.get::<_, u32>(10)?,
+                    height: row.get::<_, u32>(11)?,
+                    video_codec: row.get(12)?,
+                    video_bitrate: row.get::<_, i64>(13)? as u64,
+                    format_name: row.get(14)?,
+                    audio_codec: row.get(15)?,
+                    audio_channels: row.get::<_, u32>(16)?,
+                    audio_sample_rate: row.get::<_, u32>(17)?,
+                    camera_iso: row.get(18)?,
+                    camera_white_balance: row.get(19)?,
+                    audio_summary: row.get(20)?,
+                    timecode: row.get(21)?,
+                    status: row.get(22)?,
+                    rating: row.get(23)?,
+                    flag: row.get(24)?,
+                    notes: row.get(25)?,
+                    shot_size: row.get(26)?,
+                    movement: row.get(27)?,
+                    manual_order: row.get(28)?,
+                    auto_motion: row.get(29)?,
+                    auto_brightness: row.get(30)?,
+                    auto_contrast: row.get(31)?,
+                    auto_temp: row.get(32)?,
+                    auto_tags_json: row.get(33)?,
+                    auto_analyzed_at: row.get(34)?,
+                    auto_analyzer_version: row.get(35)?,
+                    audio_envelope: row.get(36)?,
                 })
             })?
             .filter_map(|r| r.ok())
@@ -496,7 +644,7 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         let placeholders: String = ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
         let query = format!(
-            "SELECT id, project_id, filename, file_path, size_bytes, created_at, duration_ms, fps, width, height,
+            "SELECT id, project_id, root_id, rel_path, filename, file_path, size_bytes, created_at, duration_ms, fps, width, height,
                     video_codec, video_bitrate, format_name, audio_codec, audio_channels, audio_sample_rate,
                     camera_iso, camera_white_balance, audio_summary, timecode, status, rating, flag, notes,
                     shot_size, movement, manual_order, auto_motion, auto_brightness, auto_contrast, auto_temp,
@@ -510,39 +658,41 @@ impl Database {
                 Ok(Clip {
                     id: row.get(0)?,
                     project_id: row.get(1)?,
-                    filename: row.get(2)?,
-                    file_path: row.get(3)?,
-                    size_bytes: row.get::<_, i64>(4)? as u64,
-                    created_at: row.get(5)?,
-                    duration_ms: row.get::<_, i64>(6)? as u64,
-                    fps: row.get(7)?,
-                    width: row.get::<_, u32>(8)?,
-                    height: row.get::<_, u32>(9)?,
-                    video_codec: row.get(10)?,
-                    video_bitrate: row.get::<_, i64>(11)? as u64,
-                    format_name: row.get(12)?,
-                    audio_codec: row.get(13)?,
-                    audio_channels: row.get::<_, u32>(14)?,
-                    audio_sample_rate: row.get::<_, u32>(15)?,
-                    camera_iso: row.get(16)?,
-                    camera_white_balance: row.get(17)?,
-                    audio_summary: row.get(18)?,
-                    timecode: row.get(19)?,
-                    status: row.get(20)?,
-                    rating: row.get(21)?,
-                    flag: row.get(22)?,
-                    notes: row.get(23)?,
-                    shot_size: row.get(24)?,
-                    movement: row.get(25)?,
-                    manual_order: row.get(26)?,
-                    auto_motion: row.get(27)?,
-                    auto_brightness: row.get(28)?,
-                    auto_contrast: row.get(29)?,
-                    auto_temp: row.get(30)?,
-                    auto_tags_json: row.get(31)?,
-                    auto_analyzed_at: row.get(32)?,
-                    auto_analyzer_version: row.get(33)?,
-                    audio_envelope: row.get(34)?,
+                    root_id: row.get(2)?,
+                    rel_path: row.get(3)?,
+                    filename: row.get(4)?,
+                    file_path: row.get(5)?,
+                    size_bytes: row.get::<_, i64>(6)? as u64,
+                    created_at: row.get(7)?,
+                    duration_ms: row.get::<_, i64>(8)? as u64,
+                    fps: row.get(9)?,
+                    width: row.get::<_, u32>(10)?,
+                    height: row.get::<_, u32>(11)?,
+                    video_codec: row.get(12)?,
+                    video_bitrate: row.get::<_, i64>(13)? as u64,
+                    format_name: row.get(14)?,
+                    audio_codec: row.get(15)?,
+                    audio_channels: row.get::<_, u32>(16)?,
+                    audio_sample_rate: row.get::<_, u32>(17)?,
+                    camera_iso: row.get(18)?,
+                    camera_white_balance: row.get(19)?,
+                    audio_summary: row.get(20)?,
+                    timecode: row.get(21)?,
+                    status: row.get(22)?,
+                    rating: row.get(23)?,
+                    flag: row.get(24)?,
+                    notes: row.get(25)?,
+                    shot_size: row.get(26)?,
+                    movement: row.get(27)?,
+                    manual_order: row.get(28)?,
+                    auto_motion: row.get(29)?,
+                    auto_brightness: row.get(30)?,
+                    auto_contrast: row.get(31)?,
+                    auto_temp: row.get(32)?,
+                    auto_tags_json: row.get(33)?,
+                    auto_analyzed_at: row.get(34)?,
+                    auto_analyzer_version: row.get(35)?,
+                    audio_envelope: row.get(36)?,
                 })
             })?
             .filter_map(|r| r.ok())
@@ -737,7 +887,7 @@ impl Database {
     pub fn get_clips_for_block(&self, block_id: &str) -> SqlResult<Vec<Clip>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT c.id, c.project_id, c.filename, c.file_path, c.size_bytes, c.created_at, c.duration_ms, c.fps, c.width, c.height,
+            "SELECT c.id, c.project_id, c.root_id, c.rel_path, c.filename, c.file_path, c.size_bytes, c.created_at, c.duration_ms, c.fps, c.width, c.height,
                     c.video_codec, c.video_bitrate, c.format_name, c.audio_codec, c.audio_channels, c.audio_sample_rate,
                     c.camera_iso, c.camera_white_balance, c.audio_summary, c.timecode, c.status, c.rating, c.flag, c.notes,
                     c.shot_size, c.movement, c.manual_order, c.auto_motion, c.auto_brightness, c.auto_contrast, c.auto_temp,
@@ -752,39 +902,41 @@ impl Database {
                 Ok(Clip {
                     id: row.get(0)?,
                     project_id: row.get(1)?,
-                    filename: row.get(2)?,
-                    file_path: row.get(3)?,
-                    size_bytes: row.get::<_, i64>(4)? as u64,
-                    created_at: row.get(5)?,
-                    duration_ms: row.get::<_, i64>(6)? as u64,
-                    fps: row.get(7)?,
-                    width: row.get::<_, u32>(8)?,
-                    height: row.get::<_, u32>(9)?,
-                    video_codec: row.get(10)?,
-                    video_bitrate: row.get::<_, i64>(11)? as u64,
-                    format_name: row.get(12)?,
-                    audio_codec: row.get(13)?,
-                    audio_channels: row.get::<_, u32>(14)?,
-                    audio_sample_rate: row.get::<_, u32>(15)?,
-                    camera_iso: row.get(16)?,
-                    camera_white_balance: row.get(17)?,
-                    audio_summary: row.get(18)?,
-                    timecode: row.get(19)?,
-                    status: row.get(20)?,
-                    rating: row.get(21)?,
-                    flag: row.get(22)?,
-                    notes: row.get(23)?,
-                    shot_size: row.get(24)?,
-                    movement: row.get(25)?,
-                    manual_order: row.get(26)?,
-                    auto_motion: row.get(27)?,
-                    auto_brightness: row.get(28)?,
-                    auto_contrast: row.get(29)?,
-                    auto_temp: row.get(30)?,
-                    auto_tags_json: row.get(31)?,
-                    auto_analyzed_at: row.get(32)?,
-                    auto_analyzer_version: row.get(33)?,
-                    audio_envelope: row.get(34)?,
+                    root_id: row.get(2)?,
+                    rel_path: row.get(3)?,
+                    filename: row.get(4)?,
+                    file_path: row.get(5)?,
+                    size_bytes: row.get::<_, i64>(6)? as u64,
+                    created_at: row.get(7)?,
+                    duration_ms: row.get::<_, i64>(8)? as u64,
+                    fps: row.get(9)?,
+                    width: row.get::<_, u32>(10)?,
+                    height: row.get::<_, u32>(11)?,
+                    video_codec: row.get(12)?,
+                    video_bitrate: row.get::<_, i64>(13)? as u64,
+                    format_name: row.get(14)?,
+                    audio_codec: row.get(15)?,
+                    audio_channels: row.get::<_, u32>(16)?,
+                    audio_sample_rate: row.get::<_, u32>(17)?,
+                    camera_iso: row.get(18)?,
+                    camera_white_balance: row.get(19)?,
+                    audio_summary: row.get(20)?,
+                    timecode: row.get(21)?,
+                    status: row.get(22)?,
+                    rating: row.get(23)?,
+                    flag: row.get(24)?,
+                    notes: row.get(25)?,
+                    shot_size: row.get(26)?,
+                    movement: row.get(27)?,
+                    manual_order: row.get(28)?,
+                    auto_motion: row.get(29)?,
+                    auto_brightness: row.get(30)?,
+                    auto_contrast: row.get(31)?,
+                    auto_temp: row.get(32)?,
+                    auto_tags_json: row.get(33)?,
+                    auto_analyzed_at: row.get(34)?,
+                    auto_analyzer_version: row.get(35)?,
+                    audio_envelope: row.get(36)?,
                 })
             })?
             .filter_map(|r| r.ok())
@@ -904,8 +1056,28 @@ impl Database {
         conn.execute("DELETE FROM blocks WHERE project_id = ?1", params![project_id])?;
         conn.execute("DELETE FROM thumbnails WHERE clip_id IN (SELECT id FROM clips WHERE project_id = ?1)", params![project_id])?;
         conn.execute("DELETE FROM clips WHERE project_id = ?1", params![project_id])?;
+        conn.execute("DELETE FROM project_roots WHERE project_id = ?1", params![project_id])?;
         conn.execute("DELETE FROM projects WHERE id = ?1", params![project_id])?;
         Ok(())
+    }
+
+    pub fn prune_project_clips(&self, project_id: &str, keep_clip_ids: &[String]) -> SqlResult<usize> {
+        let conn = self.conn.lock().unwrap();
+        if keep_clip_ids.is_empty() {
+            let removed = conn.execute("DELETE FROM clips WHERE project_id = ?1", params![project_id])?;
+            return Ok(removed);
+        }
+
+        let placeholders = keep_clip_ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+        let query = format!(
+            "DELETE FROM clips WHERE project_id = ? AND id NOT IN ({})",
+            placeholders
+        );
+        let mut query_params: Vec<String> = Vec::with_capacity(keep_clip_ids.len() + 1);
+        query_params.push(project_id.to_string());
+        query_params.extend_from_slice(keep_clip_ids);
+        let removed = conn.execute(&query, params_from_iter(query_params))?;
+        Ok(removed)
     }
 
     pub fn insert_verification_job(&self, job: &VerificationJob) -> SqlResult<()> {
