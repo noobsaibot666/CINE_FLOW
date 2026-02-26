@@ -13,9 +13,10 @@ interface PrintLayoutProps {
   thumbCount: number;
   onClose: () => void;
   projectLutHash?: string | null;
+  printingForImage?: boolean;
 }
 
-export function PrintLayout({ projectName, clips, thumbnailCache, brandProfile, logoSrc, appVersion = "unknown", thumbCount, onClose, projectLutHash }: PrintLayoutProps) {
+export function PrintLayout({ projectName, clips, thumbnailCache, brandProfile, logoSrc, appVersion = "unknown", thumbCount, onClose, projectLutHash, printingForImage }: PrintLayoutProps) {
   const now = new Date();
   const dateStr = now.toLocaleDateString("en-GB", {
     day: "2-digit",
@@ -26,12 +27,12 @@ export function PrintLayout({ projectName, clips, thumbnailCache, brandProfile, 
   // Generate dynamic styles based on brand
   const dynamicStyles = (brandProfile && brandProfile.colors) ? `
         :root {
-            --color-primary: ${brandProfile.colors.primary || "#6366f1"};
+            --color-primary: ${brandProfile.colors.primary || "#00d1ff"};
         }
     ` : "";
 
   return (
-    <div className="print-layout" onClick={onClose}>
+    <div className={`print-layout ${printingForImage ? "printing-offscreen" : ""}`} onClick={onClose}>
       <style>{printStyles + dynamicStyles}</style>
 
       {/* Split clips into pages (roughly 3 clips per A4 landscape page) */}
@@ -150,7 +151,8 @@ const printStyles = `
 
   .print-page {
     width: 297mm;
-    min-height: 210mm;
+    height: 210mm;
+    overflow: hidden;
     margin: 20px auto;
     padding: 12mm;
     background: white;
@@ -163,12 +165,22 @@ const printStyles = `
     box-shadow: 0 4px 24px rgba(0,0,0,0.3);
   }
 
+  .print-layout.printing-offscreen {
+    background: none !important;
+    position: static !important;
+  }
+  
+  .print-layout.printing-offscreen .print-page {
+    box-shadow: none !important;
+    margin: 0 !important;
+  }
+
   .print-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
     padding-bottom: 8mm;
-    border-bottom: 2px solid var(--color-primary, #6366f1);
+    border-bottom: 2px solid var(--color-primary, #00d1ff);
     margin-bottom: 6mm;
   }
 
@@ -197,7 +209,7 @@ const printStyles = `
     display: inline-flex;
     width: 24px;
     height: 24px;
-    background: var(--color-primary, #6366f1);
+    background: var(--color-primary, #00d1ff);
     color: white;
     border-radius: 4px;
     align-items: center;

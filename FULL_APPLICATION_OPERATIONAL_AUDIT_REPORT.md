@@ -35,6 +35,7 @@ The Wrap Preview application has been audited for structural integrity, module f
 
 - **Exporter**: DaVinci Resolve (FCPXML) and Director Pack (Zip) exporters are implemented.
 - **Print Layout**: PDF generation with branding variables verified.
+- **Export Hardening (Phase 6)**: `jsPDF` exact-scaling enforced to bypass A4 aspect stretching. `html-to-image` rendering sequestered from the translucent UI overlays, guaranteeing pristine output.
 
 ---
 

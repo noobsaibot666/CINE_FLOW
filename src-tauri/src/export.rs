@@ -27,10 +27,6 @@ impl Rational {
     }
 }
 
-pub fn generate_fcpxml(clips: &[Clip], project_name: &str) -> String {
-    generate_fcpxml_structured(clips, project_name, true)
-}
-
 pub fn generate_fcpxml_structured(
     clips: &[Clip],
     project_name: &str,
@@ -385,13 +381,6 @@ mod tests {
             shot_size: None,
             movement: None,
             manual_order: 0,
-            auto_motion: None,
-            auto_brightness: None,
-            auto_contrast: None,
-            auto_temp: None,
-            auto_tags_json: None,
-            auto_analyzed_at: None,
-            auto_analyzer_version: None,
             audio_envelope: None,
             lut_enabled: 0,
         }

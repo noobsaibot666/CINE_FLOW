@@ -47,7 +47,6 @@ struct FfprobeStream {
 
 #[derive(Debug, Deserialize)]
 struct FfprobeFormat {
-    filename: Option<String>,
     format_name: Option<String>,
     duration: Option<String>,
     size: Option<String>,
@@ -59,8 +58,10 @@ struct FfprobeFormat {
 pub fn probe_file(file_path: &str) -> Result<ClipMetadata, String> {
     let output = Command::new("ffprobe")
         .args([
-            "-v", "quiet",
-            "-print_format", "json",
+            "-v",
+            "quiet",
+            "-print_format",
+            "json",
             "-show_format",
             "-show_streams",
             file_path,
@@ -77,16 +78,16 @@ pub fn probe_file(file_path: &str) -> Result<ClipMetadata, String> {
     }
 
     let json_str = String::from_utf8_lossy(&output.stdout);
-    let probe: FfprobeOutput =
-        serde_json::from_str(&json_str).map_err(|e| format!("Failed to parse ffprobe JSON: {}", e))?;
+    let probe: FfprobeOutput = serde_json::from_str(&json_str)
+        .map_err(|e| format!("Failed to parse ffprobe JSON: {}", e))?;
 
     let format = probe.format.ok_or("No format info from ffprobe")?;
     let streams = probe.streams.unwrap_or_default();
 
     // Find video stream
-    let video_stream = streams.iter().find(|s| {
-        s.codec_type.as_deref() == Some("video")
-    });
+    let video_stream = streams
+        .iter()
+        .find(|s| s.codec_type.as_deref() == Some("video"));
 
     // Find audio streams
     let audio_streams: Vec<&FfprobeStream> = streams
@@ -152,10 +153,7 @@ pub fn probe_file(file_path: &str) -> Result<ClipMetadata, String> {
         "No audio".to_string()
     } else {
         let track_count = audio_streams.len();
-        let first_codec = audio_streams[0]
-            .codec_name
-            .as_deref()
-            .unwrap_or("unknown");
+        let first_codec = audio_streams[0].codec_name.as_deref().unwrap_or("unknown");
         let channels = audio_streams[0].channels.unwrap_or(0);
         let ch_label = match channels {
             1 => "Mono",
@@ -167,7 +165,12 @@ pub fn probe_file(file_path: &str) -> Result<ClipMetadata, String> {
         if track_count == 1 {
             format!("{} ({})", first_codec.to_uppercase(), ch_label)
         } else {
-            format!("{} tracks, {} ({})", track_count, first_codec.to_uppercase(), ch_label)
+            format!(
+                "{} tracks, {} ({})",
+                track_count,
+                first_codec.to_uppercase(),
+                ch_label
+            )
         }
     };
 
@@ -207,24 +210,14 @@ pub fn probe_file(file_path: &str) -> Result<ClipMetadata, String> {
         .and_then(|tags| {
             get_tag_value_ci(
                 tags,
-                &[
-                    "iso",
-                    "com.apple.quicktime.iso",
-                    "ISO",
-                    "camera_iso",
-                ],
+                &["iso", "com.apple.quicktime.iso", "ISO", "camera_iso"],
             )
         })
         .or_else(|| {
             format.tags.as_ref().and_then(|tags| {
                 get_tag_value_ci(
                     tags,
-                    &[
-                        "iso",
-                        "com.apple.quicktime.iso",
-                        "ISO",
-                        "camera_iso",
-                    ],
+                    &["iso", "com.apple.quicktime.iso", "ISO", "camera_iso"],
                 )
             })
         })
@@ -261,28 +254,17 @@ pub fn probe_file(file_path: &str) -> Result<ClipMetadata, String> {
     // Timecode — check video stream tags, then any stream tags, then format tags
     let timecode = video_stream
         .and_then(|s| s.tags.as_ref())
-        .and_then(|tags| {
-            get_tag_value_ci(
-                tags,
-                &["timecode", "com.apple.quicktime.timecode"],
-            )
-        })
+        .and_then(|tags| get_tag_value_ci(tags, &["timecode", "com.apple.quicktime.timecode"]))
         .or_else(|| {
             streams.iter().find_map(|stream| {
                 stream.tags.as_ref().and_then(|tags| {
-                    get_tag_value_ci(
-                        tags,
-                        &["timecode", "com.apple.quicktime.timecode"],
-                    )
+                    get_tag_value_ci(tags, &["timecode", "com.apple.quicktime.timecode"])
                 })
             })
         })
         .or_else(|| {
             format.tags.as_ref().and_then(|tags| {
-                get_tag_value_ci(
-                    tags,
-                    &["timecode", "com.apple.quicktime.timecode"],
-                )
+                get_tag_value_ci(tags, &["timecode", "com.apple.quicktime.timecode"])
             })
         });
 
@@ -290,7 +272,10 @@ pub fn probe_file(file_path: &str) -> Result<ClipMetadata, String> {
     let created_at = format
         .tags
         .as_ref()
-        .and_then(|t| t.get("creation_time").and_then(|v| v.as_str().map(|s| s.to_string())))
+        .and_then(|t| {
+            t.get("creation_time")
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+        })
         .unwrap_or_else(|| {
             // Fallback to file modified time
             std::fs::metadata(file_path)

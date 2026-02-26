@@ -59,6 +59,13 @@ export interface ProjectRoot {
     created_at: string;
 }
 
+export interface RecentProject {
+    id: string;
+    name: string;
+    path: string;
+    lastOpened: number;
+}
+
 export interface ThumbnailProgress {
     project_id: string;
     clip_id: string;

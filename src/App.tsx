@@ -19,6 +19,7 @@ import {
   FileDown,
   FileText,
   LayoutGrid,
+  Settings2,
 } from "lucide-react";
 import { ClipList } from "./components/ClipList";
 import { PrintLayout } from "./components/PrintLayout";
@@ -27,10 +28,11 @@ import { ExportPanel } from "./components/ExportPanel";
 import { BlocksView } from "./components/BlocksView";
 import { JobsPanel } from "./components/JobsPanel";
 import { AboutPanel } from "./components/AboutPanel";
+import { SettingsPanel } from "./components/SettingsPanel";
 import { TourGuide, TourStep } from "./components/TourGuide";
-import { exportElementAsImage } from "./utils/ExportUtils";
+import { exportElementAsImage, exportElementsAsPdf } from "./utils/ExportUtils";
 import appLogo from "./assets/Icon_square_rounded.svg";
-import { AppInfo, Clip, ClipWithThumbnails, JobInfo, ScanResult, ThumbnailProgress } from "./types";
+import { AppInfo, Clip, ClipWithThumbnails, JobInfo, ScanResult, ThumbnailProgress, RecentProject } from "./types";
 import {
   LookbookSortMode,
   MOVEMENT_CANONICAL,
@@ -57,7 +59,7 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boole
         <div style={{ padding: 40, textAlign: 'center', background: '#0f172a', color: 'white', height: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
           <h2 style={{ fontSize: '1.5rem', fontWeight: 700, marginBottom: 16 }}>Something went wrong</h2>
           <p style={{ color: '#94a3b8', maxWidth: 400, marginBottom: 24 }}>{this.state.error?.message || "An unexpected error occurred in the application UI."}</p>
-          <button style={{ padding: '10px 20px', background: '#6366f1', border: 'none', borderRadius: 8, color: 'white', fontWeight: 600, cursor: 'pointer' }} onClick={() => window.location.reload()}>Reload App</button>
+          <button style={{ padding: '10px 20px', background: 'var(--color-accent)', border: 'none', borderRadius: 8, color: '#000', fontWeight: 600, cursor: 'pointer' }} onClick={() => window.location.reload()}>Reload App</button>
         </div>
       );
     }
@@ -76,6 +78,17 @@ function AppContent() {
   const [scanning, setScanning] = useState(false);
   const [extracting, setExtracting] = useState(false);
   const [extractProgress, setExtractProgress] = useState({ done: 0, total: 0 });
+  const [recentProjects, setRecentProjects] = useState<RecentProject[]>(() => {
+    const saved = localStorage.getItem("wp_recent_projects");
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch (e) {
+        return [];
+      }
+    }
+    return [];
+  });
   const [showPrint, setShowPrint] = useState(false);
   const [printingForImage, setPrintingForImage] = useState(false);
   const [preparingExport, setPreparingExport] = useState<{ kind: "pdf" | "image"; message: string } | null>(null);
@@ -117,6 +130,7 @@ function AppContent() {
   });
   const [shotSizeFilter, setShotSizeFilter] = useState<string>(() => localStorage.getItem("wp_shot_size_filter") || "all");
   const [playingClipId, setPlayingClipId] = useState<string | null>(null);
+  const [playingProgress, setPlayingProgress] = useState(0);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   // Settings with Persistence
@@ -127,6 +141,22 @@ function AppContent() {
   const [namingTemplate] = useState<string>(() => {
     return localStorage.getItem("wp_namingTemplate") || "ContactSheet_{PROJECT}_{DATE}";
   });
+
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [customShotSizes, setCustomShotSizes] = useState<string[]>([]);
+  const [customMovements, setCustomMovements] = useState<string[]>([]);
+
+  const loadCustomTaxonomy = useCallback(() => {
+    if (!projectId) return;
+    const savedShots = localStorage.getItem(`wp_custom_shots_${projectId}`);
+    const savedMoves = localStorage.getItem(`wp_custom_moves_${projectId}`);
+    setCustomShotSizes(savedShots ? savedShots.split(',').map(s => s.trim()).filter(Boolean) : []);
+    setCustomMovements(savedMoves ? savedMoves.split(',').map(s => s.trim()).filter(Boolean) : []);
+  }, [projectId]);
+
+  useEffect(() => {
+    loadCustomTaxonomy();
+  }, [loadCustomTaxonomy]);
 
   useEffect(() => {
     localStorage.setItem("wp_thumbCount", thumbCount.toString());
@@ -345,6 +375,7 @@ function AppContent() {
         audioRef.current = null;
       }
       setPlayingClipId(null);
+      setPlayingProgress(0);
       return;
     }
 
@@ -358,10 +389,19 @@ function AppContent() {
     try {
       const src = convertFileSrc(clip.file_path);
       const audio = new Audio(src);
-      audio.onended = () => setPlayingClipId(null);
+      audio.onended = () => {
+        setPlayingClipId(null);
+        setPlayingProgress(0);
+      };
+      audio.ontimeupdate = () => {
+        if (audio.duration) {
+          setPlayingProgress((audio.currentTime / audio.duration) * 100);
+        }
+      };
       audio.onerror = (e) => {
         console.error("Audio playback error", e);
         setPlayingClipId(null);
+        setPlayingProgress(0);
       };
       audioRef.current = audio;
       setPlayingClipId(id);
@@ -551,6 +591,62 @@ function AppContent() {
     };
   }, [projectId, refreshProjectClips]);
 
+  const handleCloseProject = useCallback(() => {
+    setProjectId(null);
+    setProjectName("");
+    setClips([]);
+    setSelectedClipIds(new Set());
+    localStorage.removeItem("wp_project_id");
+    localStorage.removeItem("wp_project_name");
+  }, []);
+
+  const addRecentProject = useCallback((id: string, name: string, path: string) => {
+    setRecentProjects(prev => {
+      const filtered = prev.filter(p => p.path !== path);
+      const next = [{ id, name, path, lastOpened: Date.now() }, ...filtered].slice(0, 5);
+      localStorage.setItem("wp_recent_projects", JSON.stringify(next));
+      return next;
+    });
+  }, []);
+
+  const handleOpenRecentProject = useCallback(async (path: string, targetTab?: "shot-planner" | "media-workspace" | "contact" | "blocks" | "all") => {
+    setScanning(true);
+    handleCloseProject();
+    if (targetTab) setPostScanTab(targetTab);
+
+    try {
+      const result = await invoke<ScanResult>("scan_folder", {
+        folderPath: path,
+      });
+
+      setProjectId(result.project_id);
+      setProjectName(result.project_name);
+      setClips(result.clips.map((clip) => ({ clip, thumbnails: [] })));
+      addRecentProject(result.project_id, result.project_name, path);
+
+      /* 
+      setExtracting(true);
+      setExtractProgress({ done: 0, total: result.clip_count });
+      invoke("extract_thumbnails", { projectId: result.project_id }).catch(
+        (e) => {
+          setExtracting(false);
+          console.error("Failed executing thumbnail extraction", e);
+        }
+      );
+      */
+    } catch (error) {
+      console.error("Failed to open recent project", error);
+      setUiError({ title: "Failed to open recent project", hint: "The folder may have moved or been deleted." });
+      // Remove it from the list if it fails
+      setRecentProjects(prev => {
+        const next = prev.filter(p => p.path !== path);
+        localStorage.setItem("wp_recent_projects", JSON.stringify(next));
+        return next;
+      });
+      setScanning(false);
+    }
+  }, [handleCloseProject, addRecentProject]);
+
   const handleSelectFolder = useCallback(async (targetTab?: "shot-planner" | "media-workspace" | "contact" | "blocks" | "all") => {
     const selected = await open({
       directory: true,
@@ -561,11 +657,7 @@ function AppContent() {
     if (!selected) return;
 
     setScanning(true);
-    setClips([]);
-    setThumbnailCache({});
-    setProjectId(null);
-    setSelectedClipIds(new Set());
-    setSelectedBlockIds([]);
+    handleCloseProject(); // Clear current project state
     if (targetTab) setPostScanTab(targetTab);
 
     try {
@@ -576,6 +668,7 @@ function AppContent() {
       setProjectId(result.project_id);
       setProjectName(result.project_name);
       setClips(result.clips.map((clip) => ({ clip, thumbnails: [] })));
+      addRecentProject(result.project_id, result.project_name, selected as string);
 
       /* 
       setExtracting(true);
@@ -766,13 +859,17 @@ function AppContent() {
       document.body.classList.add("printing-contact-sheet");
       try {
         await waitForPrintAssets();
-        window.print();
+        const pages = Array.from(document.querySelectorAll(".print-page")) as HTMLElement[];
+        if (pages.length === 0) {
+          throw new Error("No pages found for export.");
+        }
+        await exportElementsAsPdf(pages, getExportFilename());
         setUiError(null);
       } catch (err) {
         console.error(err);
         setUiError({
-          title: "PDF export blocked",
-          hint: "No thumbnails/data were ready for export. Re-run check clips and try again.",
+          title: "PDF export failed",
+          hint: "Retry after thumbnails load. If it persists, ensure all pages are visible.",
         });
       } finally {
         document.body.classList.remove("printing-contact-sheet");
@@ -839,6 +936,7 @@ function AppContent() {
               if (!printingForImage) setShowPrint(false);
             }}
             projectLutHash={projectLut?.hash || null}
+            printingForImage={printingForImage}
           />
         </div>
       )}
@@ -913,12 +1011,28 @@ function AppContent() {
               )}
             </div>
 
-            <button className="btn btn-secondary" onClick={() => setJobsOpen(true)}>
-              <BriefcaseBusiness size={16} />
-              <span className={runningJobs > 0 ? "shimmer-text" : ""}>
-                Jobs {runningJobs > 0 ? `(${runningJobs})` : ""}
-              </span>
-              <span className={`clip-status-dot ${failedJobs > 0 ? "fail" : runningJobs > 0 ? "warn" : "ok"} ${runningJobs > 0 ? "pulse-glow" : ""}`} />
+            <button
+              className="btn btn-secondary btn-icon"
+              onClick={() => setSettingsOpen(true)}
+              title="Project Settings"
+              style={{ marginRight: 8 }}
+            >
+              <Settings2 size={18} />
+            </button>
+            <button className="btn btn-jobs" onClick={() => setJobsOpen(true)}>
+              <div className="jobs-indicator-content">
+                <BriefcaseBusiness size={16} />
+                <span className={runningJobs > 0 ? "shimmer-text" : ""}>
+                  Jobs {runningJobs > 0 ? `(${runningJobs})` : ""}
+                </span>
+              </div>
+              {runningJobs > 0 && (
+                <div className="jobs-progress-bar">
+                  <div className="jobs-progress-fill pulse-glow" />
+                </div>
+              )}
+              {runningJobs === 0 && failedJobs > 0 && <span className="clip-status-dot fail" />}
+              {runningJobs === 0 && failedJobs === 0 && <span className="clip-status-dot ok" />}
             </button>
           </>
         </div>
@@ -1066,7 +1180,7 @@ function AppContent() {
                       )}
                       <select className="input-select" value={shotSizeFilter} onChange={(e) => setShotSizeFilter(e.target.value)}>
                         <option value="all">All Shot Sizes</option>
-                        {[...SHOT_SIZE_CANONICAL, ...(enableOptionalShotTags ? SHOT_SIZE_OPTIONAL : [])].map((size) => (
+                        {[...SHOT_SIZE_CANONICAL, ...(enableOptionalShotTags ? SHOT_SIZE_OPTIONAL : []), ...customShotSizes].map((size) => (
                           <option key={size} value={size}>{size}</option>
                         ))}
                       </select>
@@ -1131,16 +1245,18 @@ function AppContent() {
                 thumbCount={thumbCount}
                 onUpdateMetadata={handleUpdateMetadata}
                 onHoverClip={setHoveredClipId}
-                shotSizeOptions={[...SHOT_SIZE_CANONICAL, ...(enableOptionalShotTags ? SHOT_SIZE_OPTIONAL : [])]}
-                movementOptions={[...MOVEMENT_CANONICAL]}
+                shotSizeOptions={[...SHOT_SIZE_CANONICAL, ...(enableOptionalShotTags ? SHOT_SIZE_OPTIONAL : []), ...customShotSizes]}
+                movementOptions={[...MOVEMENT_CANONICAL, ...customMovements]}
                 lookbookSortMode={lookbookSortMode}
                 groupByShotSize={activeTab === 'shot-planner'}
                 onPromoteClip={handlePromoteClip}
                 onPlayClip={handlePlayClip}
                 playingClipId={playingClipId}
+                playingProgress={playingProgress}
                 focusedClipId={hoveredClipId}
                 projectLutHash={projectLut?.hash || null}
                 lutRenderNonce={lutRenderNonce}
+                hideLutControls={activeTab === 'shot-planner'}
               />
             </div>
           ) : (
@@ -1159,6 +1275,24 @@ function AppContent() {
                   {scanning ? <div className="spinner" /> : <FolderOpen size={18} />}
                   <span>{scanning ? "Scanning..." : "Open Media Folder"}</span>
                 </button>
+
+                {recentProjects.length > 0 && (
+                  <div className="recent-projects-list">
+                    <h3 className="recent-projects-title">Recent Projects</h3>
+                    {recentProjects.map((p) => (
+                      <button
+                        key={p.id}
+                        className="recent-project-btn"
+                        onClick={() => handleOpenRecentProject(p.path, activeTab)}
+                        disabled={scanning}
+                      >
+                        <FolderOpen size={14} />
+                        <span className="recent-project-name">{p.name || "Untitled"}</span>
+                        <span className="recent-project-path">{p.path}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           )
@@ -1182,6 +1316,24 @@ function AppContent() {
                   {scanning ? <div className="spinner" /> : <FolderOpen size={18} />}
                   <span>{scanning ? "Scanning..." : "Open Media Folder"}</span>
                 </button>
+
+                {recentProjects.length > 0 && (
+                  <div className="recent-projects-list">
+                    <h3 className="recent-projects-title">Recent Projects</h3>
+                    {recentProjects.map((p) => (
+                      <button
+                        key={p.id}
+                        className="recent-project-btn"
+                        onClick={() => handleOpenRecentProject(p.path, "blocks")}
+                        disabled={scanning}
+                      >
+                        <FolderOpen size={14} />
+                        <span className="recent-project-name">{p.name || "Untitled"}</span>
+                        <span className="recent-project-path">{p.path}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           )
@@ -1328,6 +1480,12 @@ function AppContent() {
           onClose={() => setShowExportPanel(false)}
         />
       )}
+      <SettingsPanel
+        open={settingsOpen}
+        projectId={projectId}
+        onClose={() => setSettingsOpen(false)}
+        onSettingsSaved={loadCustomTaxonomy}
+      />
       <JobsPanel open={jobsOpen} jobs={jobs} onClose={() => setJobsOpen(false)} onRefresh={refreshJobs} />
       <AboutPanel open={aboutOpen} info={appInfo} onResetTour={resetTour} onClose={() => setAboutOpen(false)} />
 

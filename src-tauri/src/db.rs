@@ -687,26 +687,6 @@ impl Database {
         Ok(())
     }
 
-    pub fn get_project_root(&self, root_id: &str) -> SqlResult<Option<ProjectRoot>> {
-        let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT id, project_id, root_path, label, created_at FROM project_roots WHERE id = ?1",
-        )?;
-        let mut rows = stmt.query_map(params![root_id], |row| {
-            Ok(ProjectRoot {
-                id: row.get(0)?,
-                project_id: row.get(1)?,
-                root_path: row.get(2)?,
-                label: row.get(3)?,
-                created_at: row.get(4)?,
-            })
-        })?;
-        match rows.next() {
-            Some(Ok(root)) => Ok(Some(root)),
-            _ => Ok(None),
-        }
-    }
-
     pub fn upsert_clip(&self, clip: &Clip) -> SqlResult<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
@@ -1361,29 +1341,6 @@ impl Database {
             .filter_map(|r| r.ok())
             .collect();
         Ok(ids)
-    }
-
-    pub fn delete_project_data(&self, project_id: &str) -> SqlResult<()> {
-        let conn = self.conn.lock().unwrap();
-        conn.execute("DELETE FROM block_clips WHERE block_id IN (SELECT id FROM blocks WHERE project_id = ?1)", params![project_id])?;
-        conn.execute(
-            "DELETE FROM blocks WHERE project_id = ?1",
-            params![project_id],
-        )?;
-        conn.execute(
-            "DELETE FROM thumbnails WHERE clip_id IN (SELECT id FROM clips WHERE project_id = ?1)",
-            params![project_id],
-        )?;
-        conn.execute(
-            "DELETE FROM clips WHERE project_id = ?1",
-            params![project_id],
-        )?;
-        conn.execute(
-            "DELETE FROM project_roots WHERE project_id = ?1",
-            params![project_id],
-        )?;
-        conn.execute("DELETE FROM projects WHERE id = ?1", params![project_id])?;
-        Ok(())
     }
 
     pub fn prune_project_clips(

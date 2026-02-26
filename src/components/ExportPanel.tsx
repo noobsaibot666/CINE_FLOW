@@ -167,78 +167,100 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({
             <FileDown size={28} />
           </div>
           <div className="export-header-text">
-            <h2>Export to DaVinci Resolve</h2>
-            <p>Generate an FCPXML timeline from your selection.</p>
+            <h2>Delivery & Export</h2>
+            <p>Group clips into timelines or packs.</p>
           </div>
         </div>
 
-        <div className="export-options-grid">
-          <div className="export-section">
-            <label className="section-label">Step 1: Delivery Type</label>
-            <div className="delivery-type-toggle">
-              <button
-                onClick={() => setDeliveryType("resolve")}
-                className={`btn-delivery ${deliveryType === "resolve" ? "active" : ""}`}
-              >
-                Resolve FCPXML
-              </button>
-              <button
-                onClick={() => setDeliveryType("director_pack")}
-                className={`btn-delivery ${deliveryType === "director_pack" ? "active" : ""}`}
-              >
-                Director Pack
-              </button>
+        <div className="export-scroll-area">
+          <div className="export-options-grid">
+            <div className="export-section">
+              <label className="section-label">Step 1: Choose Delivery Format</label>
+              <div className="delivery-type-toggle">
+                <button
+                  onClick={() => setDeliveryType("resolve")}
+                  className={`btn-delivery ${deliveryType === "resolve" ? "active" : ""}`}
+                >
+                  <Grid2X2 size={16} />
+                  <span>Resolve FCPXML</span>
+                </button>
+                <button
+                  onClick={() => setDeliveryType("director_pack")}
+                  className={`btn-delivery ${deliveryType === "director_pack" ? "active" : ""}`}
+                >
+                  <Package size={16} />
+                  <span>Director Pack</span>
+                </button>
+              </div>
             </div>
-          </div>
-          <button
-            className="btn-link preset-btn"
-            onClick={() => {
-              setDeliveryType("director_pack");
-              setScope("current_filter");
-            }}
-          >
-            Most common preset
-          </button>
+            <div className="export-section">
+              <div className="section-header-row">
+                <label className="section-label">Step 2: Define Scope</label>
+                <button
+                  className="btn-link preset-btn"
+                  onClick={() => {
+                    setDeliveryType("director_pack");
+                    setScope("current_filter");
+                  }}
+                >
+                  Use preset
+                </button>
+              </div>
+              <div className="scope-grid">
+                <button onClick={() => setScope("picks")} disabled={picksCount === 0} className={`scope-item-compact ${scope === "picks" ? "active" : ""} ${picksCount === 0 ? "disabled" : ""}`}>
+                  <Check size={16} />
+                  <div className="scope-meta">
+                    <span className="scope-name">Picks</span>
+                    <span className="scope-val">{picksCount}</span>
+                  </div>
+                </button>
 
-          <div className="export-section">
-            <label className="section-label">Step 2: Scope</label>
-            <div className="scope-list">
+                <button onClick={() => setScope("rated")} disabled={ratedCount === 0} className={`scope-item-compact ${scope === "rated" ? "active" : ""} ${ratedCount === 0 ? "disabled" : ""}`}>
+                  <Star size={16} />
+                  <div className="scope-meta">
+                    <span className="scope-name">Rated</span>
+                    <span className="scope-val">{ratedCount}</span>
+                  </div>
+                </button>
 
-              <button onClick={() => setScope("picks")} disabled={picksCount === 0} className={`scope-item ${scope === "picks" ? "active" : ""} ${picksCount === 0 ? "disabled" : ""}`}>
-                <div className="scope-icon"><Check size={20} /></div>
-                <div className="scope-info"><div className="scope-title">Picks Only</div><div className="scope-count">{picksCount} clips selected</div></div>
-              </button>
+                <button onClick={() => setScope("current_filter")} className={`scope-item-compact ${scope === "current_filter" ? "active" : ""}`}>
+                  <Grid2X2 size={16} />
+                  <div className="scope-meta">
+                    <span className="scope-name">Active View</span>
+                    <span className="scope-val">Match Filter</span>
+                  </div>
+                </button>
 
-              <button onClick={() => setScope("rated")} disabled={ratedCount === 0} className={`scope-item ${scope === "rated" ? "active" : ""} ${ratedCount === 0 ? "disabled" : ""}`}>
-                <div className="scope-icon"><Star size={20} /></div>
-                <div className="scope-info"><div className="scope-title">Rated ({">"} 0)</div><div className="scope-count">{ratedCount} clips</div></div>
-              </button>
+                <button onClick={() => setScope("all")} className={`scope-item-compact ${scope === "all" ? "active" : ""}`}>
+                  <Film size={16} />
+                  <div className="scope-meta">
+                    <span className="scope-name">All Media</span>
+                    <span className="scope-val">{allCount}</span>
+                  </div>
+                </button>
 
-              <button onClick={() => setScope("rated_min")} disabled={ratedMinCount === 0} className={`scope-item ${scope === "rated_min" ? "active" : ""} ${ratedMinCount === 0 ? "disabled" : ""}`}>
-                <div className="scope-icon"><Star size={20} /></div>
-                <div className="scope-info">
-                  <div className="scope-title">Rating {"≥"} {minRating}</div>
-                  <div className="scope-count">{ratedMinCount} clips</div>
-                  {scope === "rated_min" && (
-                    <input type="range" min={1} max={5} value={minRating} onChange={(e) => setMinRating(Number(e.target.value))} className="range-input" />
-                  )}
+                <button onClick={() => setScope("selected_blocks")} disabled={selectedBlockIds.length === 0} className={`scope-item-compact ${scope === "selected_blocks" ? "active" : ""} ${selectedBlockIds.length === 0 ? "disabled" : ""}`}>
+                  <Package size={16} />
+                  <div className="scope-meta">
+                    <span className="scope-name">Selected Blocks</span>
+                    <span className="scope-val">{selectedBlockIds.length}</span>
+                  </div>
+                </button>
+
+                <button onClick={() => setScope("rated_min")} disabled={ratedMinCount === 0} className={`scope-item-compact ${scope === "rated_min" ? "active" : ""} ${ratedMinCount === 0 ? "disabled" : ""}`}>
+                  <Star size={16} />
+                  <div className="scope-meta">
+                    <span className="scope-name">Min Rating</span>
+                    <span className="scope-val">≥ {minRating}</span>
+                  </div>
+                </button>
+              </div>
+
+              {scope === "rated_min" && (
+                <div className="rating-slider-box">
+                  <input type="range" min={1} max={5} value={minRating} onChange={(e) => setMinRating(Number(e.target.value))} className="range-input" />
                 </div>
-              </button>
-
-              <button onClick={() => setScope("selected_blocks")} disabled={selectedBlockIds.length === 0} className={`scope-item ${scope === "selected_blocks" ? "active" : ""} ${selectedBlockIds.length === 0 ? "disabled" : ""}`}>
-                <div className="scope-icon"><Grid2X2 size={20} /></div>
-                <div className="scope-info"><div className="scope-title">Selected Blocks</div><div className="scope-count">{selectedBlockIds.length} blocks</div></div>
-              </button>
-
-              <button onClick={() => setScope("current_filter")} className={`scope-item ${scope === "current_filter" ? "active" : ""}`}>
-                <div className="scope-icon"><Star size={20} /></div>
-                <div className="scope-info"><div className="scope-title">Current View Filter</div><div className="scope-count">{currentFilterMode === "rated_min" ? `Rating >= ${currentFilterMinRating}` : currentFilterMode === "picks" ? "Picks only" : "All clips"}</div></div>
-              </button>
-
-              <button onClick={() => setScope("all")} className={`scope-item ${scope === "all" ? "active" : ""}`}>
-                <div className="scope-icon"><Film size={20} /></div>
-                <div className="scope-info"><div className="scope-title">All Media</div><div className="scope-count">{allCount} clips</div></div>
-              </button>
+              )}
             </div>
           </div>
         </div>

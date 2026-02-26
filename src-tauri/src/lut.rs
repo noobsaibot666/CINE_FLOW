@@ -86,25 +86,6 @@ impl Lut3D {
         })
     }
 
-    pub fn sample(&self, r: f32, g: f32, b: f32) -> [f32; 3] {
-        let size_f = (self.size - 1) as f32;
-
-        let r_norm = (r - self.domain_min[0]) / (self.domain_max[0] - self.domain_min[0]);
-        let g_norm = (g - self.domain_min[1]) / (self.domain_max[1] - self.domain_min[1]);
-        let b_norm = (b - self.domain_min[2]) / (self.domain_max[2] - self.domain_min[2]);
-
-        let r_idx = (r_norm.clamp(0.0, 1.0) * size_f) as i32;
-        let g_idx = (g_norm.clamp(0.0, 1.0) * size_f) as i32;
-        let b_idx = (b_norm.clamp(0.0, 1.0) * size_f) as i32;
-
-        let r_idx = r_idx.clamp(0, self.size as i32 - 1) as usize;
-        let g_idx = g_idx.clamp(0, self.size as i32 - 1) as usize;
-        let b_idx = b_idx.clamp(0, self.size as i32 - 1) as usize;
-
-        // Simple nearest neighbor for now; TODO implement trilinear interpolation
-        self.get_value(r_idx, g_idx, b_idx)
-    }
-
     fn get_value(&self, r: usize, g: usize, b: usize) -> [f32; 3] {
         let idx = r + g * self.size + b * self.size * self.size;
         self.data.get(idx).copied().unwrap_or([0.0, 0.0, 0.0])

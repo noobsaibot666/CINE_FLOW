@@ -18,6 +18,7 @@ interface ClipListProps {
     onPromoteClip: (id: string) => void;
     onPlayClip: (id: string | null) => void;
     playingClipId: string | null;
+    playingProgress: number;
     shotSizeOptions: string[];
     movementOptions: string[];
     lookbookSortMode: LookbookSortMode;
@@ -25,6 +26,7 @@ interface ClipListProps {
     focusedClipId: string | null;
     projectLutHash: string | null;
     lutRenderNonce: number;
+    hideLutControls?: boolean;
 }
 
 export function ClipList({
@@ -39,13 +41,15 @@ export function ClipList({
     onPromoteClip,
     onPlayClip,
     playingClipId,
+    playingProgress,
     shotSizeOptions,
     movementOptions,
     lookbookSortMode,
     groupByShotSize,
     focusedClipId,
     projectLutHash,
-    lutRenderNonce
+    lutRenderNonce,
+    hideLutControls = false
 }: ClipListProps) {
     if (clips.length === 0) return null;
 
@@ -79,9 +83,11 @@ export function ClipList({
                                 onPromoteClip={() => onPromoteClip(item.clip.id)}
                                 onPlayClip={() => onPlayClip(item.clip.id)}
                                 isPlaying={playingClipId === item.clip.id}
+                                progress={playingClipId === item.clip.id ? playingProgress : 0}
                                 isFocused={focusedClipId === item.clip.id}
                                 projectLutHash={projectLutHash}
                                 lutRenderNonce={lutRenderNonce}
+                                hideLutControls={hideLutControls}
                             />
                         </div>
                     );
@@ -113,9 +119,11 @@ function ClipCard({
     onPromoteClip,
     onPlayClip,
     isPlaying,
+    progress,
     isFocused,
     projectLutHash,
     lutRenderNonce,
+    hideLutControls
 }: {
     item: ClipWithThumbnails;
     thumbnailCache: Record<string, string>;
@@ -132,9 +140,11 @@ function ClipCard({
     onPromoteClip: () => void;
     onPlayClip: () => void;
     isPlaying: boolean;
+    progress: number;
     isFocused: boolean;
     projectLutHash: string | null;
     lutRenderNonce: number;
+    hideLutControls?: boolean;
 }) {
     const { clip, thumbnails } = item;
     const audioHealth = getAudioBadge(clip.audio_summary, clip.audio_envelope);
@@ -213,19 +223,21 @@ function ClipCard({
                         ))}
                     </div>
                     <div className="clip-flags">
-                        <button
-                            className={`btn-flag btn-lut ${clip.lut_enabled === 1 ? 'active' : ''}`}
-                            onClick={(e) => {
-                                e.stopPropagation();
-                                if (!projectLutHash) return;
-                                onUpdateMetadata(clip.id, { lut_enabled: clip.lut_enabled === 1 ? 0 : 1 });
-                            }}
-                            title={projectLutHash ? "LUT Preview On/Off" : "Load project LUT to enable"}
-                            aria-label="Toggle LUT Preview"
-                            disabled={!projectLutHash}
-                        >
-                            <span>LUT</span>
-                        </button>
+                        {!hideLutControls && (
+                            <button
+                                className={`btn-flag btn-lut ${clip.lut_enabled === 1 ? 'active' : ''}`}
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (!projectLutHash) return;
+                                    onUpdateMetadata(clip.id, { lut_enabled: clip.lut_enabled === 1 ? 0 : 1 });
+                                }}
+                                title={projectLutHash ? "LUT Preview On/Off" : "Load project LUT to enable"}
+                                aria-label="Toggle LUT Preview"
+                                disabled={!projectLutHash}
+                            >
+                                <span>LUT</span>
+                            </button>
+                        )}
                         <button
                             className={`btn-flag btn-reject ${clip.flag === 'reject' ? 'active' : ''}`}
                             onClick={(e) => {
@@ -294,6 +306,7 @@ function ClipCard({
                     envelope={clip.audio_envelope}
                     onPlayToggle={onPlayClip}
                     isPlaying={isPlaying}
+                    progress={progress}
                 />
             )}
 
@@ -338,10 +351,7 @@ function ClipCard({
             </div>
 
             <div className="clip-metadata-compact" style={{ padding: "0 12px 12px" }}>
-                {clip.auto_motion && <span className="metadata-tag">Auto: {clip.auto_motion}</span>}
-                {clip.auto_brightness && <span className="metadata-tag">Auto: {clip.auto_brightness}</span>}
-                {clip.auto_contrast && <span className="metadata-tag">Auto: {clip.auto_contrast}</span>}
-                {clip.auto_temp && <span className="metadata-tag">Auto: {clip.auto_temp}</span>}
+                {/* Auto analysis fields removed per user request */}
             </div>
         </div>
     );

@@ -7,6 +7,7 @@ interface WaveformProps {
     width?: string;
     onPlayToggle?: () => void;
     isPlaying?: boolean;
+    progress?: number; // 0 to 100
 }
 
 export const Waveform: React.FC<WaveformProps> = ({
@@ -15,7 +16,8 @@ export const Waveform: React.FC<WaveformProps> = ({
     height = 36,
     width = "100%",
     onPlayToggle,
-    isPlaying = false
+    isPlaying = false,
+    progress = 0
 }) => {
     const id = React.useId();
     const gradientId = `waveform-gradient-${id.replace(/:/g, '')}`;
@@ -63,6 +65,31 @@ export const Waveform: React.FC<WaveformProps> = ({
                         strokeLinejoin="round"
                         strokeLinecap="round"
                     />
+
+                    {/* Playhead */}
+                    {progress > 0 && (
+                        <>
+                            <line
+                                x1={progress}
+                                y1="0"
+                                x2={progress}
+                                y2="100"
+                                stroke="var(--color-accent-blue, #22d3ee)"
+                                strokeWidth="2"
+                                vectorEffect="non-scaling-stroke"
+                            />
+                            {/* Progress Overlay (darken played part) */}
+                            <rect
+                                x="0"
+                                y="0"
+                                width={progress}
+                                height="100"
+                                fill="var(--color-accent-blue, #22d3ee)"
+                                fillOpacity="0.15"
+                                pointerEvents="none"
+                            />
+                        </>
+                    )}
                 </svg>
             </div>
 
