@@ -19,7 +19,10 @@ pub struct ClipMetadata {
     pub audio_channels: u32,
     pub audio_sample_rate: u32,
     pub camera_iso: Option<String>,
+    pub camera_lens: Option<String>,
     pub camera_white_balance: Option<String>,
+    pub camera_aperture: Option<String>,
+    pub camera_angle: Option<String>,
     pub audio_summary: String,
     pub timecode: Option<String>,
 }
@@ -224,6 +227,57 @@ pub fn probe_file(file_path: &str) -> Result<ClipMetadata, String> {
         })
         .and_then(|raw| extract_numeric_like(&raw));
 
+    let camera_lens = video_stream
+        .and_then(|s| s.tags.as_ref())
+        .and_then(|tags| get_tag_value_ci(tags, &["lens", "LensModel", "com.apple.quicktime.lens"]))
+        .or_else(|| {
+            format.tags.as_ref().and_then(|tags| {
+                get_tag_value_ci(tags, &["lens", "LensModel", "com.apple.quicktime.lens"])
+            })
+        });
+
+    let camera_aperture = video_stream
+        .and_then(|s| s.tags.as_ref())
+        .and_then(|tags| {
+            get_tag_value_ci(
+                tags,
+                &["aperture", "f-number", "com.apple.quicktime.aperture"],
+            )
+        })
+        .or_else(|| {
+            format.tags.as_ref().and_then(|tags| {
+                get_tag_value_ci(
+                    tags,
+                    &["aperture", "f-number", "com.apple.quicktime.aperture"],
+                )
+            })
+        });
+
+    let camera_angle = video_stream
+        .and_then(|s| s.tags.as_ref())
+        .and_then(|tags| {
+            get_tag_value_ci(
+                tags,
+                &[
+                    "shutter_angle",
+                    "angle",
+                    "com.apple.quicktime.shutter_angle",
+                ],
+            )
+        })
+        .or_else(|| {
+            format.tags.as_ref().and_then(|tags| {
+                get_tag_value_ci(
+                    tags,
+                    &[
+                        "shutter_angle",
+                        "angle",
+                        "com.apple.quicktime.shutter_angle",
+                    ],
+                )
+            })
+        });
+
     let camera_white_balance = video_stream
         .and_then(|s| s.tags.as_ref())
         .and_then(|tags| {
@@ -305,6 +359,9 @@ pub fn probe_file(file_path: &str) -> Result<ClipMetadata, String> {
         audio_sample_rate,
         camera_iso,
         camera_white_balance,
+        camera_lens,
+        camera_aperture,
+        camera_angle,
         audio_summary,
         timecode,
     })

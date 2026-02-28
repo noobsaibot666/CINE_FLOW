@@ -372,6 +372,9 @@ mod tests {
             audio_sample_rate: 48_000,
             camera_iso: None,
             camera_white_balance: None,
+            camera_lens: None,
+            camera_aperture: None,
+            camera_angle: None,
             audio_summary: "AAC".to_string(),
             timecode: None,
             status: "ok".to_string(),
@@ -383,6 +386,7 @@ mod tests {
             manual_order: 0,
             audio_envelope: None,
             lut_enabled: 0,
+            thumb_range_seconds: None,
         }
     }
 

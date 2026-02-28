@@ -19,6 +19,9 @@ export interface Clip {
     audio_sample_rate: number;
     camera_iso?: string | null;
     camera_white_balance?: string | null;
+    camera_lens?: string | null;
+    camera_aperture?: string | null;
+    camera_angle?: string | null;
     audio_summary: string;
     timecode: string | null;
     status: string;
@@ -30,6 +33,7 @@ export interface Clip {
     manual_order?: number | null;
     audio_envelope?: number[]; // Represented as byte array/number array from Rust Vec<u8>
     lut_enabled: number;
+    thumb_range_seconds?: number | null;
 }
 
 export interface Thumbnail {
@@ -63,6 +67,7 @@ export interface RecentProject {
     id: string;
     name: string;
     path: string;
+    phase: "pre" | "post";
     lastOpened: number;
 }
 

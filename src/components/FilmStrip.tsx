@@ -7,14 +7,13 @@ interface FilmStripProps {
     status: string;
     count: number;
     aspectRatio?: number;
-    isExtracting?: boolean;
     onDoubleClick?: () => void;
     projectLutHash?: string | null;
     clipLutEnabled?: number;
     lutRenderNonce?: number;
 }
 
-export function FilmStrip({ clipId, thumbnails, thumbnailCache, status, count, aspectRatio = 16 / 9, isExtracting = false, onDoubleClick, projectLutHash, clipLutEnabled = 0, lutRenderNonce = 0 }: FilmStripProps) {
+export function FilmStrip({ clipId, thumbnails, thumbnailCache, status, count, aspectRatio = 16 / 9, onDoubleClick, projectLutHash, clipLutEnabled = 0, lutRenderNonce = 0 }: FilmStripProps) {
     const indices = Array.from({ length: count }, (_, i) => i);
     const orientationClass = aspectRatio > 0 && aspectRatio < 1 ? "is-vertical" : "is-horizontal";
 
@@ -36,9 +35,7 @@ export function FilmStrip({ clipId, thumbnails, thumbnailCache, status, count, a
                 {indices.map((i) => (
                     <div key={i} className="film-strip-placeholder">
                         {i === Math.floor(count / 2) && (
-                            isExtracting
-                                ? <span className="spinner" style={{ width: 16, height: 16 }} />
-                                : <span className="thumb-warning">No thumbnails</span>
+                            <span className="thumb-warning">No thumbnails</span>
                         )}
                     </div>
                 ))}
@@ -79,9 +76,7 @@ export function FilmStrip({ clipId, thumbnails, thumbnailCache, status, count, a
 
                 return (
                     <div key={idx} className="film-strip-placeholder">
-                        {isExtracting
-                            ? <span className="spinner" style={{ width: 12, height: 12 }} />
-                            : <span className="thumb-warning">—</span>}
+                        <span className="thumb-warning">—</span>
                     </div>
                 );
             })}

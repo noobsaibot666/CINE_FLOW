@@ -72,26 +72,68 @@ function AppContent() {
   const TOUR_VERSION = "1.0.0-beta.1";
   const TOUR_SEEN_KEY = "wp_has_seen_tour";
   const TOUR_VERSION_KEY = "wp_tour_version";
-  const [projectId, setProjectId] = useState<string | null>(() => localStorage.getItem("wp_project_id"));
-  const [projectName, setProjectName] = useState(() => localStorage.getItem("wp_project_name") || "");
-  const [clips, setClips] = useState<ClipWithThumbnails[]>([]);
-  const [selectedClipIds, setSelectedClipIds] = useState<Set<string>>(new Set());
-  const [scanning, setScanning] = useState(false);
-  const [extracting, setExtracting] = useState(false);
-  const [extractProgress, setExtractProgress] = useState({ done: 0, total: 0 });
-  const [showPrint, setShowPrint] = useState(false);
 
-  const [preparingExport, setPreparingExport] = useState<{ kind: "pdf" | "image"; message: string } | null>(null);
-  const [thumbnailCache, setThumbnailCache] = useState<Record<string, string>>({});
-  const [activeTab, setActiveTab] = useState<"home" | "preproduction" | "shot-planner" | "media-workspace" | "contact" | "blocks" | "safe-copy" | "all">(() => {
-    const saved = localStorage.getItem("wp_active_tab");
-    if (saved === "home" || saved === "preproduction" || saved === "shot-planner" || saved === "media-workspace" || saved === "contact" || saved === "blocks" || saved === "safe-copy" || saved === "all") {
-      return saved as any;
-    }
-    return "home";
-  });
+  const [activeTab, setActiveTab] = useState<"home" | "preproduction" | "shot-planner" | "media-workspace" | "contact" | "blocks" | "safe-copy" | "all">("home");
   const [activePreproductionApp, setActivePreproductionApp] = useState<"shot-planner" | "folder-creator" | null>(null);
   const [activeMediaWorkspaceApp, setActiveMediaWorkspaceApp] = useState<"safe-copy" | "clip-review" | "scene-blocks" | "handoff" | null>(null);
+
+  // --- Phase-Isolated State ---
+  type Phase = 'pre' | 'post';
+  interface PhaseData {
+    projectId: string | null;
+    projectName: string;
+    clips: ClipWithThumbnails[];
+    selectedClipIds: Set<string>;
+    scanning: boolean;
+    extracting: boolean;
+    extractProgress: { done: number; total: number };
+    thumbnailCache: Record<string, string>;
+  }
+
+  const initialPhaseState: PhaseData = {
+    projectId: null,
+    projectName: "",
+    clips: [],
+    selectedClipIds: new Set(),
+    scanning: false,
+    extracting: false,
+    extractProgress: { done: 0, total: 0 },
+    thumbnailCache: {},
+  };
+
+  const currentPhase: Phase = (activeTab === 'preproduction') ? 'pre' : 'post';
+
+  const [projectStates, setProjectStates] = useState<Record<Phase, PhaseData>>({
+    pre: { ...initialPhaseState },
+    post: { ...initialPhaseState },
+  });
+
+  // Helper to update specific phase state
+  const setPhaseState = useCallback((phase: Phase, updates: Partial<PhaseData> | ((prev: PhaseData) => PhaseData)) => {
+    setProjectStates((prev) => ({
+      ...prev,
+      [phase]: typeof updates === 'function' ? updates(prev[phase]) : { ...prev[phase], ...updates },
+    }));
+  }, []);
+
+  // convenience getters and setters for current phase
+  const { projectId, projectName, clips, selectedClipIds, scanning, extracting, extractProgress, thumbnailCache } = projectStates[currentPhase];
+
+  const setClips = (val: ClipWithThumbnails[] | ((prev: ClipWithThumbnails[]) => ClipWithThumbnails[])) => {
+    setPhaseState(currentPhase, (prev) => ({
+      ...prev,
+      clips: typeof val === 'function' ? val(prev.clips) : val,
+    }));
+  };
+  const setSelectedClipIds = (val: Set<string> | ((prev: Set<string>) => Set<string>)) => {
+    setPhaseState(currentPhase, (prev) => ({
+      ...prev,
+      selectedClipIds: typeof val === 'function' ? val(prev.selectedClipIds) : val,
+    }));
+  };
+
+  const [showPrint, setShowPrint] = useState(false);
+  const [preparingExport, setPreparingExport] = useState<{ kind: "pdf" | "image"; message: string } | null>(null);
   const [showExportPanel, setShowExportPanel] = useState(false);
   const [selectedBlockIds, setSelectedBlockIds] = useState<string[]>([]);
   const [viewFilter, setViewFilter] = useState<"all" | "picks" | "rated_min">("all");
@@ -162,19 +204,7 @@ function AppContent() {
     localStorage.setItem("wp_shot_size_filter", shotSizeFilter);
   }, [lookbookSortMode, groupByShotSize, enableOptionalShotTags, sequenceMovementFilter, shotSizeFilter]);
 
-  useEffect(() => {
-    localStorage.setItem("wp_active_tab", activeTab);
-  }, [activeTab]);
-
-  useEffect(() => {
-    if (projectId) {
-      localStorage.setItem("wp_project_id", projectId);
-      localStorage.setItem("wp_project_name", projectName);
-    } else {
-      localStorage.removeItem("wp_project_id");
-      localStorage.removeItem("wp_project_name");
-    }
-  }, [projectId, projectName]);
+  // State persistence removed per user request for "blank canvas" starting experience
 
   useEffect(() => {
     if (projectId) {
@@ -244,23 +274,15 @@ function AppContent() {
   useEffect(() => {
     invoke<AppInfo>("get_app_info").then(setAppInfo).catch(console.error);
 
-    // Restore session on mount
-    const savedPid = localStorage.getItem("wp_project_id");
-    if (savedPid) {
-      refreshProjectClips(savedPid).catch(console.error);
-    }
+    // Project restoration on mount disabled for "blank canvas" start
   }, []);
 
   // State for delayed actions
-  const [postScanTab, setPostScanTab] = useState<"preproduction" | "shot-planner" | "media-workspace" | "contact" | "blocks" | "all" | null>(null);
+  const [postScanTab, setPostScanTab] = useState<"preproduction" | "shot-planner" | "media-workspace" | "clip-review" | "scene-blocks" | "contact" | "blocks" | "all" | null>(null);
 
   const [projectLut, setProjectLut] = useState<{ path: string; name: string; hash: string } | null>(null);
   const [lutRenderNonce, setLutRenderNonce] = useState(0);
-  const activeProjectRef = useRef<string | null>(null);
-
-  useEffect(() => {
-    activeProjectRef.current = projectId;
-  }, [projectId]);
+  // Active project refs removed in favor of phase-aware listeners
 
   const fetchProjectSettings = useCallback(async (pid: string) => {
     try {
@@ -298,7 +320,7 @@ function AppContent() {
     });
   }, [clips]);
 
-  const handleUpdateMetadata = useCallback(async (clipId: string, updates: Partial<Pick<Clip, 'rating' | 'flag' | 'notes' | 'shot_size' | 'movement' | 'manual_order' | 'lut_enabled'>>) => {
+  const handleUpdateMetadata = useCallback(async (clipId: string, updates: Partial<Pick<Clip, 'rating' | 'flag' | 'notes' | 'shot_size' | 'movement' | 'manual_order' | 'lut_enabled' | 'thumb_range_seconds'>>) => {
     // Optimistic UI update
     setClips((prevClips) =>
       prevClips.map(clipItem => {
@@ -445,9 +467,12 @@ function AppContent() {
       if (postScanTab === "preproduction" || postScanTab === "shot-planner") {
         setActiveTab("preproduction");
         setActivePreproductionApp("shot-planner");
-      } else if (postScanTab === "media-workspace") {
+      } else if (postScanTab === "media-workspace" || postScanTab === "clip-review") {
         setActiveTab("media-workspace");
         setActiveMediaWorkspaceApp("clip-review");
+      } else if (postScanTab === "scene-blocks") {
+        setActiveTab("media-workspace");
+        setActiveMediaWorkspaceApp("scene-blocks");
       } else {
         setActiveTab(postScanTab as any);
       }
@@ -479,48 +504,47 @@ function AppContent() {
     });
   }, [clips]);
 
-  const hydrateThumbnailCache = useCallback(async (items: ClipWithThumbnails[]) => {
-    const thumbEntries = items.flatMap((item) =>
-      item.thumbnails.map((thumb) => ({
-        key: `${thumb.clip_id}_${thumb.index}`,
-        path: thumb.file_path
-      }))
-    );
-    if (thumbEntries.length === 0) return;
+  // hydrateThumbnailCache logic merged into refreshProjectClips for phase-safety
 
-    console.log(`[Thumbnail] Hydrating cache with ${thumbEntries.length} entries`);
-
-    const results = thumbEntries.map(({ key, path }) => {
-      try {
-        const url = convertFileSrc(path);
-        return { key, url };
-      } catch (error) {
-        console.warn(`Thumbnail load failed for ${path}`, error);
-        return null;
-      }
-    });
-
-    setThumbnailCache(prev => {
-      const next = { ...prev };
-      for (const item of results) {
-        if (item) next[item.key] = item.url;
-      }
-      return next;
-    });
-  }, []);
-
-  const refreshProjectClips = useCallback(async (nextProjectId: string) => {
+  const refreshProjectClips = useCallback(async (nextProjectId: string, targetPhase?: Phase) => {
     try {
+      const activePhase = targetPhase || (projectStates.pre.projectId === nextProjectId ? 'pre' : 'post');
       const clipRows = await invoke<ClipWithThumbnails[]>("get_clips", { projectId: nextProjectId });
-      if (activeProjectRef.current !== nextProjectId) return;
-      setClips(clipRows);
-      await hydrateThumbnailCache(clipRows);
+
+      setPhaseState(activePhase, { clips: clipRows });
+
+      // Hydrate for specific phase
+      const thumbEntries = clipRows.flatMap((item) =>
+        item.thumbnails.map((thumb) => ({
+          key: `${thumb.clip_id}_${thumb.index}`,
+          path: thumb.file_path
+        }))
+      );
+      if (thumbEntries.length > 0) {
+        const results = thumbEntries.map(({ key, path }) => {
+          try {
+            const url = convertFileSrc(path);
+            return { key, url };
+          } catch (error) {
+            console.warn(`Thumbnail load failed for ${path}`, error);
+            return null;
+          }
+        });
+        setPhaseState(activePhase, prev => {
+          const next = { ...prev.thumbnailCache };
+          for (const item of results) {
+            if (item) next[item.key] = item.url;
+          }
+          return { ...prev, thumbnailCache: next };
+        });
+      }
+
       await fetchProjectSettings(nextProjectId);
     } catch (error) {
       console.error("Failed to refresh clips:", error);
       setUiError({ title: "Could not load clip previews", hint: "Retry scan. If this persists, export diagnostics." });
     }
-  }, [hydrateThumbnailCache]);
+  }, [projectStates, setPhaseState, fetchProjectSettings]);
 
 
   // Persistent Thumbnail Listeners
@@ -532,41 +556,48 @@ function AppContent() {
       unlistenProgress = await listen<ThumbnailProgress>("thumbnail-progress", (event) => {
         const { project_id, clip_id, clip_index, total_clips, thumbnails } = event.payload;
 
-        // Use Ref for latest project ID to avoid stale closure issues
-        if (activeProjectRef.current !== project_id) return;
+        // Find which phase this project belongs to
+        const targetPhase: Phase | null =
+          projectStates.pre.projectId === project_id ? 'pre' :
+            projectStates.post.projectId === project_id ? 'post' : null;
 
-        setExtractProgress({ done: clip_index + 1, total: total_clips });
+        if (!targetPhase) return;
 
-        if (thumbnails.length > 0) {
-          setClips((prev) =>
-            prev.map((c) =>
-              c.clip.id === clip_id ? { ...c, thumbnails: thumbnails } : c
-            )
+        setPhaseState(targetPhase, (prev) => {
+          const nextProgress = { done: clip_index + 1, total: total_clips };
+          const nextClips = prev.clips.map((c) =>
+            c.clip.id === clip_id ? { ...c, thumbnails: thumbnails } : c
           );
 
-          const newEntries: Record<string, string> = {};
+          const newEntries: Record<string, string> = { ...prev.thumbnailCache };
           thumbnails.forEach(thumb => {
             try {
-              const url = convertFileSrc(thumb.file_path);
-              newEntries[`${thumb.clip_id}_${thumb.index}`] = url;
+              newEntries[`${thumb.clip_id}_${thumb.index}`] = convertFileSrc(thumb.file_path);
             } catch (e) {
               console.warn("Failed to convert thumbnail path:", e);
             }
           });
 
-          if (Object.keys(newEntries).length > 0) {
-            setThumbnailCache(prev => ({ ...prev, ...newEntries }));
-          }
-        }
+          return {
+            ...prev,
+            extractProgress: nextProgress,
+            clips: nextClips,
+            thumbnailCache: newEntries
+          };
+        });
       });
 
       unlistenComplete = await listen("thumbnail-complete", async (event) => {
         const payload = event.payload as { project_id: string };
-        console.log("[Thumbnail] Extraction complete for project:", payload.project_id);
+        const project_id = payload.project_id;
 
-        if (activeProjectRef.current === payload.project_id) {
-          setExtracting(false);
-          await refreshProjectClips(payload.project_id);
+        const targetPhase: Phase | null =
+          projectStates.pre.projectId === project_id ? 'pre' :
+            projectStates.post.projectId === project_id ? 'post' : null;
+
+        if (targetPhase) {
+          setPhaseState(targetPhase, { extracting: false });
+          await refreshProjectClips(project_id, targetPhase);
         }
       });
     }
@@ -579,16 +610,9 @@ function AppContent() {
     };
   }, [refreshProjectClips]); // Only depends on refreshProjectClips which is stable-ish
 
-  const handleCloseProject = useCallback(() => {
-    setProjectId(null);
-    setProjectName("");
-    setClips([]);
-    setSelectedClipIds(new Set());
-    localStorage.removeItem("wp_project_id");
-    localStorage.removeItem("wp_project_name");
-  }, []);
+  // handleCloseProject was replaced by inline initialPhaseState reset in handleSelectFolder
 
-  const addRecentProject = useCallback((id: string, name: string, path: string) => {
+  const addRecentProject = useCallback((id: string, name: string, path: string, phase: Phase) => {
     const saved = localStorage.getItem("wp_recent_projects");
     let prev: RecentProject[] = [];
     if (saved) {
@@ -598,12 +622,13 @@ function AppContent() {
         // ignore
       }
     }
-    const filtered = prev.filter((p) => p.path !== path);
-    const next = [{ id, name, path, lastOpened: Date.now() }, ...filtered].slice(0, 5);
+    // Filter by both path and phase for true isolation in history
+    const filtered = prev.filter((p) => !(p.path === path && p.phase === phase));
+    const next = [{ id, name, path, phase, lastOpened: Date.now() }, ...filtered].slice(0, 10);
     localStorage.setItem("wp_recent_projects", JSON.stringify(next));
   }, []);
 
-  const handleSelectFolder = useCallback(async (targetTab?: "preproduction" | "shot-planner" | "media-workspace" | "contact" | "blocks" | "all") => {
+  const handleSelectFolder = useCallback(async (targetTab?: "preproduction" | "shot-planner" | "media-workspace" | "clip-review" | "scene-blocks" | "contact" | "blocks" | "all") => {
     const selected = await open({
       directory: true,
       multiple: false,
@@ -612,40 +637,45 @@ function AppContent() {
 
     if (!selected) return;
 
-    setScanning(true);
-    handleCloseProject(); // Clear current project state
+    const targetPhase: Phase = (targetTab === "preproduction" || targetTab === "shot-planner") ? "pre" : "post";
+
+    setPhaseState(targetPhase, { scanning: true, projectId: null, clips: [] });
     if (targetTab) setPostScanTab(targetTab);
 
     try {
       const result = await invoke<ScanResult>("scan_folder", {
         folderPath: selected,
+        phase: targetPhase,
       });
 
-      setProjectId(result.project_id);
-      setProjectName(result.project_name);
-      setClips(result.clips.map((clip) => ({ clip, thumbnails: [] })));
-      addRecentProject(result.project_id, result.project_name, selected as string);
+      setPhaseState(targetPhase, {
+        projectId: result.project_id,
+        projectName: result.project_name,
+        clips: result.clips.map((clip) => ({ clip, thumbnails: [] })),
+        extracting: true,
+        extractProgress: { done: 0, total: result.clip_count }
+      });
 
-      setExtracting(true);
-      setExtractProgress({ done: 0, total: result.clip_count });
+      addRecentProject(result.project_id, result.project_name, selected as string, targetPhase);
+
       invoke("extract_thumbnails", { projectId: result.project_id }).catch(
         (e) => {
           console.error("Thumbnail extraction error:", e);
           setUiError({ title: "Thumbnail extraction failed", hint: "Retry scan or check media read permissions." });
-          setExtracting(false);
+          setPhaseState(targetPhase, { extracting: false });
         }
       );
 
-      refreshProjectClips(result.project_id).catch((err) => {
+      refreshProjectClips(result.project_id, targetPhase).catch((err) => {
         console.warn("Initial clip refresh failed", err);
       });
     } catch (e) {
       console.error("Scan error:", e);
       setUiError({ title: "Scan failed", hint: "Verify folder access and media formats, then retry." });
     } finally {
-      setScanning(false);
+      setPhaseState(targetPhase, { scanning: false });
     }
-  }, [refreshProjectClips]);
+  }, [addRecentProject, refreshProjectClips, setPhaseState]);
 
   useEffect(() => {
     if (!projectId) {
@@ -989,13 +1019,21 @@ function AppContent() {
           </button>
           <button
             className={`nav-tab ${activeTab === 'preproduction' ? 'active' : ''}`}
-            onClick={() => { setActiveTab('preproduction'); setActivePreproductionApp(null); }}
+            onClick={() => {
+              setActiveTab('preproduction');
+              setActivePreproductionApp(null);
+              setActiveMediaWorkspaceApp(null);
+            }}
           >
             <Boxes size={14} /> Pre-production
           </button>
           <button
             className={`nav-tab ${activeTab === 'media-workspace' ? 'active' : ''}`}
-            onClick={() => { setActiveTab('media-workspace'); setActiveMediaWorkspaceApp(null); }}
+            onClick={() => {
+              setActiveTab('media-workspace');
+              setActivePreproductionApp(null);
+              setActiveMediaWorkspaceApp(null);
+            }}
           >
             <BriefcaseBusiness size={14} /> Media Workspace
           </button>
@@ -1064,17 +1102,10 @@ function AppContent() {
 
                 <div className="toolbar premium-toolbar">
                   <div className="toolbar-left-group">
-                    <button className="btn btn-secondary btn-sm" onClick={() => handleSelectFolder("shot-planner")} disabled={scanning || extracting}>
-                      {scanning ? <div className="spinner" /> : extracting ? <span className="spinner-progress" /> : <FolderOpen size={14} />}
-                      <span>{scanning ? "Scanning..." : extracting ? `Extracting (${extractProgress.done}/${extractProgress.total})` : "Load Footage"}</span>
+                    <button className="btn btn-secondary btn-sm" onClick={() => handleSelectFolder("shot-planner")} disabled={scanning}>
+                      {scanning ? <div className="spinner" /> : <FolderOpen size={14} />}
+                      <span>{scanning ? "Scanning..." : "Load Footage"}</span>
                     </button>
-                    {extracting && (
-                      <div className="extraction-progress-mini">
-                        <div className="progress-bar-bg">
-                          <div className="progress-bar-fill" style={{ width: `${(extractProgress.done / (extractProgress.total || 1)) * 100}%` }} />
-                        </div>
-                      </div>
-                    )}
                     <div className="toolbar-separator" />
                     <div className="thumb-range-selector">
                       <span className="toolbar-label">Thumbs</span>
@@ -1128,7 +1159,6 @@ function AppContent() {
                 <ClipList
                   clips={sortedClips}
                   thumbnailCache={thumbnailCache}
-                  isExtracting={extracting}
                   selectedIds={selectedClipIds}
                   onToggleSelection={toggleClipSelection}
                   thumbCount={thumbCount}
@@ -1150,49 +1180,21 @@ function AppContent() {
                   onExportImage={handleExportImage}
                 />
               </div>
-            ) : (scanning || extracting) ? (
+            ) : (scanning) ? (
               <div className="media-workspace">
                 <div className="toolbar premium-toolbar">
                   <div className="toolbar-left-group">
                     <button className="btn btn-secondary btn-sm" disabled>
-                      {scanning ? <div className="spinner" /> : <span className="spinner-progress" />}
-                      <span>{scanning ? "Scanning…" : `Extracting (${extractProgress.done}/${extractProgress.total})`}</span>
+                      {scanning ? <div className="spinner" /> : null}
+                      <span>{scanning ? "Scanning…" : ""}</span>
                     </button>
-                    {extracting && (
-                      <div className="extraction-progress-mini">
-                        <div className="progress-bar-bg">
-                          <div className="progress-bar-fill" style={{ width: `${(extractProgress.done / (extractProgress.total || 1)) * 100}%` }} />
-                        </div>
-                      </div>
-                    )}
                   </div>
                 </div>
                 <div className="inline-loading-state">
-                  <div className="spinner" style={{ width: 28, height: 28 }} />
-                  <span style={{ fontSize: '1rem' }}>{scanning ? "Scanning folder for media files…" : "Extracting thumbnails and analyzing footage…"}</span>
-                  {extracting && (
-                    <div className="extraction-progress-inline">
-                      <div className="progress-bar-bg" style={{ width: 300, height: 6 }}>
-                        <div className="progress-bar-fill" style={{ width: `${(extractProgress.done / (extractProgress.total || 1)) * 100}%` }} />
-                      </div>
-                      <span className="stat-sub">{extractProgress.done} / {extractProgress.total} clips</span>
-                    </div>
-                  )}
+                  <span style={{ fontSize: '1rem' }}>{scanning ? "Scanning folder for media files…" : ""}</span>
                 </div>
               </div>
-            ) : (
-              <div className="onboarding-container">
-                <div className="empty-state-card premium-card">
-                  <div className="module-icon"><Camera size={48} strokeWidth={1} /></div>
-                  <h2>Shot Index</h2>
-                  <p>Browse reference footage and generate vertical shot plans.</p>
-                  <button className="btn btn-primary btn-lg" onClick={() => handleSelectFolder("shot-planner")} disabled={scanning}>
-                    <FolderOpen size={18} />
-                    <span>Select Reference Folder</span>
-                  </button>
-                </div>
-              </div>
-            )
+            ) : null
           ) : activePreproductionApp === 'folder-creator' ? (
             <div className="media-workspace">
 
@@ -1207,7 +1209,10 @@ function AppContent() {
               <div className="onboarding-grid">
                 <div
                   className="module-card premium-card"
-                  onClick={() => setActivePreproductionApp('shot-planner')}
+                  onClick={() => {
+                    if (projectStates.pre.projectId) setActivePreproductionApp('shot-planner');
+                    else handleSelectFolder('shot-planner');
+                  }}
                   style={{ "--corner-color": "var(--color-accent-soft)", "--card-accent": "var(--color-accent)", "--card-accent-soft": "var(--color-accent-soft)" } as any}
                 >
                   <div className="module-icon"><Camera size={32} strokeWidth={1.5} /></div>
@@ -1245,7 +1250,6 @@ function AppContent() {
                 <ClipList
                   clips={sortedClips}
                   thumbnailCache={thumbnailCache}
-                  isExtracting={extracting}
                   selectedIds={selectedClipIds}
                   onToggleSelection={toggleClipSelection}
                   thumbCount={thumbCount}
@@ -1266,19 +1270,7 @@ function AppContent() {
                   onExportImage={handleExportImage}
                 />
               </div>
-            ) : (
-              <div className="onboarding-container">
-                <div className="empty-state-card premium-card">
-                  <div className="module-icon"><Camera size={48} strokeWidth={1} /></div>
-                  <h2>Clip Review</h2>
-                  <p>Initialize a media workspace to start reviewing footage.</p>
-                  <button className="btn btn-primary btn-lg" onClick={() => handleSelectFolder("media-workspace")} disabled={scanning}>
-                    {scanning ? <div className="spinner" /> : <FolderOpen size={18} />}
-                    <span>Open Media Folder</span>
-                  </button>
-                </div>
-              </div>
-            )
+            ) : null
           ) : activeMediaWorkspaceApp === 'scene-blocks' ? (
             projectId ? (
               <div className="media-workspace">
@@ -1289,19 +1281,7 @@ function AppContent() {
                   onSelectedBlockIdsChange={setSelectedBlockIds}
                 />
               </div>
-            ) : (
-              <div className="onboarding-container">
-                <div className="empty-state-card premium-card">
-                  <div className="module-icon"><Boxes size={48} strokeWidth={1} /></div>
-                  <h2>Scene Blocks</h2>
-                  <p>Organize clips into meaningful editorial groups.</p>
-                  <button className="btn btn-primary btn-lg" onClick={() => handleSelectFolder("media-workspace")} disabled={scanning}>
-                    {scanning ? <div className="spinner" /> : <FolderOpen size={18} />}
-                    <span>Initialize Workspace</span>
-                  </button>
-                </div>
-              </div>
-            )
+            ) : null
           ) : (
             <div className="onboarding-container">
               <div className="onboarding-header">
@@ -1325,7 +1305,7 @@ function AppContent() {
                   className="module-card premium-card"
                   onClick={() => {
                     if (projectId) setActiveMediaWorkspaceApp('clip-review');
-                    else handleSelectFolder("media-workspace"); // This would set app to clip-review after scan
+                    else handleSelectFolder("clip-review");
                   }}
                   style={{ "--corner-color": "var(--color-accent-soft)", "--card-accent": "var(--color-accent)", "--card-accent-soft": "var(--color-accent-soft)" } as any}
                 >
@@ -1340,7 +1320,7 @@ function AppContent() {
                   className="module-card premium-card"
                   onClick={() => {
                     if (projectId) setActiveMediaWorkspaceApp('scene-blocks');
-                    else handleSelectFolder("media-workspace");
+                    else handleSelectFolder("scene-blocks");
                   }}
                   style={{ "--corner-color": "var(--color-accent-soft)", "--card-accent": "var(--color-accent)", "--card-accent-soft": "var(--color-accent-soft)" } as any}
                 >
@@ -1375,7 +1355,11 @@ function AppContent() {
             <div className="onboarding-grid" style={{ gridTemplateColumns: 'repeat(2, 1fr)', maxWidth: 800 }}>
               <div
                 className="module-card premium-card"
-                onClick={() => setActiveTab("preproduction")}
+                onClick={() => {
+                  setActiveTab("preproduction");
+                  setActivePreproductionApp(null);
+                  setActiveMediaWorkspaceApp(null);
+                }}
                 style={{ height: 320, "--corner-color": "var(--color-accent-soft)", "--card-accent": "var(--color-accent)", "--card-accent-soft": "var(--color-accent-soft)" } as any}
               >
                 <div className="module-icon"><Boxes size={48} strokeWidth={1.2} /></div>
@@ -1387,7 +1371,11 @@ function AppContent() {
               </div>
               <div
                 className="module-card premium-card"
-                onClick={() => setActiveTab("media-workspace")}
+                onClick={() => {
+                  setActiveTab("media-workspace");
+                  setActivePreproductionApp(null);
+                  setActiveMediaWorkspaceApp(null);
+                }}
                 style={{ height: 320, "--corner-color": "rgba(255, 255, 255, 0.05)", "--card-accent": "#ffffff", "--card-accent-soft": "rgba(255, 255, 255, 0.1)" } as any}
               >
                 <div className="module-icon"><BriefcaseBusiness size={48} strokeWidth={1.2} /></div>

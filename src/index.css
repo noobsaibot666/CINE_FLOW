@@ -947,6 +947,10 @@ body {
   display: flex;
   align-items: center;
   gap: var(--space-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
 }
 
 .clip-status {
@@ -1162,6 +1166,7 @@ body {
   color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.04em;
+  white-space: nowrap;
 }
 
 .meta-value {
@@ -1173,8 +1178,8 @@ body {
 
 .clip-lookbook-taxonomy {
   display: grid;
-  grid-template-columns: 1fr 1fr 120px;
-  gap: 8px;
+  grid-template-columns: 1fr 1fr 100px 120px;
+  gap: 12px;
   padding: 8px 12px 12px;
 }
 
@@ -1947,14 +1952,14 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 14px 20px;
+  padding: 12px 20px;
   background: rgba(26, 26, 26, 0.75);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 14px;
   margin-bottom: 24px;
-  gap: 32px;
+  gap: 16px;
   box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.5),
     inset 0 1px 1px rgba(255, 255, 255, 0.05);
 }
@@ -1969,7 +1974,7 @@ body {
 .toolbar-left-group {
   display: flex;
   align-items: center;
-  gap: 32px;
+  gap: 12px;
   flex: 1;
 }
 
@@ -2228,6 +2233,8 @@ body {
   display: flex;
   align-items: center;
   gap: var(--space-md);
+  min-width: 0;
+  flex: 1;
 }
 
 .clip-checkbox {
@@ -2350,25 +2357,35 @@ body {
   border-color: var(--color-accent);
 }
 
+.waveform-outer:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
 .audio-health-badge {
   display: flex;
   align-items: center;
   gap: 4px;
   font-size: 10px;
-  font-weight: 600;
+  font-weight: 800;
   text-transform: uppercase;
-  padding: 2px 6px;
+  padding: 3px 8px;
   border-radius: 4px;
   background: rgba(255, 255, 255, 0.05);
+  letter-spacing: 0.05em;
+  transition: all 0.2s ease;
 }
 
 .audio-health-badge.silent {
-  color: #94a3b8;
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.05);
 }
 
 .audio-health-badge.clipping {
-  color: #f87171;
-  background: rgba(248, 113, 113, 0.1);
+  color: #000;
+  background: #f87171;
+  font-weight: 900;
+  box-shadow: 0 0 12px rgba(248, 113, 113, 0.3);
 }
 
 .error-banner {
@@ -3779,6 +3796,8 @@ body {
   display: flex;
   align-items: center;
   gap: 4px;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .toolbar-label {
@@ -3787,7 +3806,8 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--text-muted);
-  margin-right: 2px;
+  margin-right: 4px;
+  white-space: nowrap;
 }
 
 .btn-xs {

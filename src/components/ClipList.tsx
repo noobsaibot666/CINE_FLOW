@@ -9,11 +9,10 @@ import { buildClipMetadataTags, getAudioBadge } from "../utils/clipMetadata";
 interface ClipListProps {
     clips: ClipWithThumbnails[];
     thumbnailCache: Record<string, string>;
-    isExtracting: boolean;
     selectedIds: Set<string>;
     onToggleSelection: (id: string) => void;
     thumbCount: number;
-    onUpdateMetadata: (clipId: string, updates: Partial<Pick<Clip, 'rating' | 'flag' | 'notes' | 'shot_size' | 'movement' | 'manual_order' | 'lut_enabled'>>) => Promise<void>;
+    onUpdateMetadata: (clipId: string, updates: Partial<Pick<Clip, 'rating' | 'flag' | 'notes' | 'shot_size' | 'movement' | 'manual_order' | 'lut_enabled' | 'thumb_range_seconds'>>) => Promise<void>;
     onHoverClip: (id: string | null) => void;
     onPromoteClip: (id: string) => void;
     onPlayClip: (id: string | null) => void;
@@ -34,7 +33,6 @@ interface ClipListProps {
 export function ClipList({
     clips,
     thumbnailCache,
-    isExtracting,
     selectedIds,
     onToggleSelection,
     thumbCount,
@@ -94,7 +92,6 @@ export function ClipList({
                             <ClipCard
                                 item={item}
                                 thumbnailCache={thumbnailCache}
-                                isExtracting={isExtracting}
                                 isSelected={selectedIds.has(item.clip.id)}
                                 onToggle={() => onToggleSelection(item.clip.id)}
                                 thumbCount={thumbCount}
@@ -148,7 +145,6 @@ export function ClipList({
 function ClipCard({
     item,
     thumbnailCache,
-    isExtracting,
     isSelected,
     onToggle,
     thumbCount,
@@ -169,11 +165,10 @@ function ClipCard({
 }: {
     item: ClipWithThumbnails;
     thumbnailCache: Record<string, string>;
-    isExtracting: boolean;
     isSelected: boolean;
     onToggle: () => void;
     thumbCount: number;
-    onUpdateMetadata: (clipId: string, updates: Partial<Pick<Clip, 'rating' | 'flag' | 'notes' | 'shot_size' | 'movement' | 'manual_order' | 'lut_enabled'>>) => Promise<void>;
+    onUpdateMetadata: (clipId: string, updates: Partial<Pick<Clip, 'rating' | 'flag' | 'notes' | 'shot_size' | 'movement' | 'manual_order' | 'lut_enabled' | 'thumb_range_seconds'>>) => Promise<void>;
     onMouseEnter: () => void;
     onMouseLeave: () => void;
     shotSizeOptions: string[];
@@ -197,6 +192,7 @@ function ClipCard({
     const [localShotSize, setLocalShotSize] = useState(clip.shot_size ?? "");
     const [localMovement, setLocalMovement] = useState(clip.movement ?? "");
     const [localManualOrder, setLocalManualOrder] = useState(clip.manual_order ?? 0);
+    const [localThumbRange, setLocalThumbRange] = useState(clip.thumb_range_seconds ?? 0);
 
     // Keep local state in sync if prop changes from outside (e.g. reload)
     useEffect(() => {
@@ -208,6 +204,9 @@ function ClipCard({
     useEffect(() => {
         setLocalManualOrder(clip.manual_order ?? 0);
     }, [clip.manual_order]);
+    useEffect(() => {
+        setLocalThumbRange(clip.thumb_range_seconds ?? 0);
+    }, [clip.thumb_range_seconds]);
 
     const handleShotSizeBlur = () => {
         if (localShotSize.trim() === (clip.shot_size ?? "")) return;
@@ -226,6 +225,11 @@ function ClipCard({
     const handleManualOrderBlur = () => {
         if (localManualOrder === (clip.manual_order ?? 0)) return;
         onUpdateMetadata(clip.id, { manual_order: localManualOrder });
+    };
+
+    const handleThumbRangeBlur = () => {
+        if (localThumbRange === (clip.thumb_range_seconds ?? 0)) return;
+        onUpdateMetadata(clip.id, { thumb_range_seconds: localThumbRange });
     };
 
     useEffect(() => {
@@ -319,7 +323,6 @@ function ClipCard({
                     status={clip.status}
                     count={thumbCount}
                     aspectRatio={clip.width > 0 && clip.height > 0 ? clip.width / clip.height : 16 / 9}
-                    isExtracting={isExtracting}
                     onDoubleClick={onPlayClip}
                     projectLutHash={projectLutHash}
                     clipLutEnabled={clip.lut_enabled}
@@ -330,11 +333,21 @@ function ClipCard({
             {/* Actions / Metadata */}
             <div className="clip-card-footer">
                 <div className="clip-metadata-compact">
-                    {metadataTags.map((tag) => (
-                        <span key={`${clip.id}-${tag.label}-${tag.value}`} className={`metadata-tag ${tag.highlight ? "highlight-tag" : ""} ${tag.value === "POSSIBLE CLIP" ? "danger-tag" : tag.value === "VERY LOW" ? "warn-tag" : ""}`}>
-                            {tag.value}
-                        </span>
-                    ))}
+                    {metadataTags.map((tag) => {
+                        if (tag.label === "AUDIO") {
+                            const healthClass = tag.value === "NO AUDIO" ? "silent" : (tag.value === "POSSIBLE CLIP" ? "clipping" : "");
+                            return (
+                                <span key={`${clip.id}-${tag.label}`} className={`audio-health-badge ${healthClass}`}>
+                                    {tag.value}
+                                </span>
+                            );
+                        }
+                        return (
+                            <span key={`${clip.id}-${tag.label}-${tag.value}`} className={`metadata-tag ${tag.highlight ? "highlight-tag" : ""} ${tag.value === "POSSIBLE CLIP" ? "danger-tag" : tag.value === "VERY LOW" ? "warn-tag" : ""}`}>
+                                {tag.value}
+                            </span>
+                        );
+                    })}
                     {!clip.timecode && <span className="metadata-tag danger-tag">NO TC</span>}
                     <div className="clip-card-status-wrapper">
                         <span className={`clip-status-dot ${clip.status}`} />
@@ -388,6 +401,20 @@ function ClipCard({
                         onKeyDown={(e) => { if (e.key === 'Enter') handleManualOrderBlur(); }}
                         min={0}
                         disabled={lookbookSortMode !== "custom"}
+                    />
+                </label>
+                <label className="clip-taxonomy-field clip-taxonomy-order">
+                    <span className="meta-label">Thumb Range (s)</span>
+                    <input
+                        type="number"
+                        className="input-text"
+                        value={localThumbRange}
+                        onChange={(e) => setLocalThumbRange(Number(e.target.value || 0))}
+                        onBlur={handleThumbRangeBlur}
+                        onKeyDown={(e) => { if (e.key === 'Enter') handleThumbRangeBlur(); }}
+                        min={0}
+                        max={Math.floor(clip.duration_ms / 1000)}
+                        step={2}
                     />
                 </label>
             </div>

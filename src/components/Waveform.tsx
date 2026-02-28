@@ -12,7 +12,7 @@ interface WaveformProps {
 
 export const Waveform: React.FC<WaveformProps> = ({
     envelope,
-    color = "var(--color-accent)",
+    color = "var(--color-accent-indigo, var(--color-accent))",
     height = 36,
     width = "100%",
     onPlayToggle,

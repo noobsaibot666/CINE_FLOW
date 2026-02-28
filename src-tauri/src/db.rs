@@ -47,6 +47,9 @@ pub struct Clip {
     pub audio_sample_rate: u32,
     pub camera_iso: Option<String>,
     pub camera_white_balance: Option<String>,
+    pub camera_lens: Option<String>,
+    pub camera_aperture: Option<String>,
+    pub camera_angle: Option<String>,
     pub audio_summary: String,
     pub timecode: Option<String>,
     pub status: String, // "ok", "warn", "fail"
@@ -58,6 +61,7 @@ pub struct Clip {
     pub manual_order: i32,
     pub audio_envelope: Option<Vec<u8>>,
     pub lut_enabled: i32,
+    pub thumb_range_seconds: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -259,6 +263,21 @@ impl Database {
                     [],
                 )?;
             }
+            if !columns.contains(&"camera_lens".to_string()) {
+                conn.execute("ALTER TABLE clips ADD COLUMN camera_lens TEXT", [])?;
+            }
+            if !columns.contains(&"camera_aperture".to_string()) {
+                conn.execute("ALTER TABLE clips ADD COLUMN camera_aperture TEXT", [])?;
+            }
+            if !columns.contains(&"camera_angle".to_string()) {
+                conn.execute("ALTER TABLE clips ADD COLUMN camera_angle TEXT", [])?;
+            }
+            if !columns.contains(&"thumb_range_seconds".to_string()) {
+                conn.execute(
+                    "ALTER TABLE clips ADD COLUMN thumb_range_seconds INTEGER",
+                    [],
+                )?;
+            }
 
             conn.execute_batch(
                 "
@@ -447,6 +466,9 @@ impl Database {
                 audio_sample_rate INTEGER NOT NULL DEFAULT 0,
                 camera_iso TEXT,
                 camera_white_balance TEXT,
+                camera_lens TEXT,
+                camera_aperture TEXT,
+                camera_angle TEXT,
                 audio_summary TEXT NOT NULL,
                 timecode TEXT,
                 status TEXT NOT NULL DEFAULT 'ok',
@@ -458,6 +480,7 @@ impl Database {
                 manual_order INTEGER NOT NULL DEFAULT 0,
                 audio_envelope BLOB,
                 lut_enabled INTEGER NOT NULL DEFAULT 0,
+                thumb_range_seconds INTEGER,
                 FOREIGN KEY (project_id) REFERENCES projects(id)
             );
 
@@ -693,9 +716,9 @@ impl Database {
             "INSERT INTO clips (
                 id, project_id, root_id, rel_path, filename, file_path, size_bytes, created_at, duration_ms, fps, width, height,
                 video_codec, video_bitrate, format_name, audio_codec, audio_channels, audio_sample_rate,
-                camera_iso, camera_white_balance, audio_summary, timecode, status, rating, flag, notes,
-                shot_size, movement, manual_order, audio_envelope, lut_enabled
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31)
+                camera_iso, camera_white_balance, camera_lens, camera_aperture, camera_angle, audio_summary, timecode, status, rating, flag, notes,
+                shot_size, movement, manual_order, audio_envelope, lut_enabled, thumb_range_seconds
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35)
             ON CONFLICT(id) DO UPDATE SET
                 project_id = excluded.project_id,
                 root_id = excluded.root_id,
@@ -716,6 +739,9 @@ impl Database {
                 audio_sample_rate = excluded.audio_sample_rate,
                 camera_iso = excluded.camera_iso,
                 camera_white_balance = excluded.camera_white_balance,
+                camera_lens = excluded.camera_lens,
+                camera_aperture = excluded.camera_aperture,
+                camera_angle = excluded.camera_angle,
                 audio_summary = excluded.audio_summary,
                 timecode = excluded.timecode,
                 status = excluded.status,
@@ -725,7 +751,8 @@ impl Database {
                 shot_size = excluded.shot_size,
                 movement = excluded.movement,
                 manual_order = excluded.manual_order,
-                audio_envelope = excluded.audio_envelope
+                audio_envelope = excluded.audio_envelope,
+                thumb_range_seconds = excluded.thumb_range_seconds
                 -- intentionally excluding lut_enabled from UPDATE to prevent rescans from overwriting it",
             params![
                 clip.id,
@@ -748,6 +775,9 @@ impl Database {
                 clip.audio_sample_rate,
                 clip.camera_iso,
                 clip.camera_white_balance,
+                clip.camera_lens,
+                clip.camera_aperture,
+                clip.camera_angle,
                 clip.audio_summary,
                 clip.timecode,
                 clip.status,
@@ -759,6 +789,7 @@ impl Database {
                 clip.manual_order,
                 clip.audio_envelope,
                 clip.lut_enabled,
+                clip.thumb_range_seconds,
             ],
         )?;
         Ok(())
@@ -769,8 +800,8 @@ impl Database {
         let mut stmt = conn.prepare(
             "SELECT id, project_id, root_id, rel_path, filename, file_path, size_bytes, created_at, duration_ms, fps, width, height,
                     video_codec, video_bitrate, format_name, audio_codec, audio_channels, audio_sample_rate,
-                    camera_iso, camera_white_balance, audio_summary, timecode, status, rating, flag, notes,
-                    shot_size, movement, manual_order, audio_envelope, lut_enabled
+                    camera_iso, camera_white_balance, camera_lens, camera_aperture, camera_angle, audio_summary, timecode, status, rating, flag, notes,
+                    shot_size, movement, manual_order, audio_envelope, lut_enabled, thumb_range_seconds
              FROM clips WHERE id = ?1",
         )?;
         let mut rows = stmt.query_map(params![id], |row| {
@@ -795,17 +826,21 @@ impl Database {
                 audio_sample_rate: row.get::<_, u32>(17)?,
                 camera_iso: row.get(18)?,
                 camera_white_balance: row.get(19)?,
-                audio_summary: row.get(20)?,
-                timecode: row.get(21)?,
-                status: row.get(22)?,
-                rating: row.get(23)?,
-                flag: row.get(24)?,
-                notes: row.get(25)?,
-                shot_size: row.get(26)?,
-                movement: row.get(27)?,
-                manual_order: row.get(28)?,
-                audio_envelope: row.get(29)?,
-                lut_enabled: row.get(30)?,
+                camera_lens: row.get(20)?,
+                camera_aperture: row.get(21)?,
+                camera_angle: row.get(22)?,
+                audio_summary: row.get(23)?,
+                timecode: row.get(24)?,
+                status: row.get(25)?,
+                rating: row.get(26)?,
+                flag: row.get(27)?,
+                notes: row.get(28)?,
+                shot_size: row.get(29)?,
+                movement: row.get(30)?,
+                manual_order: row.get(31)?,
+                audio_envelope: row.get(32)?,
+                lut_enabled: row.get(33)?,
+                thumb_range_seconds: row.get(34)?,
             })
         })?;
         match rows.next() {
@@ -820,8 +855,8 @@ impl Database {
         let mut stmt = conn.prepare(
             "SELECT id, project_id, root_id, rel_path, filename, file_path, size_bytes, created_at, duration_ms, fps, width, height,
                     video_codec, video_bitrate, format_name, audio_codec, audio_channels, audio_sample_rate,
-                    camera_iso, camera_white_balance, audio_summary, timecode, status, rating, flag, notes,
-                    shot_size, movement, manual_order, audio_envelope, lut_enabled
+                    camera_iso, camera_white_balance, camera_lens, camera_aperture, camera_angle, audio_summary, timecode, status, rating, flag, notes,
+                    shot_size, movement, manual_order, audio_envelope, lut_enabled, thumb_range_seconds
              FROM clips WHERE project_id = ?1 ORDER BY filename",
         )?;
         let clips = stmt
@@ -847,17 +882,21 @@ impl Database {
                     audio_sample_rate: row.get::<_, u32>(17)?,
                     camera_iso: row.get(18)?,
                     camera_white_balance: row.get(19)?,
-                    audio_summary: row.get(20)?,
-                    timecode: row.get(21)?,
-                    status: row.get(22)?,
-                    rating: row.get(23)?,
-                    flag: row.get(24)?,
-                    notes: row.get(25)?,
-                    shot_size: row.get(26)?,
-                    movement: row.get(27)?,
-                    manual_order: row.get(28)?,
-                    audio_envelope: row.get(29)?,
-                    lut_enabled: row.get(30)?,
+                    camera_lens: row.get(20)?,
+                    camera_aperture: row.get(21)?,
+                    camera_angle: row.get(22)?,
+                    audio_summary: row.get(23)?,
+                    timecode: row.get(24)?,
+                    status: row.get(25)?,
+                    rating: row.get(26)?,
+                    flag: row.get(27)?,
+                    notes: row.get(28)?,
+                    shot_size: row.get(29)?,
+                    movement: row.get(30)?,
+                    manual_order: row.get(31)?,
+                    audio_envelope: row.get(32)?,
+                    lut_enabled: row.get(33)?,
+                    thumb_range_seconds: row.get(34)?,
                 })
             })?
             .filter_map(|r| r.ok())
@@ -871,8 +910,8 @@ impl Database {
         let query = format!(
             "SELECT id, project_id, root_id, rel_path, filename, file_path, size_bytes, created_at, duration_ms, fps, width, height,
                     video_codec, video_bitrate, format_name, audio_codec, audio_channels, audio_sample_rate,
-                    camera_iso, camera_white_balance, audio_summary, timecode, status, rating, flag, notes,
-                    shot_size, movement, manual_order, audio_envelope, lut_enabled
+                    camera_iso, camera_white_balance, camera_lens, camera_aperture, camera_angle, audio_summary, timecode, status, rating, flag, notes,
+                    shot_size, movement, manual_order, audio_envelope, lut_enabled, thumb_range_seconds
              FROM clips WHERE id IN ({})",
             placeholders
         );
@@ -900,17 +939,21 @@ impl Database {
                     audio_sample_rate: row.get::<_, u32>(17)?,
                     camera_iso: row.get(18)?,
                     camera_white_balance: row.get(19)?,
-                    audio_summary: row.get(20)?,
-                    timecode: row.get(21)?,
-                    status: row.get(22)?,
-                    rating: row.get(23)?,
-                    flag: row.get(24)?,
-                    notes: row.get(25)?,
-                    shot_size: row.get(26)?,
-                    movement: row.get(27)?,
-                    manual_order: row.get(28)?,
-                    audio_envelope: row.get(29)?,
-                    lut_enabled: row.get(30)?,
+                    camera_lens: row.get(20)?,
+                    camera_aperture: row.get(21)?,
+                    camera_angle: row.get(22)?,
+                    audio_summary: row.get(23)?,
+                    timecode: row.get(24)?,
+                    status: row.get(25)?,
+                    rating: row.get(26)?,
+                    flag: row.get(27)?,
+                    notes: row.get(28)?,
+                    shot_size: row.get(29)?,
+                    movement: row.get(30)?,
+                    manual_order: row.get(31)?,
+                    audio_envelope: row.get(32)?,
+                    lut_enabled: row.get(33)?,
+                    thumb_range_seconds: row.get(34)?,
                 })
             })?
             .filter_map(|r| r.ok())
@@ -972,6 +1015,15 @@ impl Database {
                 params![le, clip_id],
             )?;
         }
+        Ok(())
+    }
+
+    pub fn update_clip_thumb_range(&self, clip_id: &str, range_seconds: u32) -> SqlResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE clips SET thumb_range_seconds = ?1 WHERE id = ?2",
+            params![range_seconds, clip_id],
+        )?;
         Ok(())
     }
 
@@ -1107,8 +1159,8 @@ impl Database {
         let mut stmt = conn.prepare(
             "SELECT c.id, c.project_id, c.root_id, c.rel_path, c.filename, c.file_path, c.size_bytes, c.created_at, c.duration_ms, c.fps, c.width, c.height,
                     c.video_codec, c.video_bitrate, c.format_name, c.audio_codec, c.audio_channels, c.audio_sample_rate,
-                    c.camera_iso, c.camera_white_balance, c.audio_summary, c.timecode, c.status, c.rating, c.flag, c.notes,
-                    c.shot_size, c.movement, c.manual_order, c.audio_envelope, c.lut_enabled
+                    c.camera_iso, c.camera_white_balance, c.camera_lens, c.camera_aperture, c.camera_angle, c.audio_summary, c.timecode, c.status, c.rating, c.flag, c.notes,
+                    c.shot_size, c.movement, c.manual_order, c.audio_envelope, c.lut_enabled, c.thumb_range_seconds
              FROM block_clips bc
              JOIN clips c ON c.id = bc.clip_id
              WHERE bc.block_id = ?1
@@ -1137,17 +1189,21 @@ impl Database {
                     audio_sample_rate: row.get::<_, u32>(17)?,
                     camera_iso: row.get(18)?,
                     camera_white_balance: row.get(19)?,
-                    audio_summary: row.get(20)?,
-                    timecode: row.get(21)?,
-                    status: row.get(22)?,
-                    rating: row.get(23)?,
-                    flag: row.get(24)?,
-                    notes: row.get(25)?,
-                    shot_size: row.get(26)?,
-                    movement: row.get(27)?,
-                    manual_order: row.get(28)?,
-                    audio_envelope: row.get(29)?,
-                    lut_enabled: row.get(30)?,
+                    camera_lens: row.get(20)?,
+                    camera_aperture: row.get(21)?,
+                    camera_angle: row.get(22)?,
+                    audio_summary: row.get(23)?,
+                    timecode: row.get(24)?,
+                    status: row.get(25)?,
+                    rating: row.get(26)?,
+                    flag: row.get(27)?,
+                    notes: row.get(28)?,
+                    shot_size: row.get(29)?,
+                    movement: row.get(30)?,
+                    manual_order: row.get(31)?,
+                    audio_envelope: row.get(32)?,
+                    lut_enabled: row.get(33)?,
+                    thumb_range_seconds: row.get(34)?,
                 })
             })?
             .filter_map(|r| r.ok())

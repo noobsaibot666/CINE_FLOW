@@ -68,6 +68,10 @@ export function buildClipMetadataTags(clip: Clip, audioBadge: string | null): Me
   const wb = parseNumberLike(clip.camera_white_balance);
   if (wb) tags.push({ label: "WB", value: `WB ${wb}K` });
 
+  if (clip.camera_lens) tags.push({ label: "LENS", value: clip.camera_lens });
+  if (clip.camera_aperture) tags.push({ label: "APT", value: clip.camera_aperture });
+  if (clip.camera_angle) tags.push({ label: "ANG", value: clip.camera_angle });
+
   const tc = formatTimecode(clip.timecode);
   if (tc) tags.push({ label: "TC", value: `TC ${tc}` });
 

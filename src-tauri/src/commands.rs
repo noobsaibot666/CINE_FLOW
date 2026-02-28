@@ -34,6 +34,7 @@ pub struct AppState {
 #[tauri::command]
 pub async fn scan_folder(
     folder_path: String,
+    phase: String,
     state: State<'_, Arc<AppState>>,
 ) -> Result<ScanResult, String> {
     let perf_id = state
@@ -47,7 +48,8 @@ pub async fn scan_folder(
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "Untitled Project".to_string());
 
-    let project_id = hash_string(&folder_path);
+    // Include phase in the hash to isolate projects across phases even if they use the same folder
+    let project_id = hash_string(&format!("{}::{}", phase, folder_path));
     let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
     let project = Project {
@@ -250,7 +252,8 @@ pub async fn extract_thumbnails(
             let _permit = semaphore_clone.acquire_owned().await.ok();
 
             // Extract 7 thumbnails
-            let timestamps = thumbnail::calculate_timestamps(clip.duration_ms, 7);
+            let timestamps =
+                thumbnail::calculate_timestamps(clip.duration_ms, 7, clip.thumb_range_seconds);
             let clip_cache_dir = format!("{}/{}", cache_dir_clone, clip.id);
 
             // Only create if missing, don't wipe everything!
@@ -1578,6 +1581,7 @@ pub async fn update_clip_metadata(
     movement: Option<String>,
     manual_order: Option<i32>,
     lut_enabled: Option<i32>,
+    thumb_range_seconds: Option<u32>,
     state: State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
     let db = &state.db;
@@ -1591,7 +1595,18 @@ pub async fn update_clip_metadata(
         manual_order,
         lut_enabled,
     )
-    .map_err(|e| format!("Failed to update clip metadata: {}", e))
+    .map_err(|e| format!("Failed to update clip metadata: {}", e))?;
+
+    if let Some(range) = thumb_range_seconds {
+        db.update_clip_thumb_range(&clip_id, range)
+            .map_err(|e| format!("Failed to update clip thumb range: {}", e))?;
+
+        // Invalidate cache for this clip to trigger re-extraction
+        let cache_dir = format!("{}/{}", state.cache_dir, clip_id);
+        let _ = std::fs::remove_dir_all(&cache_dir);
+        let _ = std::fs::create_dir_all(&cache_dir);
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -2343,6 +2358,9 @@ fn build_clip_from_file(
                 audio_sample_rate: m.audio_sample_rate,
                 camera_iso: m.camera_iso,
                 camera_white_balance: m.camera_white_balance,
+                camera_lens: m.camera_lens,
+                camera_aperture: m.camera_aperture,
+                camera_angle: m.camera_angle,
                 audio_summary: m.audio_summary,
                 timecode: m.timecode,
                 status: status.to_string(),
@@ -2357,6 +2375,7 @@ fn build_clip_from_file(
                 manual_order: existing.as_ref().map(|c| c.manual_order).unwrap_or(0),
                 audio_envelope: existing.as_ref().and_then(|c| c.audio_envelope.clone()),
                 lut_enabled: existing.as_ref().map(|c| c.lut_enabled).unwrap_or(0),
+                thumb_range_seconds: None,
             }
         }
         Err(e) => {
@@ -2385,6 +2404,9 @@ fn build_clip_from_file(
                 audio_sample_rate: 0,
                 camera_iso: None,
                 camera_white_balance: None,
+                camera_lens: None,
+                camera_aperture: None,
+                camera_angle: None,
                 audio_summary: format!("Error: {}", e),
                 timecode: None,
                 status: "fail".to_string(),
@@ -2399,6 +2421,7 @@ fn build_clip_from_file(
                 manual_order: existing.as_ref().map(|c| c.manual_order).unwrap_or(0),
                 audio_envelope: existing.as_ref().and_then(|c| c.audio_envelope.clone()),
                 lut_enabled: existing.as_ref().map(|c| c.lut_enabled).unwrap_or(0),
+                thumb_range_seconds: None,
             }
         }
     }
@@ -2705,6 +2728,9 @@ mod tests {
             audio_sample_rate: 48000,
             camera_iso: None,
             camera_white_balance: None,
+            camera_lens: None,
+            camera_aperture: None,
+            camera_angle: None,
             audio_summary: "AAC".to_string(),
             timecode: None,
             status: "ok".to_string(),
@@ -2716,6 +2742,7 @@ mod tests {
             manual_order: 0,
             audio_envelope: None,
             lut_enabled: 0,
+            thumb_range_seconds: None,
         }
     }
 
