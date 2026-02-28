@@ -1363,7 +1363,7 @@ function AppContent() {
                 <div
                   className="module-card premium-card"
                   onClick={() => setActiveMediaWorkspaceApp('safe-copy')}
-                  style={{ "--corner-color": "rgba(255, 255, 255, 0.05)", "--card-accent": "#ffffff", "--card-accent-soft": "rgba(255, 255, 255, 0.1)" } as any}
+                  style={{ "--corner-color": "var(--color-accent-soft)", "--card-accent": "var(--color-accent)", "--card-accent-soft": "var(--color-accent-soft)" } as any}
                 >
                   <div className="module-icon"><ShieldCheck size={32} strokeWidth={1.5} /></div>
                   <div className="module-info">
@@ -1405,7 +1405,7 @@ function AppContent() {
                 <div
                   className={`module-card premium-card ${!projectId ? "disabled" : ""}`}
                   onClick={() => { if (projectId) setShowExportPanel(true); }}
-                  style={{ "--corner-color": "var(--color-accent-forest-soft)", "--card-accent": "var(--color-accent-forest)", "--card-accent-soft": "var(--color-accent-forest-soft)" } as any}
+                  style={{ "--corner-color": "var(--color-accent-soft)", "--card-accent": "var(--color-accent)", "--card-accent-soft": "var(--color-accent-soft)" } as any}
                 >
                   <div className="module-icon"><FileDown size={32} strokeWidth={1.5} /></div>
                   <div className="module-info">
@@ -1447,7 +1447,7 @@ function AppContent() {
                   setActivePreproductionApp(null);
                   setActiveMediaWorkspaceApp(null);
                 }}
-                style={{ height: 320, "--corner-color": "rgba(255, 255, 255, 0.05)", "--card-accent": "#ffffff", "--card-accent-soft": "rgba(255, 255, 255, 0.1)" } as any}
+                style={{ height: 320, "--corner-color": "var(--color-accent-soft)", "--card-accent": "var(--color-accent)", "--card-accent-soft": "var(--color-accent-soft)" } as any}
               >
                 <div className="module-icon"><BriefcaseBusiness size={48} strokeWidth={1.2} /></div>
                 <div className="module-info">
