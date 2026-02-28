@@ -855,6 +855,30 @@ function AppContent() {
   const topFps = clips.length > 0 ? [...fpsSet].sort((a, b) => b - a)[0] : 0;
   const resolutions = new Set(clips.map((c) => `${c.clip.width}×${c.clip.height}`).filter(r => r !== "0×0"));
   const topRes = resolutions.size > 0 ? [...resolutions][0] : "—";
+
+  // Aspect ratio detection
+  const calculateRatio = (w: number, h: number) => {
+    if (!w || !h) return null;
+    const gcd = (a: number, b: number): number => b === 0 ? a : gcd(b, a % b);
+    const common = gcd(w, h);
+    const rw = w / common;
+    const rh = h / common;
+
+    // Check for common cinematic/standard ratios
+    const ratio = w / h;
+    if (Math.abs(ratio - 16 / 9) < 0.01) return "16:9";
+    if (Math.abs(ratio - 9 / 16) < 0.01) return "9:16";
+    if (Math.abs(ratio - 2.35) < 0.02) return "2.35:1";
+    if (Math.abs(ratio - 2.39) < 0.02) return "2.39:1";
+    if (Math.abs(ratio - 1.85) < 0.01) return "1.85:1";
+    if (Math.abs(ratio - 4 / 3) < 0.01) return "4:3";
+    if (Math.abs(ratio - 1) < 0.01) return "1:1";
+
+    return `${rw}:${rh}`;
+  };
+
+  const ratioSet = new Set(clips.map(c => calculateRatio(c.clip.width, c.clip.height)).filter(Boolean));
+  const ratioLabel = ratioSet.size > 1 ? [...ratioSet].join(", ") : ratioSet.size === 1 ? [...ratioSet][0] : "";
   const picksCount = clips.filter((c) => c.clip.flag === "pick").length;
   const ratedCount = clips.filter((c) => c.clip.rating > 0).length;
 
@@ -1063,7 +1087,9 @@ function AppContent() {
                       <span className="stat-label">Resolution</span>
                     </div>
                     <span className="stat-value" style={{ fontSize: '0.85rem' }}>{topRes}</span>
-                    <span className="stat-sub">{resolutions.size} format{resolutions.size !== 1 ? 's' : ''}</span>
+                    <span className="stat-sub">
+                      {ratioLabel ? `${ratioLabel}` : `${resolutions.size} format${resolutions.size !== 1 ? 's' : ''}`}
+                    </span>
                   </div>
                   <div className="stat-card">
                     <div className="stat-header">
