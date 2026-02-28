@@ -847,35 +847,6 @@ pub async fn list_verification_jobs_for_project(
 }
 
 #[tauri::command]
-pub async fn export_verification_report_json(
-    job_id: String,
-    save_path: String,
-    state: State<'_, Arc<AppState>>,
-) -> Result<(), String> {
-    let job = state
-        .db
-        .get_verification_job(&job_id)
-        .map_err(|e| e.to_string())?
-        .ok_or("Job not found")?;
-    let items = state
-        .db
-        .get_verification_items(&job_id)
-        .map_err(|e| e.to_string())?;
-
-    let report = serde_json::json!({
-        "job": job,
-        "items": items,
-        "app": "Wrap Preview",
-        "version": env!("CARGO_PKG_VERSION"),
-        "exported_at": chrono::Utc::now().to_rfc3339(),
-    });
-
-    let content = serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?;
-    std::fs::write(&save_path, content).map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-#[tauri::command]
 pub async fn export_verification_report_markdown(
     job_id: String,
     out_dir: String,
@@ -990,7 +961,7 @@ pub async fn export_verification_report_pdf(
         Mm(297.0),
         "Layer 1",
     );
-    let layer = doc.get_page(page1).get_layer(layer1);
+    let mut layer = doc.get_page(page1).get_layer(layer1);
     let font = doc
         .add_builtin_font(BuiltinFont::Helvetica)
         .map_err(|e| e.to_string())?;
@@ -1071,7 +1042,16 @@ pub async fn export_verification_report_pdf(
     line("Top issues:".to_string(), &mut y, &layer, &font);
     for item in items.iter().filter(|i| i.status != "OK").take(60) {
         if y < 12.0 {
-            break;
+            let (new_page, new_layer) = doc.add_page(Mm(210.0), Mm(297.0), "Layer 1");
+            layer = doc.get_page(new_page).get_layer(new_layer);
+            y = 285.0;
+            line(
+                format!("{} - Verification Report (Cont.)", brand_name),
+                &mut y,
+                &layer,
+                &font,
+            );
+            y -= 10.0;
         }
         line(
             format!("[{}] {}", item.status, item.rel_path),
@@ -1079,6 +1059,10 @@ pub async fn export_verification_report_pdf(
             &layer,
             &font,
         );
+    }
+    if y < 12.0 {
+        let (new_page, new_layer) = doc.add_page(Mm(210.0), Mm(297.0), "Layer 1");
+        layer = doc.get_page(new_page).get_layer(new_layer);
     }
     layer.use_text(
         format!("© {}. All rights reserved.", brand_name),
@@ -1288,7 +1272,7 @@ pub async fn export_verification_queue_report_pdf(
         Mm(297.0),
         "Layer 1",
     );
-    let layer = doc.get_page(page1).get_layer(layer1);
+    let mut layer = doc.get_page(page1).get_layer(layer1);
     let font = doc
         .add_builtin_font(BuiltinFont::Helvetica)
         .map_err(|e| e.to_string())?;
@@ -1322,8 +1306,17 @@ pub async fn export_verification_queue_report_pdf(
     line("This report was created with Wrap Preview — a professional offline tool for creatives to verify, review, and prepare footage for post-production.".to_string(), &mut y, &layer, &font);
     y -= 4.0;
     for (item, job) in &queue_with_jobs {
-        if y < 24.0 {
-            break;
+        if y < 35.0 {
+            let (new_page, new_layer) = doc.add_page(Mm(210.0), Mm(297.0), "Layer 1");
+            layer = doc.get_page(new_page).get_layer(new_layer);
+            y = 285.0;
+            line(
+                format!("{} - Verification Queue Report (Cont.)", brand_name),
+                &mut y,
+                &layer,
+                &font,
+            );
+            y -= 10.0;
         }
         line(
             format!(
@@ -1374,6 +1367,10 @@ pub async fn export_verification_queue_report_pdf(
             &layer,
             &font,
         );
+    }
+    if y < 12.0 {
+        let (new_page, new_layer) = doc.add_page(Mm(210.0), Mm(297.0), "Layer 1");
+        layer = doc.get_page(new_page).get_layer(new_layer);
     }
     layer.use_text(
         format!("© {}. All rights reserved.", brand_name),

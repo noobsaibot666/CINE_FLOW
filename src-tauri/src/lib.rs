@@ -74,7 +74,6 @@ pub fn run() {
             commands::remove_verification_queue_item,
             commands::clear_verification_queue,
             commands::start_verification_queue,
-            commands::export_verification_report_json,
             commands::export_verification_report_markdown,
             commands::export_verification_report_pdf,
             commands::export_verification_queue_report_markdown,

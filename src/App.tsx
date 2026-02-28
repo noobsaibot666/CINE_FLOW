@@ -19,6 +19,7 @@ import {
   LayoutGrid,
   FolderTree,
   ArrowLeft,
+  AlertTriangle,
 } from "lucide-react";
 import { ClipList } from "./components/ClipList";
 import { PrintLayout } from "./components/PrintLayout";
@@ -1089,11 +1090,16 @@ function AppContent() {
               <div className="jobs-indicator-content">
                 <BriefcaseBusiness size={16} />
                 <span className="jobs-label">
-                  {(scanning || extracting) ? (scanning ? "Scanning…" : `Extracting ${extractProgress.done}/${extractProgress.total}`) : `Jobs${runningJobs > 0 ? ` (${runningJobs})` : ""}`}
+                  {(scanning || extracting) ? (scanning ? "Scanning…" : `Extracting ${extractProgress.done}/${extractProgress.total}`) : (
+                    runningJobs > 0 ? `Running ${runningJobs}` : "Jobs"
+                  )}
                 </span>
+                {jobs.some(j => j.status === 'failed') && <AlertTriangle size={14} className="status-icon-failed" style={{ marginLeft: 4 }} />}
               </div>
               {(scanning || extracting || runningJobs > 0) && (
-                <div className="jobs-active-dot" />
+                <div className="jobs-progress-bar">
+                  <div className="jobs-progress-bar-fill" />
+                </div>
               )}
             </button>
           </>
