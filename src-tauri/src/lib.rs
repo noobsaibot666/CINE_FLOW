@@ -8,6 +8,7 @@ mod folders;
 mod jobs;
 mod lut;
 mod perf;
+mod review_core;
 mod scanner;
 mod thumbnail;
 mod tools;
@@ -32,15 +33,27 @@ pub fn run() {
     let app_state = Arc::new(AppState {
         db: database.clone(),
         cache_dir,
-        job_manager: crate::jobs::JobManager::new(Some(database)),
+        job_manager: Arc::new(crate::jobs::JobManager::new(Some(database))),
         perf_log: crate::perf::PerfLog::new(500),
+        review_core_base_dir: crate::review_core::storage::review_core_base_dir(),
+        review_core_server_base_url: std::sync::Mutex::new(None),
     });
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .manage(app_state)
+        .manage(app_state.clone())
+        .setup(move |_| {
+            let server_url = crate::review_core::server::start_review_core_server(
+                app_state.db.clone(),
+                app_state.review_core_base_dir.clone(),
+            )?;
+            if let Ok(mut lock) = app_state.review_core_server_base_url.lock() {
+                *lock = Some(server_url);
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::scan_folder,
             commands::list_project_roots,
@@ -96,6 +109,34 @@ pub fn run() {
             commands::get_project_settings,
             commands::create_folder_zip,
             commands::purge_cache,
+            commands::review_core_ingest_files,
+            commands::review_core_list_assets,
+            commands::review_core_list_asset_versions,
+            commands::review_core_list_thumbnails,
+            commands::review_core_get_server_base_url,
+            commands::review_core_check_duplicate_files,
+            commands::review_core_add_comment,
+            commands::review_core_list_comments,
+            commands::review_core_update_comment,
+            commands::review_core_delete_comment,
+            commands::review_core_add_annotation,
+            commands::review_core_list_annotations,
+            commands::review_core_delete_annotation,
+            commands::review_core_get_approval,
+            commands::review_core_set_approval,
+            commands::review_core_create_share_link,
+            commands::review_core_list_share_links,
+            commands::review_core_revoke_share_link,
+            commands::review_core_resolve_share_link,
+            commands::review_core_verify_share_link_password,
+            commands::review_core_share_unlock,
+            commands::review_core_share_list_assets,
+            commands::review_core_share_list_versions,
+            commands::review_core_share_list_thumbnails,
+            commands::review_core_share_list_comments,
+            commands::review_core_share_add_comment,
+            commands::review_core_share_list_annotations,
+            commands::review_core_share_export_download,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

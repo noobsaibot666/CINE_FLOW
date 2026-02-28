@@ -128,3 +128,128 @@ export interface AppInfo {
     arch: string;
     braw_bridge_active?: boolean;
 }
+
+export interface ReviewCoreAsset {
+    id: string;
+    project_id: string;
+    filename: string;
+    original_path: string;
+    storage_key: string;
+    file_size: number;
+    duration_ms?: number | null;
+    frame_rate?: number | null;
+    avg_frame_rate?: string | null;
+    r_frame_rate?: string | null;
+    is_vfr: boolean;
+    width?: number | null;
+    height?: number | null;
+    codec?: string | null;
+    status: "processing" | "ready" | "failed";
+    checksum_sha256: string;
+    last_error?: string | null;
+    created_at: string;
+}
+
+export interface ReviewCoreAssetVersion {
+    id: string;
+    asset_id: string;
+    version_number: number;
+    original_file_key: string;
+    proxy_playlist_key?: string | null;
+    thumbnails_key?: string | null;
+    poster_key?: string | null;
+    processing_status: "processing" | "ready" | "failed";
+    last_error?: string | null;
+    created_at: string;
+}
+
+export interface ReviewCoreThumbnailInfo {
+    file_name: string;
+    index: number;
+    approx_seconds: number;
+}
+
+export interface ReviewCoreDuplicateCandidate {
+    file_path: string;
+    checksum_sha256: string;
+    existing_asset_id: string;
+    existing_filename: string;
+}
+
+export interface ReviewCoreComment {
+    id: string;
+    asset_version_id: string;
+    timestamp_ms: number;
+    frame_number?: number | null;
+    text: string;
+    author_name: string;
+    resolved: boolean;
+    created_at: string;
+}
+
+export interface ReviewCoreAnnotation {
+    id: string;
+    comment_id: string;
+    asset_version_id: string;
+    timestamp_ms: number;
+    vector_data: string;
+    coordinate_space: string;
+    created_at: string;
+}
+
+export interface ReviewCoreApprovalState {
+    asset_version_id: string;
+    status: "draft" | "in_review" | "approved" | "rejected";
+    approved_at?: string | null;
+    approved_by?: string | null;
+}
+
+export interface ReviewCoreShareLinkSummary {
+    id: string;
+    project_id: string;
+    token: string;
+    asset_version_ids: string[];
+    expires_at?: string | null;
+    allow_comments: boolean;
+    allow_download: boolean;
+    password_required: boolean;
+    created_at: string;
+}
+
+export interface ReviewCoreShareLinkResolved {
+    project_id: string;
+    project_name: string;
+    asset_version_ids: string[];
+    allow_comments: boolean;
+    allow_download: boolean;
+    password_required: boolean;
+}
+
+export interface ReviewCoreShareUnlockResult {
+    session_token?: string | null;
+    expires_at?: string | null;
+}
+
+export interface ReviewCoreSharedAssetSummary {
+    id: string;
+    project_id: string;
+    filename: string;
+    duration_ms?: number | null;
+    frame_rate?: number | null;
+    avg_frame_rate?: string | null;
+    r_frame_rate?: string | null;
+    is_vfr: boolean;
+    width?: number | null;
+    height?: number | null;
+    codec?: string | null;
+    status: string;
+    created_at: string;
+}
+
+export interface ReviewCoreSharedVersionSummary {
+    id: string;
+    asset_id: string;
+    version_number: number;
+    processing_status: "processing" | "ready" | "failed";
+    created_at: string;
+}

@@ -163,6 +163,96 @@ pub struct ProjectSettings {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Asset {
+    pub id: String,
+    pub project_id: String,
+    pub filename: String,
+    pub original_path: String,
+    pub storage_key: String,
+    pub file_size: u64,
+    pub duration_ms: Option<u64>,
+    pub frame_rate: Option<f64>,
+    pub avg_frame_rate: Option<String>,
+    pub r_frame_rate: Option<String>,
+    pub is_vfr: bool,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub codec: Option<String>,
+    pub status: String,
+    pub checksum_sha256: String,
+    pub last_error: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AssetVersion {
+    pub id: String,
+    pub asset_id: String,
+    pub version_number: i32,
+    pub original_file_key: String,
+    pub proxy_playlist_key: Option<String>,
+    pub thumbnails_key: Option<String>,
+    pub poster_key: Option<String>,
+    pub processing_status: String,
+    pub last_error: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReviewCoreComment {
+    pub id: String,
+    pub asset_version_id: String,
+    pub timestamp_ms: i64,
+    pub frame_number: Option<i64>,
+    pub text: String,
+    pub author_name: String,
+    pub resolved: bool,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReviewCoreAnnotation {
+    pub id: String,
+    pub comment_id: String,
+    pub asset_version_id: String,
+    pub timestamp_ms: i64,
+    pub vector_data: String,
+    pub coordinate_space: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReviewCoreApprovalState {
+    pub asset_version_id: String,
+    pub status: String,
+    pub approved_at: Option<String>,
+    pub approved_by: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReviewCoreShareLink {
+    pub id: String,
+    pub project_id: String,
+    pub token: String,
+    pub asset_version_ids_json: String,
+    pub expires_at: Option<String>,
+    pub password_hash: Option<String>,
+    pub allow_comments: bool,
+    pub allow_download: bool,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReviewCoreShareSession {
+    pub id: String,
+    pub share_link_id: String,
+    pub token: String,
+    pub expires_at: String,
+    pub created_at: String,
+    pub last_seen_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PersistentJob {
     pub id: String,
     pub kind: String,
@@ -441,6 +531,228 @@ impl Database {
                 );
                 ",
             )?;
+
+            conn.execute_batch(
+                "
+                CREATE TABLE IF NOT EXISTS assets (
+                    id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL,
+                    filename TEXT NOT NULL,
+                    original_path TEXT NOT NULL,
+                    storage_key TEXT NOT NULL,
+                    file_size INTEGER NOT NULL,
+                    duration_ms INTEGER,
+                    frame_rate REAL,
+                    avg_frame_rate TEXT,
+                    r_frame_rate TEXT,
+                    is_vfr INTEGER NOT NULL DEFAULT 0,
+                    width INTEGER,
+                    height INTEGER,
+                    codec TEXT,
+                    status TEXT NOT NULL,
+                    checksum_sha256 TEXT NOT NULL,
+                    last_error TEXT,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (project_id) REFERENCES projects(id)
+                );
+
+                CREATE TABLE IF NOT EXISTS asset_versions (
+                    id TEXT PRIMARY KEY,
+                    asset_id TEXT NOT NULL,
+                    version_number INTEGER NOT NULL,
+                    original_file_key TEXT NOT NULL,
+                    proxy_playlist_key TEXT,
+                    thumbnails_key TEXT,
+                    poster_key TEXT,
+                    processing_status TEXT NOT NULL,
+                    last_error TEXT,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (asset_id) REFERENCES assets(id)
+                );
+
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_asset_versions_asset_version
+                    ON asset_versions(asset_id, version_number);
+                CREATE INDEX IF NOT EXISTS idx_assets_project_id ON assets(project_id);
+                CREATE INDEX IF NOT EXISTS idx_asset_versions_asset_id ON asset_versions(asset_id);
+                CREATE INDEX IF NOT EXISTS idx_assets_project_checksum ON assets(project_id, checksum_sha256);
+
+                CREATE TABLE IF NOT EXISTS review_core_comments (
+                    id TEXT PRIMARY KEY,
+                    asset_version_id TEXT NOT NULL,
+                    timestamp_ms INTEGER NOT NULL,
+                    frame_number INTEGER,
+                    text TEXT NOT NULL,
+                    author_name TEXT NOT NULL DEFAULT 'Anonymous',
+                    resolved INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (asset_version_id) REFERENCES asset_versions(id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_comments_asset_version_time
+                    ON review_core_comments(asset_version_id, timestamp_ms);
+                CREATE INDEX IF NOT EXISTS idx_comments_asset_version_created
+                    ON review_core_comments(asset_version_id, created_at);
+
+                CREATE TABLE IF NOT EXISTS review_core_annotations (
+                    id TEXT PRIMARY KEY,
+                    comment_id TEXT NOT NULL,
+                    asset_version_id TEXT NOT NULL,
+                    timestamp_ms INTEGER NOT NULL,
+                    vector_data TEXT NOT NULL,
+                    coordinate_space TEXT NOT NULL DEFAULT 'normalized_0_1',
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (comment_id) REFERENCES review_core_comments(id),
+                    FOREIGN KEY (asset_version_id) REFERENCES asset_versions(id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_annotations_comment
+                    ON review_core_annotations(comment_id);
+                CREATE INDEX IF NOT EXISTS idx_annotations_asset_version_time
+                    ON review_core_annotations(asset_version_id, timestamp_ms);
+
+                CREATE TABLE IF NOT EXISTS review_core_approval_state (
+                    asset_version_id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL DEFAULT 'draft',
+                    approved_at TEXT,
+                    approved_by TEXT,
+                    FOREIGN KEY (asset_version_id) REFERENCES asset_versions(id)
+                );
+
+                CREATE TABLE IF NOT EXISTS review_core_share_links (
+                    id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL,
+                    token TEXT NOT NULL UNIQUE,
+                    asset_version_ids_json TEXT NOT NULL,
+                    expires_at TEXT,
+                    password_hash TEXT,
+                    allow_comments INTEGER NOT NULL DEFAULT 1,
+                    allow_download INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (project_id) REFERENCES projects(id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_share_links_project_id
+                    ON review_core_share_links(project_id);
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_share_links_token
+                    ON review_core_share_links(token);
+
+                CREATE TABLE IF NOT EXISTS review_core_share_sessions (
+                    id TEXT PRIMARY KEY,
+                    share_link_id TEXT NOT NULL,
+                    token TEXT NOT NULL UNIQUE,
+                    expires_at TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    last_seen_at TEXT,
+                    FOREIGN KEY (share_link_id) REFERENCES review_core_share_links(id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_share_sessions_share_link_id
+                    ON review_core_share_sessions(share_link_id);
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_share_sessions_token
+                    ON review_core_share_sessions(token);
+                ",
+            )?;
+
+            let mut assets_stmt = conn.prepare("PRAGMA table_info(assets)")?;
+            let asset_columns: Vec<String> = assets_stmt
+                .query_map([], |row| row.get(1))?
+                .filter_map(|r| r.ok())
+                .collect();
+            if !asset_columns.contains(&"avg_frame_rate".to_string()) {
+                conn.execute("ALTER TABLE assets ADD COLUMN avg_frame_rate TEXT", [])?;
+            }
+            if !asset_columns.contains(&"r_frame_rate".to_string()) {
+                conn.execute("ALTER TABLE assets ADD COLUMN r_frame_rate TEXT", [])?;
+            }
+            if !asset_columns.contains(&"is_vfr".to_string()) {
+                conn.execute(
+                    "ALTER TABLE assets ADD COLUMN is_vfr INTEGER NOT NULL DEFAULT 0",
+                    [],
+                )?;
+            }
+            if !asset_columns.contains(&"last_error".to_string()) {
+                conn.execute("ALTER TABLE assets ADD COLUMN last_error TEXT", [])?;
+            }
+
+            let mut asset_versions_stmt = conn.prepare("PRAGMA table_info(asset_versions)")?;
+            let asset_version_columns: Vec<String> = asset_versions_stmt
+                .query_map([], |row| row.get(1))?
+                .filter_map(|r| r.ok())
+                .collect();
+            if !asset_version_columns.contains(&"last_error".to_string()) {
+                conn.execute("ALTER TABLE asset_versions ADD COLUMN last_error TEXT", [])?;
+            }
+
+            conn.execute_batch(
+                "
+                CREATE TABLE IF NOT EXISTS review_core_comments (
+                    id TEXT PRIMARY KEY,
+                    asset_version_id TEXT NOT NULL,
+                    timestamp_ms INTEGER NOT NULL,
+                    frame_number INTEGER,
+                    text TEXT NOT NULL,
+                    author_name TEXT NOT NULL DEFAULT 'Anonymous',
+                    resolved INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (asset_version_id) REFERENCES asset_versions(id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_comments_asset_version_time
+                    ON review_core_comments(asset_version_id, timestamp_ms);
+                CREATE INDEX IF NOT EXISTS idx_comments_asset_version_created
+                    ON review_core_comments(asset_version_id, created_at);
+
+                CREATE TABLE IF NOT EXISTS review_core_annotations (
+                    id TEXT PRIMARY KEY,
+                    comment_id TEXT NOT NULL,
+                    asset_version_id TEXT NOT NULL,
+                    timestamp_ms INTEGER NOT NULL,
+                    vector_data TEXT NOT NULL,
+                    coordinate_space TEXT NOT NULL DEFAULT 'normalized_0_1',
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (comment_id) REFERENCES review_core_comments(id),
+                    FOREIGN KEY (asset_version_id) REFERENCES asset_versions(id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_annotations_comment
+                    ON review_core_annotations(comment_id);
+                CREATE INDEX IF NOT EXISTS idx_annotations_asset_version_time
+                    ON review_core_annotations(asset_version_id, timestamp_ms);
+
+                CREATE TABLE IF NOT EXISTS review_core_approval_state (
+                    asset_version_id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL DEFAULT 'draft',
+                    approved_at TEXT,
+                    approved_by TEXT,
+                    FOREIGN KEY (asset_version_id) REFERENCES asset_versions(id)
+                );
+
+                CREATE TABLE IF NOT EXISTS review_core_share_links (
+                    id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL,
+                    token TEXT NOT NULL UNIQUE,
+                    asset_version_ids_json TEXT NOT NULL,
+                    expires_at TEXT,
+                    password_hash TEXT,
+                    allow_comments INTEGER NOT NULL DEFAULT 1,
+                    allow_download INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (project_id) REFERENCES projects(id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_share_links_project_id
+                    ON review_core_share_links(project_id);
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_share_links_token
+                    ON review_core_share_links(token);
+
+                CREATE TABLE IF NOT EXISTS review_core_share_sessions (
+                    id TEXT PRIMARY KEY,
+                    share_link_id TEXT NOT NULL,
+                    token TEXT NOT NULL UNIQUE,
+                    expires_at TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    last_seen_at TEXT,
+                    FOREIGN KEY (share_link_id) REFERENCES review_core_share_links(id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_share_sessions_share_link_id
+                    ON review_core_share_sessions(share_link_id);
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_share_sessions_token
+                    ON review_core_share_sessions(token);
+                ",
+            )?;
         }
 
         Ok(db)
@@ -626,6 +938,119 @@ impl Database {
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS assets (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                filename TEXT NOT NULL,
+                original_path TEXT NOT NULL,
+                storage_key TEXT NOT NULL,
+                file_size INTEGER NOT NULL,
+                duration_ms INTEGER,
+                frame_rate REAL,
+                avg_frame_rate TEXT,
+                r_frame_rate TEXT,
+                is_vfr INTEGER NOT NULL DEFAULT 0,
+                width INTEGER,
+                height INTEGER,
+                codec TEXT,
+                status TEXT NOT NULL,
+                checksum_sha256 TEXT NOT NULL,
+                last_error TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (project_id) REFERENCES projects(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS asset_versions (
+                id TEXT PRIMARY KEY,
+                asset_id TEXT NOT NULL,
+                version_number INTEGER NOT NULL,
+                original_file_key TEXT NOT NULL,
+                proxy_playlist_key TEXT,
+                thumbnails_key TEXT,
+                poster_key TEXT,
+                processing_status TEXT NOT NULL,
+                last_error TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (asset_id) REFERENCES assets(id)
+            );
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_asset_versions_asset_version
+                ON asset_versions(asset_id, version_number);
+            CREATE INDEX IF NOT EXISTS idx_assets_project_id ON assets(project_id);
+            CREATE INDEX IF NOT EXISTS idx_asset_versions_asset_id ON asset_versions(asset_id);
+            CREATE INDEX IF NOT EXISTS idx_assets_project_checksum ON assets(project_id, checksum_sha256);
+
+            CREATE TABLE IF NOT EXISTS review_core_comments (
+                id TEXT PRIMARY KEY,
+                asset_version_id TEXT NOT NULL,
+                timestamp_ms INTEGER NOT NULL,
+                frame_number INTEGER,
+                text TEXT NOT NULL,
+                author_name TEXT NOT NULL DEFAULT 'Anonymous',
+                resolved INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (asset_version_id) REFERENCES asset_versions(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_comments_asset_version_time
+                ON review_core_comments(asset_version_id, timestamp_ms);
+            CREATE INDEX IF NOT EXISTS idx_comments_asset_version_created
+                ON review_core_comments(asset_version_id, created_at);
+
+            CREATE TABLE IF NOT EXISTS review_core_annotations (
+                id TEXT PRIMARY KEY,
+                comment_id TEXT NOT NULL,
+                asset_version_id TEXT NOT NULL,
+                timestamp_ms INTEGER NOT NULL,
+                vector_data TEXT NOT NULL,
+                coordinate_space TEXT NOT NULL DEFAULT 'normalized_0_1',
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (comment_id) REFERENCES review_core_comments(id),
+                FOREIGN KEY (asset_version_id) REFERENCES asset_versions(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_annotations_comment
+                ON review_core_annotations(comment_id);
+            CREATE INDEX IF NOT EXISTS idx_annotations_asset_version_time
+                ON review_core_annotations(asset_version_id, timestamp_ms);
+
+            CREATE TABLE IF NOT EXISTS review_core_approval_state (
+                asset_version_id TEXT PRIMARY KEY,
+                status TEXT NOT NULL DEFAULT 'draft',
+                approved_at TEXT,
+                approved_by TEXT,
+                FOREIGN KEY (asset_version_id) REFERENCES asset_versions(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS review_core_share_links (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                token TEXT NOT NULL UNIQUE,
+                asset_version_ids_json TEXT NOT NULL,
+                expires_at TEXT,
+                password_hash TEXT,
+                allow_comments INTEGER NOT NULL DEFAULT 1,
+                allow_download INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (project_id) REFERENCES projects(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_share_links_project_id
+                ON review_core_share_links(project_id);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_share_links_token
+                ON review_core_share_links(token);
+
+            CREATE TABLE IF NOT EXISTS review_core_share_sessions (
+                id TEXT PRIMARY KEY,
+                share_link_id TEXT NOT NULL,
+                token TEXT NOT NULL UNIQUE,
+                expires_at TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                last_seen_at TEXT,
+                FOREIGN KEY (share_link_id) REFERENCES review_core_share_links(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_share_sessions_share_link_id
+                ON review_core_share_sessions(share_link_id);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_share_sessions_token
+                ON review_core_share_sessions(token);
             ",
         )?;
         Ok(())
@@ -719,6 +1144,671 @@ impl Database {
         )?;
         Ok(())
     }
+
+    pub fn create_asset(&self, asset: &Asset) -> SqlResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO assets (
+                id, project_id, filename, original_path, storage_key, file_size, duration_ms,
+                frame_rate, avg_frame_rate, r_frame_rate, is_vfr, width, height, codec, status,
+                checksum_sha256, last_error, created_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+            params![
+                asset.id,
+                asset.project_id,
+                asset.filename,
+                asset.original_path,
+                asset.storage_key,
+                asset.file_size,
+                asset.duration_ms,
+                asset.frame_rate,
+                asset.avg_frame_rate,
+                asset.r_frame_rate,
+                asset.is_vfr as i32,
+                asset.width,
+                asset.height,
+                asset.codec,
+                asset.status,
+                asset.checksum_sha256,
+                asset.last_error,
+                asset.created_at
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn create_asset_version(&self, version: &AssetVersion) -> SqlResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO asset_versions (
+                id, asset_id, version_number, original_file_key, proxy_playlist_key,
+                thumbnails_key, poster_key, processing_status, last_error, created_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                version.id,
+                version.asset_id,
+                version.version_number,
+                version.original_file_key,
+                version.proxy_playlist_key,
+                version.thumbnails_key,
+                version.poster_key,
+                version.processing_status,
+                version.last_error,
+                version.created_at
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_assets(&self, project_id: &str) -> SqlResult<Vec<Asset>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, project_id, filename, original_path, storage_key, file_size, duration_ms,
+                    frame_rate, avg_frame_rate, r_frame_rate, is_vfr, width, height, codec, status, checksum_sha256, last_error, created_at
+             FROM assets
+             WHERE project_id = ?1
+             ORDER BY created_at DESC, filename ASC",
+        )?;
+        let rows = stmt
+            .query_map(params![project_id], |row| {
+                Ok(Asset {
+                    id: row.get(0)?,
+                    project_id: row.get(1)?,
+                    filename: row.get(2)?,
+                    original_path: row.get(3)?,
+                    storage_key: row.get(4)?,
+                    file_size: row.get(5)?,
+                    duration_ms: row.get(6)?,
+                    frame_rate: row.get(7)?,
+                    avg_frame_rate: row.get(8)?,
+                    r_frame_rate: row.get(9)?,
+                    is_vfr: row.get::<_, i32>(10)? != 0,
+                    width: row.get(11)?,
+                    height: row.get(12)?,
+                    codec: row.get(13)?,
+                    status: row.get(14)?,
+                    checksum_sha256: row.get(15)?,
+                    last_error: row.get(16)?,
+                    created_at: row.get(17)?,
+                })
+            })?
+            .collect::<SqlResult<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    pub fn get_asset(&self, asset_id: &str) -> SqlResult<Option<Asset>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, project_id, filename, original_path, storage_key, file_size, duration_ms,
+                    frame_rate, avg_frame_rate, r_frame_rate, is_vfr, width, height, codec, status, checksum_sha256, last_error, created_at
+             FROM assets WHERE id = ?1",
+        )?;
+        let mut rows = stmt.query_map(params![asset_id], |row| {
+            Ok(Asset {
+                id: row.get(0)?,
+                project_id: row.get(1)?,
+                filename: row.get(2)?,
+                original_path: row.get(3)?,
+                storage_key: row.get(4)?,
+                file_size: row.get(5)?,
+                duration_ms: row.get(6)?,
+                frame_rate: row.get(7)?,
+                avg_frame_rate: row.get(8)?,
+                r_frame_rate: row.get(9)?,
+                is_vfr: row.get::<_, i32>(10)? != 0,
+                width: row.get(11)?,
+                height: row.get(12)?,
+                codec: row.get(13)?,
+                status: row.get(14)?,
+                checksum_sha256: row.get(15)?,
+                last_error: row.get(16)?,
+                created_at: row.get(17)?,
+            })
+        })?;
+        match rows.next() {
+            Some(Ok(asset)) => Ok(Some(asset)),
+            _ => Ok(None),
+        }
+    }
+
+    pub fn list_asset_versions(&self, asset_id: &str) -> SqlResult<Vec<AssetVersion>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, asset_id, version_number, original_file_key, proxy_playlist_key,
+                    thumbnails_key, poster_key, processing_status, last_error, created_at
+             FROM asset_versions
+             WHERE asset_id = ?1
+             ORDER BY version_number DESC",
+        )?;
+        let rows = stmt
+            .query_map(params![asset_id], |row| {
+                Ok(AssetVersion {
+                    id: row.get(0)?,
+                    asset_id: row.get(1)?,
+                    version_number: row.get(2)?,
+                    original_file_key: row.get(3)?,
+                    proxy_playlist_key: row.get(4)?,
+                    thumbnails_key: row.get(5)?,
+                    poster_key: row.get(6)?,
+                    processing_status: row.get(7)?,
+                    last_error: row.get(8)?,
+                    created_at: row.get(9)?,
+                })
+            })?
+            .collect::<SqlResult<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    pub fn get_asset_version(&self, version_id: &str) -> SqlResult<Option<AssetVersion>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, asset_id, version_number, original_file_key, proxy_playlist_key,
+                    thumbnails_key, poster_key, processing_status, last_error, created_at
+             FROM asset_versions WHERE id = ?1",
+        )?;
+        let mut rows = stmt.query_map(params![version_id], |row| {
+            Ok(AssetVersion {
+                id: row.get(0)?,
+                asset_id: row.get(1)?,
+                version_number: row.get(2)?,
+                original_file_key: row.get(3)?,
+                proxy_playlist_key: row.get(4)?,
+                thumbnails_key: row.get(5)?,
+                poster_key: row.get(6)?,
+                processing_status: row.get(7)?,
+                last_error: row.get(8)?,
+                created_at: row.get(9)?,
+            })
+        })?;
+        match rows.next() {
+            Some(Ok(version)) => Ok(Some(version)),
+            _ => Ok(None),
+        }
+    }
+
+    pub fn update_asset_metadata(
+        &self,
+        asset_id: &str,
+        duration_ms: u64,
+        frame_rate: f64,
+        avg_frame_rate: Option<&str>,
+        r_frame_rate: Option<&str>,
+        is_vfr: bool,
+        width: u32,
+        height: u32,
+        codec: &str,
+        status: Option<&str>,
+    ) -> SqlResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE assets
+             SET duration_ms = ?1,
+                 frame_rate = ?2,
+                 avg_frame_rate = ?3,
+                 r_frame_rate = ?4,
+                 is_vfr = ?5,
+                 width = ?6,
+                 height = ?7,
+                 codec = ?8,
+                 status = COALESCE(?9, status),
+                 last_error = NULL
+             WHERE id = ?10",
+            params![duration_ms, frame_rate, avg_frame_rate, r_frame_rate, is_vfr as i32, width, height, codec, status, asset_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_asset_error(&self, asset_id: &str, status: &str, last_error: Option<&str>) -> SqlResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE assets SET status = ?1, last_error = ?2 WHERE id = ?3",
+            params![status, last_error, asset_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_asset_version_error(&self, version_id: &str, status: &str, last_error: Option<&str>) -> SqlResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE asset_versions SET processing_status = ?1, last_error = ?2 WHERE id = ?3",
+            params![status, last_error, version_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_asset_version_outputs(
+        &self,
+        version_id: &str,
+        playlist_key: Option<&str>,
+        thumbs_key: Option<&str>,
+        poster_key: Option<&str>,
+        status: &str,
+    ) -> SqlResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE asset_versions
+             SET proxy_playlist_key = ?1,
+                 thumbnails_key = ?2,
+                 poster_key = ?3,
+                 processing_status = ?4,
+                 last_error = NULL
+             WHERE id = ?5",
+            params![playlist_key, thumbs_key, poster_key, status, version_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn find_asset_by_project_and_checksum(
+        &self,
+        project_id: &str,
+        checksum_sha256: &str,
+    ) -> SqlResult<Option<Asset>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, project_id, filename, original_path, storage_key, file_size, duration_ms,
+                    frame_rate, avg_frame_rate, r_frame_rate, is_vfr, width, height, codec, status, checksum_sha256, last_error, created_at
+             FROM assets
+             WHERE project_id = ?1 AND checksum_sha256 = ?2
+             ORDER BY created_at DESC
+             LIMIT 1",
+        )?;
+        let mut rows = stmt.query_map(params![project_id, checksum_sha256], |row| {
+            Ok(Asset {
+                id: row.get(0)?,
+                project_id: row.get(1)?,
+                filename: row.get(2)?,
+                original_path: row.get(3)?,
+                storage_key: row.get(4)?,
+                file_size: row.get(5)?,
+                duration_ms: row.get(6)?,
+                frame_rate: row.get(7)?,
+                avg_frame_rate: row.get(8)?,
+                r_frame_rate: row.get(9)?,
+                is_vfr: row.get::<_, i32>(10)? != 0,
+                width: row.get(11)?,
+                height: row.get(12)?,
+                codec: row.get(13)?,
+                status: row.get(14)?,
+                checksum_sha256: row.get(15)?,
+                last_error: row.get(16)?,
+                created_at: row.get(17)?,
+            })
+        })?;
+        match rows.next() {
+            Some(Ok(asset)) => Ok(Some(asset)),
+            _ => Ok(None),
+        }
+    }
+
+    pub fn get_next_asset_version_number(&self, asset_id: &str) -> SqlResult<i32> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT COALESCE(MAX(version_number), 0) + 1 FROM asset_versions WHERE asset_id = ?1",
+        )?;
+        stmt.query_row(params![asset_id], |row| row.get(0))
+    }
+
+    pub fn create_review_core_comment(&self, comment: &ReviewCoreComment) -> SqlResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO review_core_comments (
+                id, asset_version_id, timestamp_ms, frame_number, text, author_name, resolved, created_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                comment.id,
+                comment.asset_version_id,
+                comment.timestamp_ms,
+                comment.frame_number,
+                comment.text,
+                comment.author_name,
+                comment.resolved as i32,
+                comment.created_at
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_review_core_comments(
+        &self,
+        asset_version_id: &str,
+    ) -> SqlResult<Vec<ReviewCoreComment>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, asset_version_id, timestamp_ms, frame_number, text, author_name, resolved, created_at
+             FROM review_core_comments
+             WHERE asset_version_id = ?1
+             ORDER BY timestamp_ms ASC, created_at ASC",
+        )?;
+        let rows = stmt.query_map(params![asset_version_id], |row| {
+            Ok(ReviewCoreComment {
+                id: row.get(0)?,
+                asset_version_id: row.get(1)?,
+                timestamp_ms: row.get(2)?,
+                frame_number: row.get(3)?,
+                text: row.get(4)?,
+                author_name: row.get(5)?,
+                resolved: row.get::<_, i32>(6)? != 0,
+                created_at: row.get(7)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    pub fn get_review_core_comment(&self, comment_id: &str) -> SqlResult<Option<ReviewCoreComment>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, asset_version_id, timestamp_ms, frame_number, text, author_name, resolved, created_at
+             FROM review_core_comments
+             WHERE id = ?1",
+        )?;
+        let mut rows = stmt.query_map(params![comment_id], |row| {
+            Ok(ReviewCoreComment {
+                id: row.get(0)?,
+                asset_version_id: row.get(1)?,
+                timestamp_ms: row.get(2)?,
+                frame_number: row.get(3)?,
+                text: row.get(4)?,
+                author_name: row.get(5)?,
+                resolved: row.get::<_, i32>(6)? != 0,
+                created_at: row.get(7)?,
+            })
+        })?;
+        match rows.next() {
+            Some(Ok(comment)) => Ok(Some(comment)),
+            _ => Ok(None),
+        }
+    }
+
+    pub fn update_review_core_comment(
+        &self,
+        comment_id: &str,
+        text: Option<&str>,
+        resolved: Option<bool>,
+        author_name: Option<&str>,
+    ) -> SqlResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE review_core_comments
+             SET text = COALESCE(?1, text),
+                 resolved = COALESCE(?2, resolved),
+                 author_name = COALESCE(?3, author_name)
+             WHERE id = ?4",
+            params![text, resolved.map(|value| if value { 1 } else { 0 }), author_name, comment_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_review_core_comment(&self, comment_id: &str) -> SqlResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM review_core_comments WHERE id = ?1",
+            params![comment_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn create_review_core_annotation(&self, annotation: &ReviewCoreAnnotation) -> SqlResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO review_core_annotations (
+                id, comment_id, asset_version_id, timestamp_ms, vector_data, coordinate_space, created_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                annotation.id,
+                annotation.comment_id,
+                annotation.asset_version_id,
+                annotation.timestamp_ms,
+                annotation.vector_data,
+                annotation.coordinate_space,
+                annotation.created_at
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_review_core_annotations(
+        &self,
+        asset_version_id: &str,
+    ) -> SqlResult<Vec<ReviewCoreAnnotation>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, comment_id, asset_version_id, timestamp_ms, vector_data, coordinate_space, created_at
+             FROM review_core_annotations
+             WHERE asset_version_id = ?1
+             ORDER BY timestamp_ms ASC, created_at ASC",
+        )?;
+        let rows = stmt.query_map(params![asset_version_id], |row| {
+            Ok(ReviewCoreAnnotation {
+                id: row.get(0)?,
+                comment_id: row.get(1)?,
+                asset_version_id: row.get(2)?,
+                timestamp_ms: row.get(3)?,
+                vector_data: row.get(4)?,
+                coordinate_space: row.get(5)?,
+                created_at: row.get(6)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    pub fn delete_review_core_annotation(&self, annotation_id: &str) -> SqlResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM review_core_annotations WHERE id = ?1",
+            params![annotation_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_review_core_annotations_for_comment(&self, comment_id: &str) -> SqlResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM review_core_annotations WHERE comment_id = ?1",
+            params![comment_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_review_core_approval_state(
+        &self,
+        asset_version_id: &str,
+    ) -> SqlResult<Option<ReviewCoreApprovalState>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT asset_version_id, status, approved_at, approved_by
+             FROM review_core_approval_state
+             WHERE asset_version_id = ?1",
+        )?;
+        let mut rows = stmt.query_map(params![asset_version_id], |row| {
+            Ok(ReviewCoreApprovalState {
+                asset_version_id: row.get(0)?,
+                status: row.get(1)?,
+                approved_at: row.get(2)?,
+                approved_by: row.get(3)?,
+            })
+        })?;
+        match rows.next() {
+            Some(Ok(state)) => Ok(Some(state)),
+            _ => Ok(None),
+        }
+    }
+
+    pub fn upsert_review_core_approval_state(
+        &self,
+        approval: &ReviewCoreApprovalState,
+    ) -> SqlResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO review_core_approval_state (
+                asset_version_id, status, approved_at, approved_by
+            ) VALUES (?1, ?2, ?3, ?4)
+            ON CONFLICT(asset_version_id) DO UPDATE SET
+                status = excluded.status,
+                approved_at = excluded.approved_at,
+                approved_by = excluded.approved_by",
+            params![
+                approval.asset_version_id,
+                approval.status,
+                approval.approved_at,
+                approval.approved_by
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn create_review_core_share_link(&self, link: &ReviewCoreShareLink) -> SqlResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO review_core_share_links (
+                id, project_id, token, asset_version_ids_json, expires_at, password_hash, allow_comments, allow_download, created_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                link.id,
+                link.project_id,
+                link.token,
+                link.asset_version_ids_json,
+                link.expires_at,
+                link.password_hash,
+                link.allow_comments as i32,
+                link.allow_download as i32,
+                link.created_at
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_review_core_share_links(
+        &self,
+        project_id: &str,
+    ) -> SqlResult<Vec<ReviewCoreShareLink>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, project_id, token, asset_version_ids_json, expires_at, password_hash, allow_comments, allow_download, created_at
+             FROM review_core_share_links
+             WHERE project_id = ?1
+             ORDER BY created_at DESC",
+        )?;
+        let rows = stmt.query_map(params![project_id], |row| {
+            Ok(ReviewCoreShareLink {
+                id: row.get(0)?,
+                project_id: row.get(1)?,
+                token: row.get(2)?,
+                asset_version_ids_json: row.get(3)?,
+                expires_at: row.get(4)?,
+                password_hash: row.get(5)?,
+                allow_comments: row.get::<_, i32>(6)? != 0,
+                allow_download: row.get::<_, i32>(7)? != 0,
+                created_at: row.get(8)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    pub fn get_review_core_share_link_by_token(
+        &self,
+        token: &str,
+    ) -> SqlResult<Option<ReviewCoreShareLink>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, project_id, token, asset_version_ids_json, expires_at, password_hash, allow_comments, allow_download, created_at
+             FROM review_core_share_links
+             WHERE token = ?1",
+        )?;
+        let mut rows = stmt.query_map(params![token], |row| {
+            Ok(ReviewCoreShareLink {
+                id: row.get(0)?,
+                project_id: row.get(1)?,
+                token: row.get(2)?,
+                asset_version_ids_json: row.get(3)?,
+                expires_at: row.get(4)?,
+                password_hash: row.get(5)?,
+                allow_comments: row.get::<_, i32>(6)? != 0,
+                allow_download: row.get::<_, i32>(7)? != 0,
+                created_at: row.get(8)?,
+            })
+        })?;
+        match rows.next() {
+            Some(Ok(link)) => Ok(Some(link)),
+            _ => Ok(None),
+        }
+    }
+
+    pub fn delete_review_core_share_link(&self, share_link_id: &str) -> SqlResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM review_core_share_sessions WHERE share_link_id = ?1",
+            params![share_link_id],
+        )?;
+        conn.execute(
+            "DELETE FROM review_core_share_links WHERE id = ?1",
+            params![share_link_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn create_review_core_share_session(
+        &self,
+        session: &ReviewCoreShareSession,
+    ) -> SqlResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO review_core_share_sessions (
+                id, share_link_id, token, expires_at, created_at, last_seen_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                session.id,
+                session.share_link_id,
+                session.token,
+                session.expires_at,
+                session.created_at,
+                session.last_seen_at
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_review_core_share_session_by_token(
+        &self,
+        token: &str,
+    ) -> SqlResult<Option<ReviewCoreShareSession>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, share_link_id, token, expires_at, created_at, last_seen_at
+             FROM review_core_share_sessions
+             WHERE token = ?1",
+        )?;
+        let mut rows = stmt.query_map(params![token], |row| {
+            Ok(ReviewCoreShareSession {
+                id: row.get(0)?,
+                share_link_id: row.get(1)?,
+                token: row.get(2)?,
+                expires_at: row.get(3)?,
+                created_at: row.get(4)?,
+                last_seen_at: row.get(5)?,
+            })
+        })?;
+        match rows.next() {
+            Some(Ok(session)) => Ok(Some(session)),
+            _ => Ok(None),
+        }
+    }
+
+    pub fn touch_review_core_share_session(
+        &self,
+        session_id: &str,
+        expires_at: &str,
+        last_seen_at: &str,
+    ) -> SqlResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE review_core_share_sessions
+             SET expires_at = ?1, last_seen_at = ?2
+             WHERE id = ?3",
+            params![expires_at, last_seen_at, session_id],
+        )?;
+        Ok(())
+    }
+
 
     pub fn keep_only_project_root_path(
         &self,

@@ -10,6 +10,9 @@ pub struct ClipMetadata {
     pub created_at: String,
     pub duration_ms: u64,
     pub fps: f64,
+    pub avg_frame_rate: Option<String>,
+    pub r_frame_rate: Option<String>,
+    pub is_vfr: bool,
     pub width: u32,
     pub height: u32,
     pub video_codec: String,
@@ -42,6 +45,7 @@ struct FfprobeStream {
     width: Option<u32>,
     height: Option<u32>,
     r_frame_rate: Option<String>,
+    avg_frame_rate: Option<String>,
     channels: Option<u32>,
     sample_rate: Option<String>,
     bit_rate: Option<String>,
@@ -101,9 +105,19 @@ pub fn probe_file(file_path: &str) -> Result<ClipMetadata, String> {
 
     // Parse FPS from r_frame_rate (e.g., "24000/1001")
     let fps = video_stream
-        .and_then(|s| s.r_frame_rate.as_ref())
+        .and_then(|s| s.avg_frame_rate.as_ref().or(s.r_frame_rate.as_ref()))
         .map(|r| parse_frame_rate(r))
         .unwrap_or(0.0);
+    let avg_frame_rate = video_stream.and_then(|s| s.avg_frame_rate.clone());
+    let r_frame_rate = video_stream.and_then(|s| s.r_frame_rate.clone());
+    let is_vfr = match (&avg_frame_rate, &r_frame_rate) {
+        (Some(avg), Some(raw)) => {
+            let avg_value = parse_frame_rate(avg);
+            let raw_value = parse_frame_rate(raw);
+            avg != raw && (avg_value - raw_value).abs() > 0.01
+        }
+        _ => false,
+    };
 
     // Parse duration
     let duration_secs: f64 = format
@@ -349,6 +363,9 @@ pub fn probe_file(file_path: &str) -> Result<ClipMetadata, String> {
         created_at,
         duration_ms,
         fps,
+        avg_frame_rate,
+        r_frame_rate,
+        is_vfr,
         width,
         height,
         video_codec,

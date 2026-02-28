@@ -20,6 +20,7 @@ import {
   FolderTree,
   ArrowLeft,
   AlertTriangle,
+  Film,
 } from "lucide-react";
 import { ClipList } from "./components/ClipList";
 import { PrintLayout } from "./components/PrintLayout";
@@ -29,6 +30,7 @@ import { BlocksView } from "./components/BlocksView";
 import { JobsPanel } from "./components/JobsPanel";
 import { AboutPanel } from "./components/AboutPanel";
 import { FolderCreator } from "./components/FolderCreator";
+import { ReviewCore } from "./components/ReviewCore";
 import { TourGuide, TourStep } from "./components/TourGuide";
 import { exportPdf, exportImage } from "./utils/ExportUtils";
 import appLogo from "./assets/Icon_square_rounded.svg";
@@ -82,6 +84,19 @@ function AppContent() {
   const [activeMediaWorkspaceApp, setActiveMediaWorkspaceApp] = useState<string | null>(() => {
     return localStorage.getItem('wp_activeMediaApp') || null;
   });
+  const [shareRouteToken, setShareRouteToken] = useState<string | null>(() => {
+    const match = window.location.hash.match(/^#\/r\/([^/?#]+)/);
+    return match ? decodeURIComponent(match[1]) : null;
+  });
+
+  useEffect(() => {
+    const handleHashChange = () => {
+      const match = window.location.hash.match(/^#\/r\/([^/?#]+)/);
+      setShareRouteToken(match ? decodeURIComponent(match[1]) : null);
+    };
+    window.addEventListener("hashchange", handleHashChange);
+    return () => window.removeEventListener("hashchange", handleHashChange);
+  }, []);
 
   // Persist tab state
   useEffect(() => {
@@ -999,6 +1014,25 @@ function AppContent() {
 
   return (
     <div className="app-container">
+      {shareRouteToken ? (
+        <div className="app-content">
+          {uiError && (
+            <div className="error-banner">
+              <strong>{uiError.title}</strong> {uiError.hint}
+            </div>
+          )}
+          <ReviewCore
+            shareToken={shareRouteToken}
+            restricted={true}
+            onError={setUiError}
+            onExitShare={() => {
+              window.location.hash = "";
+              setShareRouteToken(null);
+            }}
+          />
+        </div>
+      ) : (
+        <>
       {showPrint && (
         <div id="print-area">
           <PrintLayout
@@ -1405,6 +1439,16 @@ function AppContent() {
                 />
               </div>
             ) : null
+          ) : activeMediaWorkspaceApp === 'review-core' ? (
+            projectId ? (
+              <div className="media-workspace">
+                <ReviewCore
+                  projectId={projectId}
+                  projectName={projectName}
+                  onError={setUiError}
+                />
+              </div>
+            ) : null
           ) : (
             <div className="onboarding-container">
               <div className="onboarding-header">
@@ -1442,6 +1486,20 @@ function AppContent() {
                 <div
                   className={`module-card premium-card ${!projectId ? "disabled" : ""}`}
                   onClick={() => {
+                    if (projectId) setActiveMediaWorkspaceApp('review-core');
+                  }}
+                  style={{ "--corner-color": "var(--color-accent-soft)", "--card-accent": "var(--color-accent)", "--card-accent-soft": "var(--color-accent-soft)" } as any}
+                >
+                  <div className="module-icon"><Film size={32} strokeWidth={1.5} /></div>
+                  <div className="module-info">
+                    <h3>Review Core</h3>
+                    <p>{projectId ? "Play app-managed HLS proxies, inspect versions, and confirm metadata." : "Available after a workspace is opened in Review."}</p>
+                    <span className="module-action">{projectId ? "Open App" : "Workspace required"}</span>
+                  </div>
+                </div>
+                <div
+                  className={`module-card premium-card ${!projectId ? "disabled" : ""}`}
+                  onClick={() => {
                     if (projectId) setActiveMediaWorkspaceApp('scene-blocks');
                   }}
                   style={{ "--corner-color": "var(--color-accent-soft)", "--card-accent": "var(--color-accent)", "--card-accent-soft": "var(--color-accent-soft)" } as any}
@@ -1468,7 +1526,7 @@ function AppContent() {
               </div>
               {inWorkspaceLauncher && !projectId && (
                 <div className="workspace-launcher-hint">
-                  Load footage in <strong>Open Workspace / Review</strong> first. Scene Blocks and Delivery stay disabled until a workspace is active.
+                  Load footage in <strong>Open Workspace / Review</strong> first. Review Core, Scene Blocks, and Delivery stay disabled until a workspace is active.
                 </div>
               )}
             </div>
@@ -1553,6 +1611,8 @@ function AppContent() {
           <ArrowLeft size={14} />
           <span>Back</span>
         </button>
+      )}
+        </>
       )}
     </div>
   );

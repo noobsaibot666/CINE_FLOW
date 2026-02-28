@@ -1,11 +1,19 @@
 use crate::audio;
 use crate::clustering;
 use crate::db::{
-    Clip, Database, Project, ProjectRoot, SceneBlock, SceneDetectionCache, Thumbnail,
-    VerificationItem, VerificationJob, VerificationQueueItem,
+    Asset, AssetVersion, Clip, Database, Project, ProjectRoot, ReviewCoreAnnotation,
+    ReviewCoreApprovalState, ReviewCoreComment, ReviewCoreShareLink, ReviewCoreShareSession,
+    SceneBlock, SceneDetectionCache, Thumbnail, VerificationItem, VerificationJob,
+    VerificationQueueItem,
 };
 use crate::ffprobe;
 use crate::jobs::JobInfo;
+use crate::review_core;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine;
+use bcrypt::{hash, verify, DEFAULT_COST};
+use rand::rngs::OsRng;
+use rand::RngCore;
 use crate::scanner;
 use crate::thumbnail;
 mod folders_impl {
@@ -13,11 +21,11 @@ mod folders_impl {
 }
 use crate::verification;
 use sha2::{Digest, Sha256};
-use std::io::Write;
+use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::Path;
 use std::process::Command;
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, State};
 use tokio::sync::Semaphore;
 
@@ -25,8 +33,10 @@ use tokio::sync::Semaphore;
 pub struct AppState {
     pub db: Database,
     pub cache_dir: String,
-    pub job_manager: crate::jobs::JobManager,
+    pub job_manager: Arc<crate::jobs::JobManager>,
     pub perf_log: crate::perf::PerfLog,
+    pub review_core_base_dir: std::path::PathBuf,
+    pub review_core_server_base_url: Mutex<Option<String>>,
 }
 
 // ─── Tauri Commands ───
@@ -2337,6 +2347,956 @@ pub async fn export_perf_report(
     Ok(serde_json::json!({ "md_path": md_path, "json_path": json_path }))
 }
 
+#[derive(serde::Serialize)]
+pub struct ReviewCoreIngestResult {
+    pub asset_ids: Vec<String>,
+}
+
+#[derive(serde::Serialize)]
+pub struct ReviewCoreDuplicateCandidate {
+    pub file_path: String,
+    pub checksum_sha256: String,
+    pub existing_asset_id: String,
+    pub existing_filename: String,
+}
+
+#[derive(serde::Serialize)]
+pub struct ReviewCoreThumbnailInfo {
+    pub file_name: String,
+    pub index: usize,
+    pub approx_seconds: f64,
+}
+
+#[derive(serde::Serialize)]
+pub struct ReviewCoreDuplicateCheckResult {
+    pub duplicates: Vec<ReviewCoreDuplicateCandidate>,
+}
+
+#[derive(serde::Serialize, Clone)]
+pub struct ReviewCoreShareLinkSummary {
+    pub id: String,
+    pub project_id: String,
+    pub token: String,
+    pub asset_version_ids: Vec<String>,
+    pub expires_at: Option<String>,
+    pub allow_comments: bool,
+    pub allow_download: bool,
+    pub password_required: bool,
+    pub created_at: String,
+}
+
+#[derive(serde::Serialize, Clone)]
+pub struct ReviewCoreShareLinkResolved {
+    pub project_id: String,
+    pub project_name: String,
+    pub asset_version_ids: Vec<String>,
+    pub allow_comments: bool,
+    pub allow_download: bool,
+    pub password_required: bool,
+}
+
+#[derive(serde::Serialize, Clone)]
+pub struct ReviewCoreShareUnlockResult {
+    pub session_token: Option<String>,
+    pub expires_at: Option<String>,
+}
+
+#[derive(serde::Serialize, Clone)]
+pub struct ReviewCoreSharedAssetSummary {
+    pub id: String,
+    pub project_id: String,
+    pub filename: String,
+    pub duration_ms: Option<u64>,
+    pub frame_rate: Option<f64>,
+    pub avg_frame_rate: Option<String>,
+    pub r_frame_rate: Option<String>,
+    pub is_vfr: bool,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub codec: Option<String>,
+    pub status: String,
+    pub created_at: String,
+}
+
+#[derive(serde::Serialize, Clone)]
+pub struct ReviewCoreSharedVersionSummary {
+    pub id: String,
+    pub asset_id: String,
+    pub version_number: i32,
+    pub processing_status: String,
+    pub created_at: String,
+}
+
+#[derive(serde::Deserialize)]
+pub struct ReviewCoreCommentUpdateInput {
+    pub text: Option<String>,
+    pub resolved: Option<bool>,
+    pub author_name: Option<String>,
+}
+
+#[derive(serde::Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewCoreDuplicateMode {
+    NewVersion,
+    NewAsset,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ReviewCoreShareError {
+    #[error("NOT_FOUND")]
+    NotFound,
+    #[error("EXPIRED")]
+    Expired,
+    #[error("FORBIDDEN")]
+    Forbidden,
+}
+
+#[tauri::command]
+pub async fn review_core_list_assets(
+    project_id: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<Asset>, String> {
+    state.db.list_assets(&project_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn review_core_list_asset_versions(
+    asset_id: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<AssetVersion>, String> {
+    state
+        .db
+        .list_asset_versions(&asset_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn review_core_list_thumbnails(
+    version_id: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<ReviewCoreThumbnailInfo>, String> {
+    let version = state
+        .db
+        .get_asset_version(&version_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("Asset version not found")?;
+    let asset = state
+        .db
+        .get_asset(&version.asset_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("Asset not found")?;
+    let Some(thumbs_key) = version.thumbnails_key else {
+        return Ok(Vec::new());
+    };
+    let thumbs_dir = review_core::storage::safe_relative_path(&state.review_core_base_dir, &thumbs_key)?;
+    if !thumbs_dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut entries: Vec<_> = std::fs::read_dir(thumbs_dir)
+        .map_err(|e| e.to_string())?
+        .flatten()
+        .filter(|entry| entry.path().is_file())
+        .collect();
+    entries.sort_by_key(|entry| entry.file_name());
+    let duration_secs = asset.duration_ms.unwrap_or(0) as f64 / 1000.0;
+    let count = entries.len().max(1) as f64;
+    Ok(entries
+        .into_iter()
+        .enumerate()
+        .map(|(index, entry)| ReviewCoreThumbnailInfo {
+            file_name: entry.file_name().to_string_lossy().to_string(),
+            index,
+            approx_seconds: if duration_secs > 0.0 {
+                (duration_secs / count) * index as f64
+            } else {
+                index as f64
+            },
+        })
+        .collect())
+}
+
+#[tauri::command]
+pub async fn review_core_get_server_base_url(
+    state: State<'_, Arc<AppState>>,
+) -> Result<String, String> {
+    Ok(state
+        .review_core_server_base_url
+        .lock()
+        .map_err(|_| "Failed to lock Review Core server URL".to_string())?
+        .clone()
+        .unwrap_or_default())
+}
+
+#[tauri::command]
+pub async fn review_core_add_comment(
+    asset_version_id: String,
+    timestamp_ms: i64,
+    frame_number: Option<i64>,
+    text: String,
+    author_name: Option<String>,
+    state: State<'_, Arc<AppState>>,
+) -> Result<ReviewCoreComment, String> {
+    let version = state
+        .db
+        .get_asset_version(&asset_version_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("Asset version not found")?;
+    let asset = state
+        .db
+        .get_asset(&version.asset_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("Asset not found")?;
+
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Err("Comment text cannot be empty".to_string());
+    }
+    let trimmed_text: String = trimmed.chars().take(2000).collect();
+    let safe_author = author_name
+        .map(|value| {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                "Anonymous".to_string()
+            } else {
+                trimmed.chars().take(80).collect()
+            }
+        })
+        .unwrap_or_else(|| "Anonymous".to_string());
+    let clamped_timestamp = clamp_comment_timestamp(timestamp_ms, asset.duration_ms);
+    let computed_frame = compute_comment_frame_number(&asset, clamped_timestamp, frame_number);
+
+    let comment = ReviewCoreComment {
+        id: uuid::Uuid::new_v4().to_string(),
+        asset_version_id,
+        timestamp_ms: clamped_timestamp,
+        frame_number: computed_frame,
+        text: trimmed_text,
+        author_name: safe_author,
+        resolved: false,
+        created_at: chrono::Utc::now().to_rfc3339(),
+    };
+    state
+        .db
+        .create_review_core_comment(&comment)
+        .map_err(|e| e.to_string())?;
+    Ok(comment)
+}
+
+#[tauri::command]
+pub async fn review_core_list_comments(
+    asset_version_id: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<ReviewCoreComment>, String> {
+    state
+        .db
+        .list_review_core_comments(&asset_version_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn review_core_update_comment(
+    comment_id: String,
+    updates: ReviewCoreCommentUpdateInput,
+    state: State<'_, Arc<AppState>>,
+) -> Result<ReviewCoreComment, String> {
+    let existing = state
+        .db
+        .get_review_core_comment(&comment_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("Comment not found")?;
+
+    let next_text = if let Some(text) = updates.text.as_ref() {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return Err("Comment text cannot be empty".to_string());
+        }
+        Some(trimmed.chars().take(2000).collect::<String>())
+    } else {
+        None
+    };
+    let next_author = updates.author_name.as_ref().map(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            "Anonymous".to_string()
+        } else {
+            trimmed.chars().take(80).collect::<String>()
+        }
+    });
+
+    state
+        .db
+        .update_review_core_comment(
+            &comment_id,
+            next_text.as_deref(),
+            updates.resolved,
+            next_author.as_deref(),
+        )
+        .map_err(|e| e.to_string())?;
+
+    state
+        .db
+        .get_review_core_comment(&comment_id)
+        .map_err(|e| e.to_string())?
+        .or(Some(ReviewCoreComment {
+            id: existing.id,
+            asset_version_id: existing.asset_version_id,
+            timestamp_ms: existing.timestamp_ms,
+            frame_number: existing.frame_number,
+            text: next_text.unwrap_or(existing.text),
+            author_name: next_author.unwrap_or(existing.author_name),
+            resolved: updates.resolved.unwrap_or(existing.resolved),
+            created_at: existing.created_at,
+        }))
+        .ok_or("Comment not found after update".to_string())
+}
+
+#[tauri::command]
+pub async fn review_core_delete_comment(
+    comment_id: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<(), String> {
+    state
+        .db
+        .delete_review_core_annotations_for_comment(&comment_id)
+        .map_err(|e| e.to_string())?;
+    state
+        .db
+        .delete_review_core_comment(&comment_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn review_core_add_annotation(
+    comment_id: String,
+    vector_data_json: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<ReviewCoreAnnotation, String> {
+    let comment = state
+        .db
+        .get_review_core_comment(&comment_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("Comment not found")?;
+
+    let normalized = normalize_annotation_vector_data(
+        &vector_data_json,
+        &comment.id,
+        comment.timestamp_ms,
+    )?;
+    state
+        .db
+        .delete_review_core_annotations_for_comment(&comment.id)
+        .map_err(|e| e.to_string())?;
+
+    let annotation = ReviewCoreAnnotation {
+        id: uuid::Uuid::new_v4().to_string(),
+        comment_id: comment.id,
+        asset_version_id: comment.asset_version_id,
+        timestamp_ms: comment.timestamp_ms,
+        vector_data: normalized,
+        coordinate_space: "normalized_0_1".to_string(),
+        created_at: chrono::Utc::now().to_rfc3339(),
+    };
+    state
+        .db
+        .create_review_core_annotation(&annotation)
+        .map_err(|e| e.to_string())?;
+    Ok(annotation)
+}
+
+#[tauri::command]
+pub async fn review_core_list_annotations(
+    asset_version_id: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<ReviewCoreAnnotation>, String> {
+    state
+        .db
+        .list_review_core_annotations(&asset_version_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn review_core_delete_annotation(
+    annotation_id: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<(), String> {
+    state
+        .db
+        .delete_review_core_annotation(&annotation_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn review_core_create_share_link(
+    project_id: String,
+    asset_version_ids: Vec<String>,
+    expires_at: Option<String>,
+    password: Option<String>,
+    allow_comments: bool,
+    allow_download: bool,
+    state: State<'_, Arc<AppState>>,
+) -> Result<ReviewCoreShareLinkSummary, String> {
+    let canonical_version_ids =
+        validate_share_link_versions(&state.db, &project_id, &asset_version_ids)?;
+    let token = generate_share_token();
+    let password_hash = if let Some(raw_password) = password {
+        let trimmed = raw_password.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(hash(trimmed, DEFAULT_COST).map_err(|e| e.to_string())?)
+        }
+    } else {
+        None
+    };
+    let share_link = ReviewCoreShareLink {
+        id: uuid::Uuid::new_v4().to_string(),
+        project_id: project_id.clone(),
+        token: token.clone(),
+        asset_version_ids_json: serde_json::to_string(&canonical_version_ids).map_err(|e| e.to_string())?,
+        expires_at: normalize_expiry(expires_at)?,
+        password_hash,
+        allow_comments,
+        allow_download,
+        created_at: chrono::Utc::now().to_rfc3339(),
+    };
+    state
+        .db
+        .create_review_core_share_link(&share_link)
+        .map_err(|e| e.to_string())?;
+    Ok(share_link_to_summary(&share_link)?)
+}
+
+#[tauri::command]
+pub async fn review_core_list_share_links(
+    project_id: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<ReviewCoreShareLinkSummary>, String> {
+    state
+        .db
+        .list_review_core_share_links(&project_id)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|link| share_link_to_summary(&link))
+        .collect()
+}
+
+#[tauri::command]
+pub async fn review_core_revoke_share_link(
+    share_link_id: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<(), String> {
+    state
+        .db
+        .delete_review_core_share_link(&share_link_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn review_core_resolve_share_link(
+    token: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<ReviewCoreShareLinkResolved, String> {
+    let (link, version_ids) = resolve_share_link(&state.db, &token).map_err(|e| e.to_string())?;
+    let project = state
+        .db
+        .get_project(&link.project_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("Project not found")?;
+    Ok(ReviewCoreShareLinkResolved {
+        project_id: link.project_id,
+        project_name: project.name,
+        asset_version_ids: version_ids,
+        allow_comments: link.allow_comments,
+        allow_download: link.allow_download,
+        password_required: link.password_hash.is_some(),
+    })
+}
+
+#[tauri::command]
+pub async fn review_core_verify_share_link_password(
+    token: String,
+    password: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<bool, String> {
+    let (link, _) = match resolve_share_link(&state.db, &token) {
+        Ok(value) => value,
+        Err(_) => return Ok(false),
+    };
+    match link.password_hash {
+        Some(hash_value) => verify(password.trim(), &hash_value).map_err(|e| e.to_string()),
+        None => Ok(true),
+    }
+}
+
+#[tauri::command]
+pub async fn review_core_share_unlock(
+    token: String,
+    password: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<ReviewCoreShareUnlockResult, String> {
+    let (link, _) = resolve_share_link(&state.db, &token).map_err(|e| e.to_string())?;
+    match link.password_hash {
+        Some(hash_value) => {
+            let ok = verify(password.trim(), &hash_value).map_err(|e| e.to_string())?;
+            if !ok {
+                return Err("FORBIDDEN".to_string());
+            }
+            let now = chrono::Utc::now();
+            let expires_at = now + chrono::Duration::minutes(30);
+            let session = ReviewCoreShareSession {
+                id: uuid::Uuid::new_v4().to_string(),
+                share_link_id: link.id,
+                token: generate_share_token(),
+                expires_at: expires_at.to_rfc3339(),
+                created_at: now.to_rfc3339(),
+                last_seen_at: Some(now.to_rfc3339()),
+            };
+            state
+                .db
+                .create_review_core_share_session(&session)
+                .map_err(|e| e.to_string())?;
+            Ok(ReviewCoreShareUnlockResult {
+                session_token: Some(session.token),
+                expires_at: Some(session.expires_at),
+            })
+        }
+        None => Ok(ReviewCoreShareUnlockResult {
+            session_token: None,
+            expires_at: None,
+        }),
+    }
+}
+
+#[tauri::command]
+pub async fn review_core_share_list_assets(
+    token: String,
+    session_token: Option<String>,
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<ReviewCoreSharedAssetSummary>, String> {
+    let (link, version_ids) = resolve_share_link(&state.db, &token).map_err(|e| e.to_string())?;
+    validate_share_session(&state.db, &link, session_token.as_deref()).map_err(|e| e.to_string())?;
+    let versions = version_ids
+        .into_iter()
+        .filter_map(|version_id| state.db.get_asset_version(&version_id).ok().flatten())
+        .collect::<Vec<_>>();
+    let mut seen = std::collections::HashSet::new();
+    let mut assets = Vec::new();
+    for version in versions {
+        if seen.insert(version.asset_id.clone()) {
+            if let Some(asset) = state.db.get_asset(&version.asset_id).map_err(|e| e.to_string())? {
+                if asset.project_id == link.project_id {
+                    assets.push(ReviewCoreSharedAssetSummary {
+                        id: asset.id,
+                        project_id: asset.project_id,
+                        filename: asset.filename,
+                        duration_ms: asset.duration_ms,
+                        frame_rate: asset.frame_rate,
+                        avg_frame_rate: asset.avg_frame_rate,
+                        r_frame_rate: asset.r_frame_rate,
+                        is_vfr: asset.is_vfr,
+                        width: asset.width,
+                        height: asset.height,
+                        codec: asset.codec,
+                        status: asset.status,
+                        created_at: asset.created_at,
+                    });
+                }
+            }
+        }
+    }
+    assets.sort_by(|a, b| a.filename.cmp(&b.filename).then_with(|| a.created_at.cmp(&b.created_at)));
+    Ok(assets)
+}
+
+#[tauri::command]
+pub async fn review_core_share_list_versions(
+    token: String,
+    asset_id: String,
+    session_token: Option<String>,
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<ReviewCoreSharedVersionSummary>, String> {
+    let (link, version_ids) = resolve_share_link(&state.db, &token).map_err(|e| e.to_string())?;
+    validate_share_session(&state.db, &link, session_token.as_deref()).map_err(|e| e.to_string())?;
+    let mut versions = Vec::new();
+    for version_id in version_ids {
+        if let Some(version) = state.db.get_asset_version(&version_id).map_err(|e| e.to_string())? {
+            if version.asset_id == asset_id {
+                versions.push(ReviewCoreSharedVersionSummary {
+                    id: version.id,
+                    asset_id: version.asset_id,
+                    version_number: version.version_number,
+                    processing_status: version.processing_status,
+                    created_at: version.created_at,
+                });
+            }
+        }
+    }
+    versions.sort_by(|a, b| b.version_number.cmp(&a.version_number));
+    Ok(versions)
+}
+
+#[tauri::command]
+pub async fn review_core_share_list_thumbnails(
+    token: String,
+    asset_version_id: String,
+    session_token: Option<String>,
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<ReviewCoreThumbnailInfo>, String> {
+    let (link, version_ids) = resolve_share_link(&state.db, &token).map_err(|e| e.to_string())?;
+    validate_share_session(&state.db, &link, session_token.as_deref()).map_err(|e| e.to_string())?;
+    if !version_ids.contains(&asset_version_id) {
+        return Err("FORBIDDEN".to_string());
+    }
+    review_core_list_thumbnails(asset_version_id, state).await
+}
+
+#[tauri::command]
+pub async fn review_core_share_list_comments(
+    token: String,
+    asset_version_id: String,
+    session_token: Option<String>,
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<ReviewCoreComment>, String> {
+    let (link, version_ids) = resolve_share_link(&state.db, &token).map_err(|e| e.to_string())?;
+    validate_share_session(&state.db, &link, session_token.as_deref()).map_err(|e| e.to_string())?;
+    if !version_ids.contains(&asset_version_id) {
+        return Err("FORBIDDEN".to_string());
+    }
+    if !link.allow_comments {
+        return Ok(Vec::new());
+    }
+    state
+        .db
+        .list_review_core_comments(&asset_version_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn review_core_share_add_comment(
+    token: String,
+    asset_version_id: String,
+    timestamp_ms: i64,
+    frame_number: Option<i64>,
+    text: String,
+    author_name: Option<String>,
+    session_token: Option<String>,
+    state: State<'_, Arc<AppState>>,
+) -> Result<ReviewCoreComment, String> {
+    let (link, version_ids) = resolve_share_link(&state.db, &token).map_err(|e| e.to_string())?;
+    validate_share_session(&state.db, &link, session_token.as_deref()).map_err(|e| e.to_string())?;
+    if !link.allow_comments {
+        return Err("FORBIDDEN".to_string());
+    }
+    if !version_ids.contains(&asset_version_id) {
+        return Err("FORBIDDEN".to_string());
+    }
+    review_core_add_comment(asset_version_id, timestamp_ms, frame_number, text, author_name, state).await
+}
+
+#[tauri::command]
+pub async fn review_core_share_list_annotations(
+    token: String,
+    asset_version_id: String,
+    session_token: Option<String>,
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<ReviewCoreAnnotation>, String> {
+    let (link, version_ids) = resolve_share_link(&state.db, &token).map_err(|e| e.to_string())?;
+    validate_share_session(&state.db, &link, session_token.as_deref()).map_err(|e| e.to_string())?;
+    if !version_ids.contains(&asset_version_id) {
+        return Err("FORBIDDEN".to_string());
+    }
+    state
+        .db
+        .list_review_core_annotations(&asset_version_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn review_core_share_export_download(
+    token: String,
+    asset_version_id: String,
+    output_path: String,
+    session_token: Option<String>,
+    state: State<'_, Arc<AppState>>,
+) -> Result<String, String> {
+    let (link, version_ids) = resolve_share_link(&state.db, &token).map_err(|e| e.to_string())?;
+    validate_share_session(&state.db, &link, session_token.as_deref()).map_err(|e| e.to_string())?;
+    if !link.allow_download {
+        return Err("FORBIDDEN".to_string());
+    }
+    if !version_ids.contains(&asset_version_id) {
+        return Err("FORBIDDEN".to_string());
+    }
+    let version = state
+        .db
+        .get_asset_version(&asset_version_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("Asset version not found")?;
+    let source_path =
+        review_core::storage::safe_relative_path(&state.review_core_base_dir, &version.original_file_key)?;
+    std::fs::copy(&source_path, &output_path).map_err(|e| e.to_string())?;
+    Ok(output_path)
+}
+
+#[tauri::command]
+pub async fn review_core_get_approval(
+    asset_version_id: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<ReviewCoreApprovalState, String> {
+    state
+        .db
+        .get_review_core_approval_state(&asset_version_id)
+        .map_err(|e| e.to_string())?
+        .or(Some(ReviewCoreApprovalState {
+            asset_version_id,
+            status: "draft".to_string(),
+            approved_at: None,
+            approved_by: None,
+        }))
+        .ok_or("Approval state unavailable".to_string())
+}
+
+#[tauri::command]
+pub async fn review_core_set_approval(
+    asset_version_id: String,
+    status: String,
+    approved_by: Option<String>,
+    state: State<'_, Arc<AppState>>,
+) -> Result<ReviewCoreApprovalState, String> {
+    let normalized_status = match status.trim() {
+        "draft" => "draft",
+        "in_review" => "in_review",
+        "approved" => "approved",
+        "rejected" => "rejected",
+        _ => return Err("Invalid approval status".to_string()),
+    };
+
+    let approval = if matches!(normalized_status, "approved" | "rejected") {
+        let safe_name = approved_by
+            .map(|value| {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    "Anonymous".to_string()
+                } else {
+                    trimmed.chars().take(80).collect()
+                }
+            })
+            .unwrap_or_else(|| "Anonymous".to_string());
+        ReviewCoreApprovalState {
+            asset_version_id,
+            status: normalized_status.to_string(),
+            approved_at: Some(chrono::Utc::now().to_rfc3339()),
+            approved_by: Some(safe_name),
+        }
+    } else {
+        ReviewCoreApprovalState {
+            asset_version_id,
+            status: normalized_status.to_string(),
+            approved_at: None,
+            approved_by: None,
+        }
+    };
+
+    state
+        .db
+        .upsert_review_core_approval_state(&approval)
+        .map_err(|e| e.to_string())?;
+    Ok(approval)
+}
+
+#[tauri::command]
+pub async fn review_core_check_duplicate_files(
+    project_id: String,
+    file_paths: Vec<String>,
+    state: State<'_, Arc<AppState>>,
+) -> Result<ReviewCoreDuplicateCheckResult, String> {
+    let mut duplicates = Vec::new();
+    for file_path in file_paths {
+        let source = std::path::PathBuf::from(&file_path);
+        if !source.exists() || !source.is_file() {
+            continue;
+        }
+        let checksum = checksum_sha256(&source)?;
+        if let Some(asset) = state
+            .db
+            .find_asset_by_project_and_checksum(&project_id, &checksum)
+            .map_err(|e| e.to_string())?
+        {
+            duplicates.push(ReviewCoreDuplicateCandidate {
+                file_path,
+                checksum_sha256: checksum,
+                existing_asset_id: asset.id,
+                existing_filename: asset.filename,
+            });
+        }
+    }
+    Ok(ReviewCoreDuplicateCheckResult { duplicates })
+}
+
+#[tauri::command]
+pub async fn review_core_ingest_files(
+    app: AppHandle,
+    project_id: String,
+    file_paths: Vec<String>,
+    duplicate_mode: Option<ReviewCoreDuplicateMode>,
+    state: State<'_, Arc<AppState>>,
+) -> Result<ReviewCoreIngestResult, String> {
+    if file_paths.is_empty() {
+        return Ok(ReviewCoreIngestResult { asset_ids: vec![] });
+    }
+
+    state
+        .db
+        .get_project(&project_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("Project not found")?;
+
+    std::fs::create_dir_all(&state.review_core_base_dir).map_err(|e| e.to_string())?;
+
+    let duplicate_mode = duplicate_mode.unwrap_or(ReviewCoreDuplicateMode::NewVersion);
+    let mut asset_ids = Vec::new();
+    for file_path in file_paths {
+        let source = std::path::PathBuf::from(&file_path);
+        if !source.exists() || !source.is_file() {
+            return Err(format!("File does not exist: {}", file_path));
+        }
+
+        let version_id = uuid::Uuid::new_v4().to_string();
+        let filename = source
+            .file_name()
+            .map(|value| value.to_string_lossy().to_string())
+            .ok_or("Invalid source filename")?;
+        let extension = source
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or("bin");
+        let checksum_sha256 = checksum_sha256(&source)?;
+        let now = chrono::Utc::now().to_rfc3339();
+        let existing_asset = state
+            .db
+            .find_asset_by_project_and_checksum(&project_id, &checksum_sha256)
+            .map_err(|e| e.to_string())?;
+        let use_existing = duplicate_mode == ReviewCoreDuplicateMode::NewVersion && existing_asset.is_some();
+        let asset_id = existing_asset
+            .as_ref()
+            .map(|asset| asset.id.clone())
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let version_number = if use_existing {
+            state
+                .db
+                .get_next_asset_version_number(&asset_id)
+                .map_err(|e| e.to_string())?
+        } else {
+            1
+        };
+        let version_paths = review_core::storage::build_version_paths(
+            &state.review_core_base_dir,
+            &project_id,
+            &asset_id,
+            version_number,
+            extension,
+        )?;
+        let file_size = copy_file(&source, &version_paths.original_abs_path)?;
+
+        if !use_existing {
+            state
+                .db
+                .create_asset(&Asset {
+                    id: asset_id.clone(),
+                    project_id: project_id.clone(),
+                    filename,
+                    original_path: version_paths.original_abs_path.to_string_lossy().to_string(),
+                    storage_key: version_paths.original_key.clone(),
+                    file_size,
+                    duration_ms: None,
+                    frame_rate: None,
+                    avg_frame_rate: None,
+                    r_frame_rate: None,
+                    is_vfr: false,
+                    width: None,
+                    height: None,
+                    codec: None,
+                    status: "processing".to_string(),
+                    checksum_sha256: checksum_sha256.clone(),
+                    last_error: None,
+                    created_at: now.clone(),
+                })
+                .map_err(|e| e.to_string())?;
+        } else {
+            state
+                .db
+                .set_asset_error(&asset_id, "processing", None)
+                .map_err(|e| e.to_string())?;
+        }
+        state
+            .db
+            .create_asset_version(&AssetVersion {
+                id: version_id.clone(),
+                asset_id: asset_id.clone(),
+                version_number,
+                original_file_key: version_paths.original_key.clone(),
+                proxy_playlist_key: None,
+                thumbnails_key: None,
+                poster_key: None,
+                processing_status: "processing".to_string(),
+                last_error: None,
+                created_at: now,
+            })
+            .map_err(|e| e.to_string())?;
+
+        let (job_id, cancel_flag) = state
+            .job_manager
+            .create_job("review_core_process_version", None);
+        emit_job_state(&app, &state.job_manager, &job_id);
+
+        let app_state = state.inner().clone();
+        let app_clone = app.clone();
+        let asset_id_clone = asset_id.clone();
+        let version_id_clone = version_id.clone();
+        let project_id_clone = project_id.clone();
+        let original_abs_path = version_paths.original_abs_path.clone();
+        let derived_dir_abs = version_paths.derived_dir_abs.clone();
+        let cancel_for_task = cancel_flag.clone();
+        let job_id_clone = job_id.clone();
+
+        tokio::spawn(async move {
+            let ctx = review_core::processor::ReviewCoreProcessContext {
+                app: app_clone.clone(),
+                db: app_state.db.clone(),
+                job_manager: app_state.job_manager.clone(),
+                job_id: job_id_clone.clone(),
+                cancel_flag: cancel_for_task.clone(),
+            };
+
+            let result = review_core::processor::process_asset_version(
+                ctx,
+                project_id_clone,
+                asset_id_clone.clone(),
+                version_id_clone.clone(),
+                original_abs_path,
+                derived_dir_abs,
+            )
+            .await;
+
+            if let Err(error) = result {
+                let compact = compact_error(&error);
+                let _ = app_state.db.set_asset_error(&asset_id_clone, "failed", Some(&compact));
+                let _ = app_state
+                    .db
+                    .set_asset_version_error(&version_id_clone, "failed", Some(&compact));
+                if !crate::jobs::JobManager::is_cancelled(&cancel_for_task) {
+                    app_state.job_manager.mark_failed(&job_id_clone, &compact);
+                }
+                emit_job_state(&app_clone, &app_state.job_manager, &job_id_clone);
+            }
+        });
+
+        asset_ids.push(asset_id);
+    }
+
+    Ok(ReviewCoreIngestResult { asset_ids })
+}
+
 // ─── Types ───
 
 #[derive(serde::Serialize)]
@@ -2574,6 +3534,308 @@ fn sanitize_filename(name: &str) -> String {
             }
         })
         .collect()
+}
+
+fn checksum_sha256(source: &Path) -> Result<String, String> {
+    let input = std::fs::File::open(source).map_err(|e| e.to_string())?;
+    let mut reader = BufReader::new(input);
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 1024 * 128];
+
+    loop {
+        let read = reader.read(&mut buffer).map_err(|e| e.to_string())?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn copy_file(source: &Path, destination: &Path) -> Result<u64, String> {
+    if let Some(parent) = destination.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+
+    let input = std::fs::File::open(source).map_err(|e| e.to_string())?;
+    let output = std::fs::File::create(destination).map_err(|e| e.to_string())?;
+    let mut reader = BufReader::new(input);
+    let mut writer = BufWriter::new(output);
+    let mut total_bytes = 0u64;
+    let mut buffer = [0u8; 1024 * 128];
+
+    loop {
+        let read = reader.read(&mut buffer).map_err(|e| e.to_string())?;
+        if read == 0 {
+            break;
+        }
+        writer
+            .write_all(&buffer[..read])
+            .map_err(|e| e.to_string())?;
+        total_bytes += read as u64;
+    }
+    writer.flush().map_err(|e| e.to_string())?;
+
+    Ok(total_bytes)
+}
+
+fn compact_error(input: &str) -> String {
+    let normalized = input
+        .replace('\n', " ")
+        .replace('\r', " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    normalized.chars().take(280).collect()
+}
+
+fn clamp_comment_timestamp(timestamp_ms: i64, duration_ms: Option<u64>) -> i64 {
+    let clamped = timestamp_ms.max(0);
+    if let Some(duration) = duration_ms {
+        clamped.min(duration as i64)
+    } else {
+        clamped
+    }
+}
+
+fn rational_fps_from_asset(asset: &Asset) -> Option<f64> {
+    asset
+        .avg_frame_rate
+        .as_deref()
+        .or(asset.r_frame_rate.as_deref())
+        .map(parse_rational_fps)
+        .or(asset.frame_rate)
+}
+
+fn parse_rational_fps(raw: &str) -> f64 {
+    if let Some((num, den)) = raw.split_once('/') {
+        let numerator = num.parse::<f64>().unwrap_or(0.0);
+        let denominator = den.parse::<f64>().unwrap_or(1.0);
+        if numerator > 0.0 && denominator > 0.0 {
+            return numerator / denominator;
+        }
+    }
+    raw.parse::<f64>().unwrap_or(0.0)
+}
+
+fn compute_comment_frame_number(
+    asset: &Asset,
+    timestamp_ms: i64,
+    requested_frame_number: Option<i64>,
+) -> Option<i64> {
+    if asset.is_vfr {
+        return None;
+    }
+    if let Some(frame) = requested_frame_number {
+        return Some(frame.max(0));
+    }
+    let fps = rational_fps_from_asset(asset)?;
+    if fps <= 0.0 {
+        return None;
+    }
+    Some(((timestamp_ms as f64 / 1000.0) * fps).round() as i64)
+}
+
+fn normalize_annotation_vector_data(
+    raw: &str,
+    comment_id: &str,
+    timestamp_ms: i64,
+) -> Result<String, String> {
+    let mut value: serde_json::Value =
+        serde_json::from_str(raw).map_err(|e| format!("Invalid annotation JSON: {}", e))?;
+    let object = value
+        .as_object_mut()
+        .ok_or("Annotation payload must be a JSON object")?;
+    let schema_version = object
+        .get("schemaVersion")
+        .and_then(|value| value.as_i64())
+        .ok_or("Annotation payload must include schemaVersion")?;
+    if schema_version != 1 {
+        return Err("Unsupported annotation schemaVersion".to_string());
+    }
+    object.insert(
+        "commentId".to_string(),
+        serde_json::Value::String(comment_id.to_string()),
+    );
+    object.insert(
+        "timestampMs".to_string(),
+        serde_json::Value::Number(timestamp_ms.into()),
+    );
+    clamp_annotation_value(&mut value);
+    serde_json::to_string(&value).map_err(|e| e.to_string())
+}
+
+fn clamp_annotation_value(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (key, item) in map.iter_mut() {
+                if matches!(
+                    key.as_str(),
+                    "x" | "y" | "w" | "h"
+                ) {
+                    if let Some(number) = item.as_f64() {
+                        *item = serde_json::json!(number.clamp(0.0, 1.0));
+                        continue;
+                    }
+                }
+                if matches!(key.as_str(), "a" | "b" | "points") {
+                    clamp_normalized_points(item);
+                    continue;
+                }
+                clamp_annotation_value(item);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                clamp_annotation_value(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn clamp_normalized_points(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Array(items) => {
+            if items.len() == 2 && items[0].is_number() && items[1].is_number() {
+                let x = items[0].as_f64().unwrap_or(0.0).clamp(0.0, 1.0);
+                let y = items[1].as_f64().unwrap_or(0.0).clamp(0.0, 1.0);
+                *value = serde_json::json!([x, y]);
+                return;
+            }
+            for item in items {
+                clamp_normalized_points(item);
+            }
+        }
+        _ => clamp_annotation_value(value),
+    }
+}
+
+fn generate_share_token() -> String {
+    let mut bytes = [0u8; 32];
+    OsRng.fill_bytes(&mut bytes);
+    URL_SAFE_NO_PAD.encode(bytes)
+}
+
+fn normalize_expiry(expires_at: Option<String>) -> Result<Option<String>, String> {
+    match expires_at {
+        Some(value) => {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                Ok(None)
+            } else {
+                let parsed = chrono::DateTime::parse_from_rfc3339(trimmed)
+                    .map_err(|_| "Invalid expires_at format; expected RFC3339".to_string())?;
+                Ok(Some(parsed.with_timezone(&chrono::Utc).to_rfc3339()))
+            }
+        }
+        None => Ok(None),
+    }
+}
+
+fn validate_share_link_versions(
+    db: &Database,
+    project_id: &str,
+    asset_version_ids: &[String],
+) -> Result<Vec<String>, String> {
+    if asset_version_ids.is_empty() {
+        return Err("At least one version must be included".to_string());
+    }
+    let mut canonical = asset_version_ids
+        .iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    canonical.sort();
+    canonical.dedup();
+    if canonical.is_empty() {
+        return Err("At least one version must be included".to_string());
+    }
+    for version_id in &canonical {
+        let version = db
+            .get_asset_version(version_id)
+            .map_err(|e| e.to_string())?
+            .ok_or("Asset version not found")?;
+        let asset = db
+            .get_asset(&version.asset_id)
+            .map_err(|e| e.to_string())?
+            .ok_or("Asset not found")?;
+        if asset.project_id != project_id {
+            return Err("All versions must belong to the target project".to_string());
+        }
+    }
+    Ok(canonical)
+}
+
+fn share_link_version_ids(link: &ReviewCoreShareLink) -> Result<Vec<String>, String> {
+    let mut ids: Vec<String> =
+        serde_json::from_str(&link.asset_version_ids_json).map_err(|e| e.to_string())?;
+    ids.sort();
+    ids.dedup();
+    Ok(ids)
+}
+
+fn share_link_to_summary(link: &ReviewCoreShareLink) -> Result<ReviewCoreShareLinkSummary, String> {
+    Ok(ReviewCoreShareLinkSummary {
+        id: link.id.clone(),
+        project_id: link.project_id.clone(),
+        token: link.token.clone(),
+        asset_version_ids: share_link_version_ids(link)?,
+        expires_at: link.expires_at.clone(),
+        allow_comments: link.allow_comments,
+        allow_download: link.allow_download,
+        password_required: link.password_hash.is_some(),
+        created_at: link.created_at.clone(),
+    })
+}
+
+pub(crate) fn resolve_share_link(
+    db: &Database,
+    token: &str,
+) -> Result<(ReviewCoreShareLink, Vec<String>), ReviewCoreShareError> {
+    let link = db
+        .get_review_core_share_link_by_token(token)
+        .map_err(|_| ReviewCoreShareError::NotFound)?
+        .ok_or(ReviewCoreShareError::NotFound)?;
+    if let Some(expires_at) = link.expires_at.as_deref() {
+        let expiry = chrono::DateTime::parse_from_rfc3339(expires_at)
+            .map_err(|_| ReviewCoreShareError::Expired)?
+            .with_timezone(&chrono::Utc);
+        if expiry <= chrono::Utc::now() {
+            return Err(ReviewCoreShareError::Expired);
+        }
+    }
+    let version_ids = share_link_version_ids(&link).map_err(|_| ReviewCoreShareError::Forbidden)?;
+    Ok((link, version_ids))
+}
+
+pub(crate) fn validate_share_session(
+    db: &Database,
+    link: &ReviewCoreShareLink,
+    session_token: Option<&str>,
+) -> Result<(), ReviewCoreShareError> {
+    if link.password_hash.is_none() {
+        return Ok(());
+    }
+    let token = session_token.ok_or(ReviewCoreShareError::Forbidden)?;
+    let session = db
+        .get_review_core_share_session_by_token(token)
+        .map_err(|_| ReviewCoreShareError::Forbidden)?
+        .ok_or(ReviewCoreShareError::Forbidden)?;
+    if session.share_link_id != link.id {
+        return Err(ReviewCoreShareError::Forbidden);
+    }
+    let expiry = chrono::DateTime::parse_from_rfc3339(&session.expires_at)
+        .map_err(|_| ReviewCoreShareError::Forbidden)?
+        .with_timezone(&chrono::Utc);
+    if expiry <= chrono::Utc::now() {
+        return Err(ReviewCoreShareError::Forbidden);
+    }
+    let now = chrono::Utc::now();
+    let renewed_expiry = now + chrono::Duration::minutes(30);
+    db.touch_review_core_share_session(&session.id, &renewed_expiry.to_rfc3339(), &now.to_rfc3339())
+        .map_err(|_| ReviewCoreShareError::Forbidden)?;
+    Ok(())
 }
 
 fn build_verification_badge_svg(job: &VerificationJob) -> String {
@@ -2922,7 +4184,7 @@ fn default_brand_profile() -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::{Clip, Project};
+    use crate::db::{Asset, AssetVersion, Clip, Project, ReviewCoreApprovalState, ReviewCoreShareLink};
 
     fn sample_clip(project_id: &str, id: &str, rating: i32, flag: &str) -> Clip {
         Clip {
@@ -3006,6 +4268,208 @@ mod tests {
         let (s3, d3) = derive_labels(Some("Check Label".to_string()), 3);
         assert_eq!(s3, "Check Label Source");
         assert_eq!(d3, "Check Label Destination");
+    }
+
+    #[test]
+    fn review_core_comments_are_version_scoped() {
+        let db_path =
+            std::env::temp_dir().join(format!("wrap-preview-comments-test-{}.db", uuid::Uuid::new_v4()));
+        let db = Database::new(db_path.to_str().unwrap()).unwrap();
+        db.upsert_project(&Project {
+            id: "p1".to_string(),
+            root_path: "/tmp".to_string(),
+            name: "P".to_string(),
+            created_at: "2026-01-01".to_string(),
+        })
+        .unwrap();
+        db.create_asset(&Asset {
+            id: "asset-1".to_string(),
+            project_id: "p1".to_string(),
+            filename: "clip.mov".to_string(),
+            original_path: "/tmp/clip.mov".to_string(),
+            storage_key: "originals/p1/asset-1/v1/original.mov".to_string(),
+            file_size: 100,
+            duration_ms: Some(10_000),
+            frame_rate: Some(24.0),
+            avg_frame_rate: Some("24/1".to_string()),
+            r_frame_rate: Some("24/1".to_string()),
+            is_vfr: false,
+            width: Some(1920),
+            height: Some(1080),
+            codec: Some("h264".to_string()),
+            status: "ready".to_string(),
+            checksum_sha256: "abc".to_string(),
+            last_error: None,
+            created_at: "2026-01-01".to_string(),
+        })
+        .unwrap();
+        db.create_asset_version(&AssetVersion {
+            id: "v1".to_string(),
+            asset_id: "asset-1".to_string(),
+            version_number: 1,
+            original_file_key: "originals/p1/asset-1/v1/original.mov".to_string(),
+            proxy_playlist_key: None,
+            thumbnails_key: None,
+            poster_key: None,
+            processing_status: "ready".to_string(),
+            last_error: None,
+            created_at: "2026-01-01".to_string(),
+        })
+        .unwrap();
+        db.create_asset_version(&AssetVersion {
+            id: "v2".to_string(),
+            asset_id: "asset-1".to_string(),
+            version_number: 2,
+            original_file_key: "originals/p1/asset-1/v2/original.mov".to_string(),
+            proxy_playlist_key: None,
+            thumbnails_key: None,
+            poster_key: None,
+            processing_status: "ready".to_string(),
+            last_error: None,
+            created_at: "2026-01-02".to_string(),
+        })
+        .unwrap();
+        db.create_review_core_comment(&ReviewCoreComment {
+            id: "c1".to_string(),
+            asset_version_id: "v1".to_string(),
+            timestamp_ms: 500,
+            frame_number: Some(12),
+            text: "Version one comment".to_string(),
+            author_name: "Alan".to_string(),
+            resolved: false,
+            created_at: "2026-01-01".to_string(),
+        })
+        .unwrap();
+        db.create_review_core_comment(&ReviewCoreComment {
+            id: "c2".to_string(),
+            asset_version_id: "v2".to_string(),
+            timestamp_ms: 700,
+            frame_number: Some(17),
+            text: "Version two comment".to_string(),
+            author_name: "Alan".to_string(),
+            resolved: false,
+            created_at: "2026-01-02".to_string(),
+        })
+        .unwrap();
+
+        let v1 = db.list_review_core_comments("v1").unwrap();
+        let v2 = db.list_review_core_comments("v2").unwrap();
+        assert_eq!(v1.len(), 1);
+        assert_eq!(v2.len(), 1);
+        assert_eq!(v1[0].text, "Version one comment");
+        assert_eq!(v2[0].text, "Version two comment");
+    }
+
+    #[test]
+    fn annotation_payload_is_clamped_and_versioned() {
+        let normalized = normalize_annotation_vector_data(
+            r#"{
+                "schemaVersion": 1,
+                "items": [
+                    {"id":"a1","type":"arrow","a":[-0.2,0.4],"b":[1.4,2.0],"style":{"stroke":"accent","width":2}},
+                    {"id":"r1","type":"rect","x":-1,"y":0.2,"w":1.8,"h":3.0,"style":{"stroke":"accent","width":2}}
+                ]
+            }"#,
+            "comment-1",
+            1200,
+        )
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&normalized).unwrap();
+        assert_eq!(value["schemaVersion"], 1);
+        assert_eq!(value["commentId"], "comment-1");
+        assert_eq!(value["timestampMs"], 1200);
+        assert_eq!(value["items"][0]["a"][0], 0.0);
+        assert_eq!(value["items"][0]["b"][0], 1.0);
+        assert_eq!(value["items"][1]["w"], 1.0);
+        assert_eq!(value["items"][1]["h"], 1.0);
+    }
+
+    #[test]
+    fn review_core_approval_state_round_trips() {
+        let db_path =
+            std::env::temp_dir().join(format!("wrap-preview-approval-test-{}.db", uuid::Uuid::new_v4()));
+        let db = Database::new(db_path.to_str().unwrap()).unwrap();
+        db.upsert_project(&Project {
+            id: "p1".to_string(),
+            root_path: "/tmp".to_string(),
+            name: "P".to_string(),
+            created_at: "2026-01-01".to_string(),
+        })
+        .unwrap();
+        db.create_asset(&Asset {
+            id: "asset-1".to_string(),
+            project_id: "p1".to_string(),
+            filename: "clip.mov".to_string(),
+            original_path: "/tmp/clip.mov".to_string(),
+            storage_key: "originals/p1/asset-1/v1/original.mov".to_string(),
+            file_size: 100,
+            duration_ms: Some(10_000),
+            frame_rate: Some(24.0),
+            avg_frame_rate: Some("24/1".to_string()),
+            r_frame_rate: Some("24/1".to_string()),
+            is_vfr: false,
+            width: Some(1920),
+            height: Some(1080),
+            codec: Some("h264".to_string()),
+            status: "ready".to_string(),
+            checksum_sha256: "abc".to_string(),
+            last_error: None,
+            created_at: "2026-01-01".to_string(),
+        })
+        .unwrap();
+        db.create_asset_version(&AssetVersion {
+            id: "version-1".to_string(),
+            asset_id: "asset-1".to_string(),
+            version_number: 1,
+            original_file_key: "originals/p1/asset-1/v1/original.mov".to_string(),
+            proxy_playlist_key: None,
+            thumbnails_key: None,
+            poster_key: None,
+            processing_status: "ready".to_string(),
+            last_error: None,
+            created_at: "2026-01-01".to_string(),
+        })
+        .unwrap();
+        db.upsert_review_core_approval_state(&ReviewCoreApprovalState {
+            asset_version_id: "version-1".to_string(),
+            status: "approved".to_string(),
+            approved_at: Some("2026-02-28T10:00:00Z".to_string()),
+            approved_by: Some("Alan".to_string()),
+        })
+        .unwrap();
+
+        let approval = db.get_review_core_approval_state("version-1").unwrap().unwrap();
+        assert_eq!(approval.status, "approved");
+        assert_eq!(approval.approved_by.as_deref(), Some("Alan"));
+    }
+
+    #[test]
+    fn resolve_share_link_rejects_expired_links() {
+        let db_path =
+            std::env::temp_dir().join(format!("wrap-preview-share-test-{}.db", uuid::Uuid::new_v4()));
+        let db = Database::new(db_path.to_str().unwrap()).unwrap();
+        db.upsert_project(&Project {
+            id: "p1".to_string(),
+            root_path: "/tmp".to_string(),
+            name: "P".to_string(),
+            created_at: "2026-01-01".to_string(),
+        })
+        .unwrap();
+        db.create_review_core_share_link(&ReviewCoreShareLink {
+            id: "share-1".to_string(),
+            project_id: "p1".to_string(),
+            token: "token-1".to_string(),
+            asset_version_ids_json: "[\"v1\"]".to_string(),
+            expires_at: Some("2020-01-01T00:00:00Z".to_string()),
+            password_hash: None,
+            allow_comments: true,
+            allow_download: false,
+            created_at: "2026-01-01".to_string(),
+        })
+        .unwrap();
+
+        let result = resolve_share_link(&db, "token-1");
+        assert!(matches!(result, Err(ReviewCoreShareError::Expired)));
     }
 }
 
