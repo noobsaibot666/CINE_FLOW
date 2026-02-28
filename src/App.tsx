@@ -943,17 +943,41 @@ function AppContent() {
       <header className="app-header">
         <div className="app-header-left">
           <div className="app-logo" onClick={() => setActiveTab('home')}>
-            <div className="app-logo-icon">
-              <img src="/logo.svg" alt="Wrap Preview" onError={(e) => (e.currentTarget.style.display = 'none')} />
-            </div>
-            <span>Wrap Preview</span>
+            <img src="/src/assets/Icon_square_rounded.svg" alt="Logo" className="app-logo-img" />
+            <span className="app-title">Wrap Preview</span>
           </div>
           {projectName && (
             <div className="header-project-info">
               <span className="separator">/</span>
-              <span className="project-name">{projectName}</span>
+              <span className="project-name-highlight">{projectName}</span>
             </div>
           )}
+
+          <nav className="app-tabs-nav header-tabs">
+            <button className={`nav-tab ${activeTab === 'home' ? 'active' : ''}`} onClick={() => { setActiveTab('home'); setActivePreproductionApp(null); setActiveMediaWorkspaceApp(null); }}>
+              <LayoutGrid size={14} /> Home
+            </button>
+            <button
+              className={`nav-tab ${activeTab === 'preproduction' ? 'active' : ''}`}
+              onClick={() => {
+                setActiveTab('preproduction');
+                setActivePreproductionApp(null);
+                setActiveMediaWorkspaceApp(null);
+              }}
+            >
+              <Boxes size={14} /> Pre-production
+            </button>
+            <button
+              className={`nav-tab ${activeTab === 'media-workspace' ? 'active' : ''}`}
+              onClick={() => {
+                setActiveTab('media-workspace');
+                setActivePreproductionApp(null);
+                setActiveMediaWorkspaceApp(null);
+              }}
+            >
+              <BriefcaseBusiness size={14} /> Media Workspace
+            </button>
+          </nav>
         </div>
         <div className="app-header-right">
           <nav className="header-nav">
@@ -1025,31 +1049,6 @@ function AppContent() {
       </header>
 
       <div className="app-content">
-        <nav className="app-tabs-nav">
-          <button className="nav-tab" onClick={() => { setActiveTab('home'); setActivePreproductionApp(null); setActiveMediaWorkspaceApp(null); }}>
-            <LayoutGrid size={14} /> Home
-          </button>
-          <button
-            className={`nav-tab ${activeTab === 'preproduction' ? 'active' : ''}`}
-            onClick={() => {
-              setActiveTab('preproduction');
-              setActivePreproductionApp(null);
-              setActiveMediaWorkspaceApp(null);
-            }}
-          >
-            <Boxes size={14} /> Pre-production
-          </button>
-          <button
-            className={`nav-tab ${activeTab === 'media-workspace' ? 'active' : ''}`}
-            onClick={() => {
-              setActiveTab('media-workspace');
-              setActivePreproductionApp(null);
-              setActiveMediaWorkspaceApp(null);
-            }}
-          >
-            <BriefcaseBusiness size={14} /> Media Workspace
-          </button>
-        </nav>
         {uiError && (
           <div className="error-banner">
             <strong>{uiError.title}</strong> {uiError.hint}
