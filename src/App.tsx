@@ -17,7 +17,6 @@ import {
   MoreHorizontal,
   FileDown,
   LayoutGrid,
-  Settings2,
   FolderTree,
   ArrowLeft,
 } from "lucide-react";
@@ -28,7 +27,6 @@ import { ExportPanel } from "./components/ExportPanel";
 import { BlocksView } from "./components/BlocksView";
 import { JobsPanel } from "./components/JobsPanel";
 import { AboutPanel } from "./components/AboutPanel";
-import { SettingsPanel } from "./components/SettingsPanel";
 import { FolderCreator } from "./components/FolderCreator";
 import { TourGuide, TourStep } from "./components/TourGuide";
 import { exportPdf, exportImage, ExportClip } from "./utils/ExportUtils";
@@ -175,7 +173,6 @@ function AppContent() {
     return localStorage.getItem("wp_namingTemplate") || "ContactSheet_{PROJECT}_{DATE}";
   });
 
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [customShotSizes, setCustomShotSizes] = useState<string[]>([]);
   const [customMovements, setCustomMovements] = useState<string[]>([]);
 
@@ -1025,14 +1022,7 @@ function AppContent() {
               )}
             </div>
 
-            <button
-              className="btn btn-secondary btn-icon"
-              onClick={() => setSettingsOpen(true)}
-              title="Project Settings"
-              style={{ marginRight: 8 }}
-            >
-              <Settings2 size={18} />
-            </button>
+
             <button className="btn btn-jobs" onClick={() => setJobsOpen(true)}>
               <div className="jobs-indicator-content">
                 <BriefcaseBusiness size={16} />
@@ -1409,12 +1399,7 @@ function AppContent() {
           onClose={() => setShowExportPanel(false)}
         />
       )}
-      <SettingsPanel
-        open={settingsOpen}
-        projectId={projectId}
-        onClose={() => setSettingsOpen(false)}
-        onSettingsSaved={loadCustomTaxonomy}
-      />
+
       <JobsPanel open={jobsOpen} jobs={jobs} onClose={() => setJobsOpen(false)} onRefresh={refreshJobs} extracting={extracting} extractProgress={extractProgress} scanning={scanning} />
       <AboutPanel open={aboutOpen} info={appInfo} onResetTour={resetTour} onClose={() => setAboutOpen(false)} />
 

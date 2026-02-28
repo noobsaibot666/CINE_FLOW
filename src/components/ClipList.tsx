@@ -370,7 +370,7 @@ function ClipCard({
                     <span className="meta-label">Shot Size</span>
                     <input
                         list="shot-size-options"
-                        className="input-text"
+                        className={`input-text ${localShotSize ? 'is-picked' : ''}`}
                         value={localShotSize}
                         placeholder="Type to search"
                         onChange={(e) => setLocalShotSize(e.target.value)}
@@ -382,7 +382,7 @@ function ClipCard({
                     <span className="meta-label">Movement</span>
                     <input
                         list="movement-options"
-                        className="input-text"
+                        className={`input-text ${localMovement ? 'is-picked' : ''}`}
                         value={localMovement}
                         placeholder="Type to search"
                         onChange={(e) => setLocalMovement(e.target.value)}
@@ -394,7 +394,7 @@ function ClipCard({
                     <span className="meta-label">Manual Order</span>
                     <input
                         type="number"
-                        className="input-text"
+                        className={`input-text ${localManualOrder !== 0 ? 'is-picked' : ''}`}
                         value={localManualOrder}
                         onChange={(e) => setLocalManualOrder(Number(e.target.value || 0))}
                         onBlur={handleManualOrderBlur}
@@ -407,7 +407,7 @@ function ClipCard({
                     <span className="meta-label">Thumb Range (s)</span>
                     <input
                         type="number"
-                        className="input-text"
+                        className={`input-text ${localThumbRange !== 0 ? 'is-picked' : ''}`}
                         value={localThumbRange}
                         onChange={(e) => setLocalThumbRange(Number(e.target.value || 0))}
                         onBlur={handleThumbRangeBlur}
