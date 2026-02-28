@@ -1214,13 +1214,9 @@ body {
 
 .film-strip-thumb {
   flex: 1;
-  aspect-ratio: 16 / 9;
+  aspect-ratio: var(--aspect-ratio, 16 / 9);
   overflow: hidden;
   position: relative;
-}
-
-.film-strip.is-vertical .film-strip-thumb {
-  aspect-ratio: 9 / 16;
 }
 
 .film-strip-thumb img {
@@ -1261,17 +1257,13 @@ body {
 
 .film-strip-placeholder {
   flex: 1;
-  aspect-ratio: 16 / 9;
+  aspect-ratio: var(--aspect-ratio, 16 / 9);
   background: var(--bg-elevated);
   display: flex;
   align-items: center;
   justify-content: center;
   color: var(--text-muted);
   font-size: var(--font-size-xs);
-}
-
-.film-strip.is-vertical .film-strip-placeholder {
-  aspect-ratio: 9 / 16;
 }
 
 .thumb-warning {

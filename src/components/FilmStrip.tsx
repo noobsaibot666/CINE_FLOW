@@ -19,7 +19,11 @@ export function FilmStrip({ clipId, thumbnails, thumbnailCache, status, count, a
 
     if (status === "fail") {
         return (
-            <div className={`film-strip ${orientationClass}`} onDoubleClick={(e) => { e.stopPropagation(); onDoubleClick?.(); }}>
+            <div
+                className={`film-strip ${orientationClass}`}
+                onDoubleClick={(e) => { e.stopPropagation(); onDoubleClick?.(); }}
+                style={{ "--aspect-ratio": aspectRatio } as any}
+            >
                 {indices.map((i) => (
                     <div key={i} className="film-strip-placeholder">
                         {i === Math.floor(count / 2) ? "Failed" : ""}
@@ -31,7 +35,11 @@ export function FilmStrip({ clipId, thumbnails, thumbnailCache, status, count, a
 
     if (thumbnails.length === 0) {
         return (
-            <div className={`film-strip ${orientationClass}`} onDoubleClick={(e) => { e.stopPropagation(); onDoubleClick?.(); }}>
+            <div
+                className={`film-strip ${orientationClass}`}
+                onDoubleClick={(e) => { e.stopPropagation(); onDoubleClick?.(); }}
+                style={{ "--aspect-ratio": aspectRatio } as any}
+            >
                 {indices.map((i) => (
                     <div key={i} className="film-strip-placeholder">
                         {i === Math.floor(count / 2) && (
@@ -44,7 +52,11 @@ export function FilmStrip({ clipId, thumbnails, thumbnailCache, status, count, a
     }
 
     return (
-        <div className={`film-strip ${orientationClass}`} onDoubleClick={(e) => { e.stopPropagation(); onDoubleClick?.(); }}>
+        <div
+            className={`film-strip ${orientationClass}`}
+            onDoubleClick={(e) => { e.stopPropagation(); onDoubleClick?.(); }}
+            style={{ "--aspect-ratio": aspectRatio } as any}
+        >
             {indices.map((idx) => {
                 const thumb = thumbnails.find((t) => t.index === idx);
                 const cacheKey = `${clipId}_${idx}`;
