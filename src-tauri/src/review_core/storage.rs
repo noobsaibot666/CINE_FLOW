@@ -15,6 +15,8 @@ pub struct ReviewCoreVersionPaths {
     pub derived_dir_abs: PathBuf,
     pub playlist_abs_path: PathBuf,
     pub playlist_key: String,
+    pub proxy_mp4_abs_path: PathBuf,
+    pub proxy_mp4_key: String,
     pub thumbs_dir_abs: PathBuf,
     pub thumbs_key: String,
     pub poster_abs_path: PathBuf,
@@ -66,12 +68,14 @@ pub fn build_version_paths(
     );
     let derived_prefix = format!("derived/{}/{}/{}", project_id, asset_id, version_dir);
     let playlist_key = format!("{}/hls/index.m3u8", derived_prefix);
+    let proxy_mp4_key = format!("{}/proxy.mp4", derived_prefix);
     let thumbs_key = format!("{}/thumbs", derived_prefix);
     let poster_key = format!("{}/poster.jpg", derived_prefix);
 
     let original_abs_path = base_dir.join(&original_key);
     let derived_dir_abs = base_dir.join(&derived_prefix);
     let playlist_abs_path = base_dir.join(&playlist_key);
+    let proxy_mp4_abs_path = base_dir.join(&proxy_mp4_key);
     let thumbs_dir_abs = base_dir.join(&thumbs_key);
     let poster_abs_path = base_dir.join(&poster_key);
 
@@ -87,6 +91,8 @@ pub fn build_version_paths(
         derived_dir_abs,
         playlist_abs_path,
         playlist_key,
+        proxy_mp4_abs_path,
+        proxy_mp4_key,
         thumbs_dir_abs,
         thumbs_key,
         poster_abs_path,
@@ -123,8 +129,13 @@ mod tests {
         assert!(paths
             .original_abs_path
             .ends_with("originals/project1/asset1/v2/original.mov"));
-        assert_eq!(paths.playlist_key, "derived/project1/asset1/v2/hls/index.m3u8");
+        assert_eq!(
+            paths.playlist_key,
+            "derived/project1/asset1/v2/hls/index.m3u8"
+        );
         assert_eq!(paths.thumbs_key, "derived/project1/asset1/v2/thumbs");
-        assert!(paths.poster_abs_path.ends_with("derived/project1/asset1/v2/poster.jpg"));
+        assert!(paths
+            .poster_abs_path
+            .ends_with("derived/project1/asset1/v2/poster.jpg"));
     }
 }

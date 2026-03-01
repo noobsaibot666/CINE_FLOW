@@ -93,6 +93,39 @@ fn format_hls_args(input: &Path, output_dir: &Path, has_audio: bool, fps: f64) -
     args
 }
 
+fn format_proxy_mp4_args(input: &Path, output: &Path, has_audio: bool, fps: f64) -> Vec<String> {
+    let gop = compute_gop_size(fps);
+    let mut args = vec![
+        "-y".to_string(),
+        "-i".to_string(),
+        input.to_string_lossy().to_string(),
+        "-vf".to_string(),
+        "scale='min(1280,iw)':-2".to_string(),
+        "-c:v".to_string(),
+        "libx264".to_string(),
+        "-preset".to_string(),
+        "veryfast".to_string(),
+        "-crf".to_string(),
+        "23".to_string(),
+        "-pix_fmt".to_string(),
+        "yuv420p".to_string(),
+        "-g".to_string(),
+        gop.to_string(),
+    ];
+    if has_audio {
+        args.extend([
+            "-c:a".to_string(),
+            "aac".to_string(),
+            "-b:a".to_string(),
+            "128k".to_string(),
+        ]);
+    } else {
+        args.push("-an".to_string());
+    }
+    args.push(output.to_string_lossy().to_string());
+    args
+}
+
 fn format_poster_args(input: &Path, poster: &Path) -> Vec<String> {
     vec![
         "-y".to_string(),
@@ -163,11 +196,41 @@ pub async fn process_asset_version(
     emit_job_state(&ctx.app, &ctx.job_manager, &ctx.job_id);
     check_cancel(&ctx.cancel_flag)?;
 
+    let paths = crate::review_core::storage::build_version_paths(
+        &crate::review_core::storage::review_core_base_dir(),
+        &project_id,
+        &asset_id,
+        ctx.db
+            .get_asset_version(&version_id)
+            .map_err(|e| e.to_string())?
+            .ok_or("Missing asset version during finalize")?
+            .version_number,
+        original_abs_path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .unwrap_or("bin"),
+    )?;
+
     let hls_dir = output_dir_abs_path.join("hls");
     std::fs::create_dir_all(&hls_dir).map_err(|e| e.to_string())?;
     ffmpeg_run(&format_hls_args(
         &original_abs_path,
         &hls_dir,
+        metadata.audio_codec != "none",
+        metadata.fps,
+    ))?;
+
+    ctx.job_manager.update_progress(
+        &ctx.job_id,
+        0.45,
+        Some("Review Core: creating download proxy".to_string()),
+    );
+    emit_job_state(&ctx.app, &ctx.job_manager, &ctx.job_id);
+    check_cancel(&ctx.cancel_flag)?;
+
+    ffmpeg_run(&format_proxy_mp4_args(
+        &original_abs_path,
+        &paths.proxy_mp4_abs_path,
         metadata.audio_codec != "none",
         metadata.fps,
     ))?;
@@ -194,27 +257,17 @@ pub async fn process_asset_version(
     let thumbs_dir = output_dir_abs_path.join("thumbs");
     std::fs::create_dir_all(&thumbs_dir).map_err(|e| e.to_string())?;
     let interval = ((metadata.duration_ms / 1000) / 10).max(1);
-    ffmpeg_run(&format_thumb_args(&original_abs_path, &thumbs_dir, interval))?;
-
-    let paths = crate::review_core::storage::build_version_paths(
-        &crate::review_core::storage::review_core_base_dir(),
-        &project_id,
-        &asset_id,
-        ctx.db
-            .get_asset_version(&version_id)
-            .map_err(|e| e.to_string())?
-            .ok_or("Missing asset version during finalize")?
-            .version_number,
-        original_abs_path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .unwrap_or("bin"),
-    )?;
+    ffmpeg_run(&format_thumb_args(
+        &original_abs_path,
+        &thumbs_dir,
+        interval,
+    ))?;
 
     ctx.db
         .update_asset_version_outputs(
             &version_id,
             Some(&paths.playlist_key),
+            Some(&paths.proxy_mp4_key),
             Some(&paths.thumbs_key),
             Some(&paths.poster_key),
             "ready",

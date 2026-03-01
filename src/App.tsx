@@ -1440,15 +1440,13 @@ function AppContent() {
               </div>
             ) : null
           ) : activeMediaWorkspaceApp === 'review-core' ? (
-            projectId ? (
-              <div className="media-workspace">
-                <ReviewCore
-                  projectId={projectId}
-                  projectName={projectName}
-                  onError={setUiError}
-                />
-              </div>
-            ) : null
+            <div className="media-workspace">
+              <ReviewCore
+                projectId={projectId}
+                projectName={projectName}
+                onError={setUiError}
+              />
+            </div>
           ) : (
             <div className="onboarding-container">
               <div className="onboarding-header">
@@ -1484,17 +1482,17 @@ function AppContent() {
                   </div>
                 </div>
                 <div
-                  className={`module-card premium-card ${!projectId ? "disabled" : ""}`}
+                  className="module-card premium-card"
                   onClick={() => {
-                    if (projectId) setActiveMediaWorkspaceApp('review-core');
+                    setActiveMediaWorkspaceApp('review-core');
                   }}
                   style={{ "--corner-color": "var(--color-accent-soft)", "--card-accent": "var(--color-accent)", "--card-accent-soft": "var(--color-accent-soft)" } as any}
                 >
                   <div className="module-icon"><Film size={32} strokeWidth={1.5} /></div>
                   <div className="module-info">
                     <h3>Review Core</h3>
-                    <p>{projectId ? "Play app-managed HLS proxies, inspect versions, and confirm metadata." : "Available after a workspace is opened in Review."}</p>
-                    <span className="module-action">{projectId ? "Open App" : "Workspace required"}</span>
+                    <p>{projectId ? "Play app-managed HLS proxies, inspect versions, and confirm metadata." : "Create or reopen a Review Core project to import and review media independently."}</p>
+                    <span className="module-action">Open App <ArrowRight size={14} /></span>
                   </div>
                 </div>
                 <div
@@ -1526,7 +1524,7 @@ function AppContent() {
               </div>
               {inWorkspaceLauncher && !projectId && (
                 <div className="workspace-launcher-hint">
-                  Load footage in <strong>Open Workspace / Review</strong> first. Review Core, Scene Blocks, and Delivery stay disabled until a workspace is active.
+                  <strong>Review Core</strong> can now run independently. <strong>Scene Blocks</strong> and <strong>Delivery</strong> still require an opened workspace.
                 </div>
               )}
             </div>

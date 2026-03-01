@@ -38,6 +38,10 @@ pub fn start_review_core_server(
             "/media/:project_id/:asset_id/:version_id/poster.jpg",
             get(serve_poster),
         )
+        .route(
+            "/frame-notes/:project_id/:asset_id/:version_id/:note_id/:file",
+            get(serve_frame_note),
+        )
         .with_state(ReviewCoreServerState { db, base_dir });
 
     tauri::async_runtime::spawn(async move {
@@ -122,6 +126,16 @@ async fn serve_poster(
     }
 }
 
+async fn serve_frame_note(
+    State(state): State<ReviewCoreServerState>,
+    AxumPath((project_id, asset_id, version_id, note_id, file)): AxumPath<(String, String, String, String, String)>,
+) -> Response<Body> {
+    match serve_frame_note_asset(state, &project_id, &asset_id, &version_id, &note_id, &file).await {
+        Ok(response) => response,
+        Err(status) => build_error_response(status),
+    }
+}
+
 async fn serve_relative_asset(
     state: ReviewCoreServerState,
     project_id: &str,
@@ -180,13 +194,54 @@ async fn serve_relative_asset(
     ))
 }
 
+async fn serve_frame_note_asset(
+    state: ReviewCoreServerState,
+    project_id: &str,
+    asset_id: &str,
+    version_id: &str,
+    note_id: &str,
+    requested_file: &str,
+) -> Result<Response<Body>, StatusCode> {
+    let note = state
+        .db
+        .get_review_core_frame_note(note_id)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    if note.project_id != project_id || note.asset_id != asset_id || note.asset_version_id != version_id {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    if !matches!(requested_file, "frame.jpg" | "annotated.jpg") {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let note_path = crate::review_core::storage::safe_relative_path(&state.base_dir, &note.image_key)
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    let target_path = note_path
+        .parent()
+        .ok_or(StatusCode::BAD_REQUEST)?
+        .join(requested_file);
+    let bytes = tokio::fs::read(&target_path)
+        .await
+        .map_err(|_| StatusCode::NOT_FOUND)?;
+    Ok(build_binary_response(
+        &target_path,
+        bytes,
+        project_id,
+        asset_id,
+        version_id,
+        None,
+        None,
+    ))
+}
+
 fn authorize_share_access(
     db: &crate::db::Database,
     token: &str,
     session_token: Option<&str>,
     version_id: &str,
 ) -> Result<(), StatusCode> {
-    let (link, version_ids) = crate::commands::resolve_share_link(db, token).map_err(map_share_error)?;
+    let (link, version_ids) =
+        crate::commands::resolve_share_link(db, token).map_err(map_share_error)?;
     crate::commands::validate_share_session(db, &link, session_token).map_err(map_share_error)?;
     if !version_ids.iter().any(|value| value == version_id) {
         return Err(StatusCode::FORBIDDEN);
@@ -244,34 +299,41 @@ fn build_binary_response(
     apply_cors_headers(&mut response);
     response.headers_mut().insert(
         header::CONTENT_TYPE,
-        HeaderValue::from_str(mime).unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
+        HeaderValue::from_str(mime)
+            .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
     );
     response.headers_mut().insert(
         header::CACHE_CONTROL,
-        HeaderValue::from_str(cache_control).unwrap_or_else(|_| HeaderValue::from_static("no-cache")),
+        HeaderValue::from_str(cache_control)
+            .unwrap_or_else(|_| HeaderValue::from_static("no-cache")),
     );
     response
 }
 
 fn build_error_response(status: StatusCode) -> Response<Body> {
-    let mut response = Response::new(Body::from(status.canonical_reason().unwrap_or("Request failed").to_string()));
+    let mut response = Response::new(Body::from(
+        status
+            .canonical_reason()
+            .unwrap_or("Request failed")
+            .to_string(),
+    ));
     *response.status_mut() = status;
     apply_cors_headers(&mut response);
     response.headers_mut().insert(
         header::CONTENT_TYPE,
         HeaderValue::from_static("text/plain; charset=utf-8"),
     );
-    response.headers_mut().insert(
-        header::CACHE_CONTROL,
-        HeaderValue::from_static("no-cache"),
-    );
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
     response
 }
 
 fn apply_cors_headers(response: &mut Response<Body>) {
-    response
-        .headers_mut()
-        .insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, HeaderValue::from_static("*"));
+    response.headers_mut().insert(
+        header::ACCESS_CONTROL_ALLOW_ORIGIN,
+        HeaderValue::from_static("*"),
+    );
     response.headers_mut().insert(
         header::ACCESS_CONTROL_ALLOW_METHODS,
         HeaderValue::from_static("GET, OPTIONS"),
@@ -328,7 +390,10 @@ fn rewrite_playlist(
 #[cfg(test)]
 mod tests {
     use super::{authorize_share_access, rewrite_playlist};
-    use crate::db::{Asset, AssetVersion, Database, Project, ReviewCoreShareLink, ReviewCoreShareSession};
+    use crate::db::{
+        Asset, AssetVersion, Database, Project, ReviewCoreFrameNote, ReviewCoreShareLink,
+        ReviewCoreShareSession,
+    };
     use axum::http::StatusCode;
 
     #[test]
@@ -339,14 +404,18 @@ mod tests {
     }
 
     fn seeded_db() -> Database {
-        let db_path = std::env::temp_dir().join(format!("wrap-preview-share-server-test-{}.db", uuid::Uuid::new_v4()));
+        let db_path = std::env::temp_dir().join(format!(
+            "wrap-preview-share-server-test-{}.db",
+            uuid::Uuid::new_v4()
+        ));
         let db = Database::new(db_path.to_str().unwrap()).unwrap();
         db.upsert_project(&Project {
             id: "p1".to_string(),
             root_path: "/tmp".to_string(),
             name: "Project".to_string(),
             created_at: "2026-01-01".to_string(),
-        }).unwrap();
+        })
+        .unwrap();
         db.create_asset(&Asset {
             id: "asset-1".to_string(),
             project_id: "p1".to_string(),
@@ -366,31 +435,36 @@ mod tests {
             checksum_sha256: "abc".to_string(),
             last_error: None,
             created_at: "2026-01-01".to_string(),
-        }).unwrap();
+        })
+        .unwrap();
         db.create_asset_version(&AssetVersion {
             id: "v1".to_string(),
             asset_id: "asset-1".to_string(),
             version_number: 1,
             original_file_key: "originals/p1/asset-1/v1/original.mov".to_string(),
             proxy_playlist_key: Some("derived/p1/asset-1/v1/hls/index.m3u8".to_string()),
+            proxy_mp4_key: Some("derived/p1/asset-1/v1/proxy.mp4".to_string()),
             thumbnails_key: Some("derived/p1/asset-1/v1/thumbs".to_string()),
             poster_key: Some("derived/p1/asset-1/v1/poster.jpg".to_string()),
             processing_status: "ready".to_string(),
             last_error: None,
             created_at: "2026-01-01".to_string(),
-        }).unwrap();
+        })
+        .unwrap();
         db.create_asset_version(&AssetVersion {
             id: "v2".to_string(),
             asset_id: "asset-1".to_string(),
             version_number: 2,
             original_file_key: "originals/p1/asset-1/v2/original.mov".to_string(),
             proxy_playlist_key: Some("derived/p1/asset-1/v2/hls/index.m3u8".to_string()),
+            proxy_mp4_key: Some("derived/p1/asset-1/v2/proxy.mp4".to_string()),
             thumbnails_key: Some("derived/p1/asset-1/v2/thumbs".to_string()),
             poster_key: Some("derived/p1/asset-1/v2/poster.jpg".to_string()),
             processing_status: "ready".to_string(),
             last_error: None,
             created_at: "2026-01-02".to_string(),
-        }).unwrap();
+        })
+        .unwrap();
         db
     }
 
@@ -408,7 +482,8 @@ mod tests {
             allow_comments: true,
             allow_download: false,
             created_at: "2026-01-01".to_string(),
-        }).unwrap();
+        })
+        .unwrap();
 
         let denied = authorize_share_access(&db, "token-1", None, "v1");
         assert_eq!(denied.unwrap_err(), StatusCode::FORBIDDEN);
@@ -417,10 +492,12 @@ mod tests {
             id: "session-1".to_string(),
             share_link_id: "share-1".to_string(),
             token: "session-token".to_string(),
+            display_name: None,
             expires_at: (chrono::Utc::now() + chrono::Duration::minutes(5)).to_rfc3339(),
             created_at: chrono::Utc::now().to_rfc3339(),
             last_seen_at: None,
-        }).unwrap();
+        })
+        .unwrap();
 
         let allowed = authorize_share_access(&db, "token-1", Some("session-token"), "v1");
         assert!(allowed.is_ok());
@@ -439,7 +516,8 @@ mod tests {
             allow_comments: true,
             allow_download: false,
             created_at: "2026-01-01".to_string(),
-        }).unwrap();
+        })
+        .unwrap();
 
         let denied = authorize_share_access(&db, "token-2", None, "v2");
         assert_eq!(denied.unwrap_err(), StatusCode::FORBIDDEN);
@@ -459,15 +537,18 @@ mod tests {
             allow_comments: true,
             allow_download: false,
             created_at: "2026-01-01".to_string(),
-        }).unwrap();
+        })
+        .unwrap();
         db.create_review_core_share_session(&ReviewCoreShareSession {
             id: "session-2".to_string(),
             share_link_id: "share-3".to_string(),
             token: "expired-session".to_string(),
+            display_name: None,
             expires_at: (chrono::Utc::now() - chrono::Duration::minutes(1)).to_rfc3339(),
             created_at: chrono::Utc::now().to_rfc3339(),
             last_seen_at: None,
-        }).unwrap();
+        })
+        .unwrap();
         let denied = authorize_share_access(&db, "token-3", Some("expired-session"), "v1");
         assert_eq!(denied.unwrap_err(), StatusCode::FORBIDDEN);
 
@@ -475,13 +556,21 @@ mod tests {
             id: "session-3".to_string(),
             share_link_id: "share-3".to_string(),
             token: "renew-session".to_string(),
+            display_name: None,
             expires_at: (chrono::Utc::now() + chrono::Duration::seconds(30)).to_rfc3339(),
             created_at: chrono::Utc::now().to_rfc3339(),
             last_seen_at: None,
-        }).unwrap();
-        let before = db.get_review_core_share_session_by_token("renew-session").unwrap().unwrap();
+        })
+        .unwrap();
+        let before = db
+            .get_review_core_share_session_by_token("renew-session")
+            .unwrap()
+            .unwrap();
         authorize_share_access(&db, "token-3", Some("renew-session"), "v1").unwrap();
-        let after = db.get_review_core_share_session_by_token("renew-session").unwrap().unwrap();
+        let after = db
+            .get_review_core_share_session_by_token("renew-session")
+            .unwrap()
+            .unwrap();
         let before_expiry = chrono::DateTime::parse_from_rfc3339(&before.expires_at).unwrap();
         let after_expiry = chrono::DateTime::parse_from_rfc3339(&after.expires_at).unwrap();
         assert!(after_expiry > before_expiry);
@@ -491,7 +580,99 @@ mod tests {
     fn playlist_rewrite_propagates_share_query_params() {
         let raw = "#EXTM3U\n#EXT-X-VERSION:3\nsegment_0001.ts\nsegment_0002.ts";
         let rewritten = rewrite_playlist(raw, "p1", "asset-1", "v1", "?t=token-1&s=session-1");
-        assert!(rewritten.contains("/media/p1/asset-1/v1/hls/segment_0001.ts?t=token-1&s=session-1"));
-        assert!(rewritten.contains("/media/p1/asset-1/v1/hls/segment_0002.ts?t=token-1&s=session-1"));
+        assert!(
+            rewritten.contains("/media/p1/asset-1/v1/hls/segment_0001.ts?t=token-1&s=session-1")
+        );
+        assert!(
+            rewritten.contains("/media/p1/asset-1/v1/hls/segment_0002.ts?t=token-1&s=session-1")
+        );
+    }
+
+    #[test]
+    fn reviewer_name_is_persisted_in_session() {
+        let db = seeded_db();
+        db.create_review_core_share_link(&ReviewCoreShareLink {
+            id: "share-4".to_string(),
+            project_id: "p1".to_string(),
+            token: "token-4".to_string(),
+            asset_version_ids_json: "[\"v1\"]".to_string(),
+            expires_at: None,
+            password_hash: None,
+            allow_comments: true,
+            allow_download: true,
+            created_at: "2026-01-01".to_string(),
+        })
+        .unwrap();
+
+        db.create_review_core_share_session(&ReviewCoreShareSession {
+            id: "session-4".to_string(),
+            share_link_id: "share-4".to_string(),
+            token: "session-token-4".to_string(),
+            display_name: Some("Alice Reviewer".to_string()),
+            expires_at: (chrono::Utc::now() + chrono::Duration::minutes(5)).to_rfc3339(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            last_seen_at: None,
+        })
+        .unwrap();
+
+        let session = db
+            .get_review_core_share_session_by_token("session-token-4")
+            .unwrap()
+            .unwrap();
+        assert_eq!(session.display_name, Some("Alice Reviewer".to_string()));
+    }
+
+    #[test]
+    fn asset_version_carries_proxy_mp4_key() {
+        let db = seeded_db();
+        let v1 = db.get_asset_version("v1").unwrap().unwrap();
+        assert_eq!(
+            v1.proxy_mp4_key,
+            Some("derived/p1/asset-1/v1/proxy.mp4".to_string())
+        );
+    }
+
+    #[test]
+    fn frame_note_route_rejects_traversal_filenames() {
+        let db = seeded_db();
+        let base = std::env::temp_dir().join(format!(
+            "wrap-preview-frame-note-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(base.join("derived/p1/asset-1/v1/frame_notes/n1")).unwrap();
+        db.create_review_core_frame_note(&ReviewCoreFrameNote {
+            id: "n1".to_string(),
+            project_id: "p1".to_string(),
+            asset_id: "asset-1".to_string(),
+            asset_version_id: "v1".to_string(),
+            timestamp_ms: 100,
+            frame_number: Some(3),
+            title: None,
+            image_key: "derived/p1/asset-1/v1/frame_notes/n1/frame.jpg".to_string(),
+            vector_data: "[]".to_string(),
+            created_at: "2026-01-01".to_string(),
+            updated_at: "2026-01-01".to_string(),
+            hidden: false,
+        })
+        .unwrap();
+
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let status = runtime.block_on(async {
+            serve_frame_note_asset(
+                ReviewCoreServerState {
+                    db,
+                    base_dir: base,
+                },
+                "p1",
+                "asset-1",
+                "v1",
+                "n1",
+                "../secret.txt",
+            )
+            .await
+            .unwrap_err()
+        });
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
     }
 }

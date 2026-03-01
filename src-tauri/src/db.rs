@@ -191,6 +191,7 @@ pub struct AssetVersion {
     pub version_number: i32,
     pub original_file_key: String,
     pub proxy_playlist_key: Option<String>,
+    pub proxy_mp4_key: Option<String>,
     pub thumbnails_key: Option<String>,
     pub poster_key: Option<String>,
     pub processing_status: String,
@@ -222,6 +223,22 @@ pub struct ReviewCoreAnnotation {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReviewCoreFrameNote {
+    pub id: String,
+    pub project_id: String,
+    pub asset_id: String,
+    pub asset_version_id: String,
+    pub timestamp_ms: i64,
+    pub frame_number: Option<i64>,
+    pub title: Option<String>,
+    pub image_key: String,
+    pub vector_data: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub hidden: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReviewCoreApprovalState {
     pub asset_version_id: String,
     pub status: String,
@@ -247,9 +264,18 @@ pub struct ReviewCoreShareSession {
     pub id: String,
     pub share_link_id: String,
     pub token: String,
+    pub display_name: Option<String>,
     pub expires_at: String,
     pub created_at: String,
     pub last_seen_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReviewCoreProject {
+    pub id: String,
+    pub name: String,
+    pub created_at: String,
+    pub last_opened_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -608,6 +634,28 @@ impl Database {
                 CREATE INDEX IF NOT EXISTS idx_annotations_asset_version_time
                     ON review_core_annotations(asset_version_id, timestamp_ms);
 
+                CREATE TABLE IF NOT EXISTS review_core_frame_notes (
+                    id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL,
+                    asset_id TEXT NOT NULL,
+                    asset_version_id TEXT NOT NULL,
+                    timestamp_ms INTEGER NOT NULL,
+                    frame_number INTEGER,
+                    title TEXT,
+                    image_key TEXT NOT NULL,
+                    vector_data TEXT NOT NULL DEFAULT '[]',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    hidden INTEGER NOT NULL DEFAULT 0,
+                    FOREIGN KEY (project_id) REFERENCES projects(id),
+                    FOREIGN KEY (asset_id) REFERENCES assets(id),
+                    FOREIGN KEY (asset_version_id) REFERENCES asset_versions(id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_frame_notes_asset_version_time
+                    ON review_core_frame_notes(asset_version_id, timestamp_ms);
+                CREATE INDEX IF NOT EXISTS idx_frame_notes_project_created
+                    ON review_core_frame_notes(project_id, created_at);
+
                 CREATE TABLE IF NOT EXISTS review_core_approval_state (
                     asset_version_id TEXT PRIMARY KEY,
                     status TEXT NOT NULL DEFAULT 'draft',
@@ -615,6 +663,15 @@ impl Database {
                     approved_by TEXT,
                     FOREIGN KEY (asset_version_id) REFERENCES asset_versions(id)
                 );
+
+                CREATE TABLE IF NOT EXISTS review_core_projects (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    last_opened_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_review_core_projects_last_opened
+                    ON review_core_projects(last_opened_at DESC);
 
                 CREATE TABLE IF NOT EXISTS review_core_share_links (
                     id TEXT PRIMARY KEY,
@@ -678,6 +735,12 @@ impl Database {
             if !asset_version_columns.contains(&"last_error".to_string()) {
                 conn.execute("ALTER TABLE asset_versions ADD COLUMN last_error TEXT", [])?;
             }
+            if !asset_version_columns.contains(&"proxy_mp4_key".to_string()) {
+                conn.execute(
+                    "ALTER TABLE asset_versions ADD COLUMN proxy_mp4_key TEXT",
+                    [],
+                )?;
+            }
 
             conn.execute_batch(
                 "
@@ -713,6 +776,28 @@ impl Database {
                 CREATE INDEX IF NOT EXISTS idx_annotations_asset_version_time
                     ON review_core_annotations(asset_version_id, timestamp_ms);
 
+                CREATE TABLE IF NOT EXISTS review_core_frame_notes (
+                    id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL,
+                    asset_id TEXT NOT NULL,
+                    asset_version_id TEXT NOT NULL,
+                    timestamp_ms INTEGER NOT NULL,
+                    frame_number INTEGER,
+                    title TEXT,
+                    image_key TEXT NOT NULL,
+                    vector_data TEXT NOT NULL DEFAULT '[]',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    hidden INTEGER NOT NULL DEFAULT 0,
+                    FOREIGN KEY (project_id) REFERENCES projects(id),
+                    FOREIGN KEY (asset_id) REFERENCES assets(id),
+                    FOREIGN KEY (asset_version_id) REFERENCES asset_versions(id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_frame_notes_asset_version_time
+                    ON review_core_frame_notes(asset_version_id, timestamp_ms);
+                CREATE INDEX IF NOT EXISTS idx_frame_notes_project_created
+                    ON review_core_frame_notes(project_id, created_at);
+
                 CREATE TABLE IF NOT EXISTS review_core_approval_state (
                     asset_version_id TEXT PRIMARY KEY,
                     status TEXT NOT NULL DEFAULT 'draft',
@@ -720,6 +805,15 @@ impl Database {
                     approved_by TEXT,
                     FOREIGN KEY (asset_version_id) REFERENCES asset_versions(id)
                 );
+
+                CREATE TABLE IF NOT EXISTS review_core_projects (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    last_opened_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_review_core_projects_last_opened
+                    ON review_core_projects(last_opened_at DESC);
 
                 CREATE TABLE IF NOT EXISTS review_core_share_links (
                     id TEXT PRIMARY KEY,
@@ -753,6 +847,19 @@ impl Database {
                     ON review_core_share_sessions(token);
                 ",
             )?;
+
+            let mut share_session_stmt =
+                conn.prepare("PRAGMA table_info(review_core_share_sessions)")?;
+            let share_session_columns: Vec<String> = share_session_stmt
+                .query_map([], |row| row.get(1))?
+                .filter_map(|r| r.ok())
+                .collect();
+            if !share_session_columns.contains(&"display_name".to_string()) {
+                conn.execute(
+                    "ALTER TABLE review_core_share_sessions ADD COLUMN display_name TEXT",
+                    [],
+                )?;
+            }
         }
 
         Ok(db)
@@ -1013,6 +1120,28 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_annotations_asset_version_time
                 ON review_core_annotations(asset_version_id, timestamp_ms);
 
+            CREATE TABLE IF NOT EXISTS review_core_frame_notes (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                asset_id TEXT NOT NULL,
+                asset_version_id TEXT NOT NULL,
+                timestamp_ms INTEGER NOT NULL,
+                frame_number INTEGER,
+                title TEXT,
+                image_key TEXT NOT NULL,
+                vector_data TEXT NOT NULL DEFAULT '[]',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                hidden INTEGER NOT NULL DEFAULT 0,
+                FOREIGN KEY (project_id) REFERENCES projects(id),
+                FOREIGN KEY (asset_id) REFERENCES assets(id),
+                FOREIGN KEY (asset_version_id) REFERENCES asset_versions(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_frame_notes_asset_version_time
+                ON review_core_frame_notes(asset_version_id, timestamp_ms);
+            CREATE INDEX IF NOT EXISTS idx_frame_notes_project_created
+                ON review_core_frame_notes(project_id, created_at);
+
             CREATE TABLE IF NOT EXISTS review_core_approval_state (
                 asset_version_id TEXT PRIMARY KEY,
                 status TEXT NOT NULL DEFAULT 'draft',
@@ -1020,6 +1149,15 @@ impl Database {
                 approved_by TEXT,
                 FOREIGN KEY (asset_version_id) REFERENCES asset_versions(id)
             );
+
+            CREATE TABLE IF NOT EXISTS review_core_projects (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                last_opened_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_review_core_projects_last_opened
+                ON review_core_projects(last_opened_at DESC);
 
             CREATE TABLE IF NOT EXISTS review_core_share_links (
                 id TEXT PRIMARY KEY,
@@ -1081,6 +1219,73 @@ impl Database {
             Some(Ok(project)) => Ok(Some(project)),
             _ => Ok(None),
         }
+    }
+
+    pub fn create_review_core_project(&self, project: &ReviewCoreProject) -> SqlResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO review_core_projects (id, name, created_at, last_opened_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                project.id,
+                project.name,
+                project.created_at,
+                project.last_opened_at
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_review_core_projects(&self) -> SqlResult<Vec<ReviewCoreProject>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, name, created_at, last_opened_at
+             FROM review_core_projects
+             ORDER BY last_opened_at DESC, created_at DESC, name COLLATE NOCASE ASC",
+        )?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(ReviewCoreProject {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    created_at: row.get(2)?,
+                    last_opened_at: row.get(3)?,
+                })
+            })?
+            .collect::<SqlResult<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    pub fn get_review_core_project(&self, id: &str) -> SqlResult<Option<ReviewCoreProject>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, name, created_at, last_opened_at
+             FROM review_core_projects
+             WHERE id = ?1",
+        )?;
+        let mut rows = stmt.query_map(params![id], |row| {
+            Ok(ReviewCoreProject {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                created_at: row.get(2)?,
+                last_opened_at: row.get(3)?,
+            })
+        })?;
+        match rows.next() {
+            Some(Ok(project)) => Ok(Some(project)),
+            _ => Ok(None),
+        }
+    }
+
+    pub fn touch_review_core_project(&self, project_id: &str, last_opened_at: &str) -> SqlResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE review_core_projects
+             SET last_opened_at = ?2
+             WHERE id = ?1",
+            params![project_id, last_opened_at],
+        )?;
+        Ok(())
     }
 
     pub fn list_project_roots(&self, project_id: &str) -> SqlResult<Vec<ProjectRoot>> {
@@ -1181,15 +1386,16 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT INTO asset_versions (
-                id, asset_id, version_number, original_file_key, proxy_playlist_key,
+                id, asset_id, version_number, original_file_key, proxy_playlist_key, proxy_mp4_key,
                 thumbnails_key, poster_key, processing_status, last_error, created_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 version.id,
                 version.asset_id,
                 version.version_number,
                 version.original_file_key,
                 version.proxy_playlist_key,
+                version.proxy_mp4_key,
                 version.thumbnails_key,
                 version.poster_key,
                 version.processing_status,
@@ -1275,7 +1481,8 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT id, asset_id, version_number, original_file_key, proxy_playlist_key,
-                    thumbnails_key, poster_key, processing_status, last_error, created_at
+                    thumbnails_key, poster_key, processing_status, last_error, created_at,
+                    proxy_mp4_key
              FROM asset_versions
              WHERE asset_id = ?1
              ORDER BY version_number DESC",
@@ -1293,6 +1500,7 @@ impl Database {
                     processing_status: row.get(7)?,
                     last_error: row.get(8)?,
                     created_at: row.get(9)?,
+                    proxy_mp4_key: row.get(10)?,
                 })
             })?
             .collect::<SqlResult<Vec<_>>>()?;
@@ -1303,7 +1511,8 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT id, asset_id, version_number, original_file_key, proxy_playlist_key,
-                    thumbnails_key, poster_key, processing_status, last_error, created_at
+                    thumbnails_key, poster_key, processing_status, last_error, created_at,
+                    proxy_mp4_key
              FROM asset_versions WHERE id = ?1",
         )?;
         let mut rows = stmt.query_map(params![version_id], |row| {
@@ -1318,6 +1527,7 @@ impl Database {
                 processing_status: row.get(7)?,
                 last_error: row.get(8)?,
                 created_at: row.get(9)?,
+                proxy_mp4_key: row.get(10)?,
             })
         })?;
         match rows.next() {
@@ -1353,12 +1563,28 @@ impl Database {
                  status = COALESCE(?9, status),
                  last_error = NULL
              WHERE id = ?10",
-            params![duration_ms, frame_rate, avg_frame_rate, r_frame_rate, is_vfr as i32, width, height, codec, status, asset_id],
+            params![
+                duration_ms,
+                frame_rate,
+                avg_frame_rate,
+                r_frame_rate,
+                is_vfr as i32,
+                width,
+                height,
+                codec,
+                status,
+                asset_id
+            ],
         )?;
         Ok(())
     }
 
-    pub fn set_asset_error(&self, asset_id: &str, status: &str, last_error: Option<&str>) -> SqlResult<()> {
+    pub fn set_asset_error(
+        &self,
+        asset_id: &str,
+        status: &str,
+        last_error: Option<&str>,
+    ) -> SqlResult<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "UPDATE assets SET status = ?1, last_error = ?2 WHERE id = ?3",
@@ -1367,7 +1593,12 @@ impl Database {
         Ok(())
     }
 
-    pub fn set_asset_version_error(&self, version_id: &str, status: &str, last_error: Option<&str>) -> SqlResult<()> {
+    pub fn set_asset_version_error(
+        &self,
+        version_id: &str,
+        status: &str,
+        last_error: Option<&str>,
+    ) -> SqlResult<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "UPDATE asset_versions SET processing_status = ?1, last_error = ?2 WHERE id = ?3",
@@ -1380,6 +1611,7 @@ impl Database {
         &self,
         version_id: &str,
         playlist_key: Option<&str>,
+        proxy_mp4_key: Option<&str>,
         thumbs_key: Option<&str>,
         poster_key: Option<&str>,
         status: &str,
@@ -1388,12 +1620,20 @@ impl Database {
         conn.execute(
             "UPDATE asset_versions
              SET proxy_playlist_key = ?1,
-                 thumbnails_key = ?2,
-                 poster_key = ?3,
-                 processing_status = ?4,
+                 proxy_mp4_key = ?2,
+                 thumbnails_key = ?3,
+                 poster_key = ?4,
+                 processing_status = ?5,
                  last_error = NULL
-             WHERE id = ?5",
-            params![playlist_key, thumbs_key, poster_key, status, version_id],
+             WHERE id = ?6",
+            params![
+                playlist_key,
+                proxy_mp4_key,
+                thumbs_key,
+                poster_key,
+                status,
+                version_id
+            ],
         )?;
         Ok(())
     }
@@ -1494,7 +1734,10 @@ impl Database {
         rows.collect()
     }
 
-    pub fn get_review_core_comment(&self, comment_id: &str) -> SqlResult<Option<ReviewCoreComment>> {
+    pub fn get_review_core_comment(
+        &self,
+        comment_id: &str,
+    ) -> SqlResult<Option<ReviewCoreComment>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT id, asset_version_id, timestamp_ms, frame_number, text, author_name, resolved, created_at
@@ -1533,7 +1776,12 @@ impl Database {
                  resolved = COALESCE(?2, resolved),
                  author_name = COALESCE(?3, author_name)
              WHERE id = ?4",
-            params![text, resolved.map(|value| if value { 1 } else { 0 }), author_name, comment_id],
+            params![
+                text,
+                resolved.map(|value| if value { 1 } else { 0 }),
+                author_name,
+                comment_id
+            ],
         )?;
         Ok(())
     }
@@ -1547,7 +1795,10 @@ impl Database {
         Ok(())
     }
 
-    pub fn create_review_core_annotation(&self, annotation: &ReviewCoreAnnotation) -> SqlResult<()> {
+    pub fn create_review_core_annotation(
+        &self,
+        annotation: &ReviewCoreAnnotation,
+    ) -> SqlResult<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT INTO review_core_annotations (
@@ -1605,6 +1856,130 @@ impl Database {
         conn.execute(
             "DELETE FROM review_core_annotations WHERE comment_id = ?1",
             params![comment_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn create_review_core_frame_note(&self, note: &ReviewCoreFrameNote) -> SqlResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO review_core_frame_notes (
+                id, project_id, asset_id, asset_version_id, timestamp_ms, frame_number, title,
+                image_key, vector_data, created_at, updated_at, hidden
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            params![
+                note.id,
+                note.project_id,
+                note.asset_id,
+                note.asset_version_id,
+                note.timestamp_ms,
+                note.frame_number,
+                note.title,
+                note.image_key,
+                note.vector_data,
+                note.created_at,
+                note.updated_at,
+                note.hidden as i32
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_review_core_frame_notes(
+        &self,
+        project_id: &str,
+    ) -> SqlResult<Vec<ReviewCoreFrameNote>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, project_id, asset_id, asset_version_id, timestamp_ms, frame_number, title,
+                    image_key, vector_data, created_at, updated_at, hidden
+             FROM review_core_frame_notes
+             WHERE project_id = ?1
+             ORDER BY created_at DESC, timestamp_ms DESC",
+        )?;
+        let rows = stmt
+            .query_map(params![project_id], |row| {
+                Ok(ReviewCoreFrameNote {
+                    id: row.get(0)?,
+                    project_id: row.get(1)?,
+                    asset_id: row.get(2)?,
+                    asset_version_id: row.get(3)?,
+                    timestamp_ms: row.get(4)?,
+                    frame_number: row.get(5)?,
+                    title: row.get(6)?,
+                    image_key: row.get(7)?,
+                    vector_data: row.get(8)?,
+                    created_at: row.get(9)?,
+                    updated_at: row.get(10)?,
+                    hidden: row.get::<_, i32>(11)? != 0,
+                })
+            })?
+            .collect::<SqlResult<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    pub fn get_review_core_frame_note(&self, note_id: &str) -> SqlResult<Option<ReviewCoreFrameNote>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, project_id, asset_id, asset_version_id, timestamp_ms, frame_number, title,
+                    image_key, vector_data, created_at, updated_at, hidden
+             FROM review_core_frame_notes
+             WHERE id = ?1",
+        )?;
+        let mut rows = stmt.query_map(params![note_id], |row| {
+            Ok(ReviewCoreFrameNote {
+                id: row.get(0)?,
+                project_id: row.get(1)?,
+                asset_id: row.get(2)?,
+                asset_version_id: row.get(3)?,
+                timestamp_ms: row.get(4)?,
+                frame_number: row.get(5)?,
+                title: row.get(6)?,
+                image_key: row.get(7)?,
+                vector_data: row.get(8)?,
+                created_at: row.get(9)?,
+                updated_at: row.get(10)?,
+                hidden: row.get::<_, i32>(11)? != 0,
+            })
+        })?;
+        match rows.next() {
+            Some(Ok(note)) => Ok(Some(note)),
+            _ => Ok(None),
+        }
+    }
+
+    pub fn update_review_core_frame_note(
+        &self,
+        note_id: &str,
+        title: Option<&str>,
+        vector_data: Option<&str>,
+        hidden: Option<bool>,
+        updated_at: &str,
+    ) -> SqlResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE review_core_frame_notes
+             SET title = COALESCE(?2, title),
+                 vector_data = COALESCE(?3, vector_data),
+                 hidden = COALESCE(?4, hidden),
+                 updated_at = ?5
+             WHERE id = ?1",
+            params![
+                note_id,
+                title,
+                vector_data,
+                hidden.map(|value| if value { 1 } else { 0 }),
+                updated_at
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_review_core_frame_note(&self, note_id: &str) -> SqlResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM review_core_frame_notes WHERE id = ?1",
+            params![note_id],
         )?;
         Ok(())
     }
@@ -1753,12 +2128,13 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT INTO review_core_share_sessions (
-                id, share_link_id, token, expires_at, created_at, last_seen_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                id, share_link_id, token, display_name, expires_at, created_at, last_seen_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 session.id,
                 session.share_link_id,
                 session.token,
+                session.display_name,
                 session.expires_at,
                 session.created_at,
                 session.last_seen_at
@@ -1773,7 +2149,7 @@ impl Database {
     ) -> SqlResult<Option<ReviewCoreShareSession>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, share_link_id, token, expires_at, created_at, last_seen_at
+            "SELECT id, share_link_id, token, display_name, expires_at, created_at, last_seen_at
              FROM review_core_share_sessions
              WHERE token = ?1",
         )?;
@@ -1782,9 +2158,10 @@ impl Database {
                 id: row.get(0)?,
                 share_link_id: row.get(1)?,
                 token: row.get(2)?,
-                expires_at: row.get(3)?,
-                created_at: row.get(4)?,
-                last_seen_at: row.get(5)?,
+                display_name: row.get(3)?,
+                expires_at: row.get(4)?,
+                created_at: row.get(5)?,
+                last_seen_at: row.get(6)?,
             })
         })?;
         match rows.next() {
@@ -1809,6 +2186,20 @@ impl Database {
         Ok(())
     }
 
+    pub fn update_review_core_share_session_display_name(
+        &self,
+        session_id: &str,
+        display_name: Option<&str>,
+    ) -> SqlResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE review_core_share_sessions
+             SET display_name = ?1
+             WHERE id = ?2",
+            params![display_name, session_id],
+        )?;
+        Ok(())
+    }
 
     pub fn keep_only_project_root_path(
         &self,

@@ -156,11 +156,17 @@ export interface ReviewCoreAssetVersion {
     version_number: number;
     original_file_key: string;
     proxy_playlist_key?: string | null;
+    proxy_mp4_key?: string | null;
     thumbnails_key?: string | null;
     poster_key?: string | null;
     processing_status: "processing" | "ready" | "failed";
     last_error?: string | null;
     created_at: string;
+}
+
+export interface ReviewCoreAssetWithVersions {
+    asset: ReviewCoreAsset;
+    versions: ReviewCoreAssetVersion[];
 }
 
 export interface ReviewCoreThumbnailInfo {
@@ -197,11 +203,42 @@ export interface ReviewCoreAnnotation {
     created_at: string;
 }
 
+export interface ReviewCoreFrameNote {
+    id: string;
+    project_id: string;
+    asset_id: string;
+    asset_version_id: string;
+    timestamp_ms: number;
+    frame_number?: number | null;
+    title?: string | null;
+    image_key: string;
+    image_path: string;
+    frame_url: string;
+    vector_data: string;
+    created_at: string;
+    updated_at: string;
+    hidden: boolean;
+}
+
+export interface ReviewCoreExtractFrameResult {
+    note_id: string;
+    frame_url: string;
+    project_id: string;
+    asset_id: string;
+    image_path: string;
+}
+
 export interface ReviewCoreApprovalState {
     asset_version_id: string;
     status: "draft" | "in_review" | "approved" | "rejected";
     approved_at?: string | null;
     approved_by?: string | null;
+}
+
+export interface ReviewCoreProjectSummary {
+    id: string;
+    name: string;
+    last_opened_at: string;
 }
 
 export interface ReviewCoreShareLinkSummary {
