@@ -1,5 +1,5 @@
 import { Component, ReactNode, useState, useEffect, useCallback, useRef } from "react";
-import { invoke, convertFileSrc } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { openPath } from "@tauri-apps/plugin-opener";
@@ -15,11 +15,13 @@ import {
   MessageCircleWarning,
   MoreHorizontal,
   FileDown,
+  ChevronDown,
   LayoutGrid,
   FolderTree,
   ArrowLeft,
   AlertTriangle,
   Film,
+  Image,
 } from "lucide-react";
 import { ClipList } from "./components/ClipList";
 import { PrintLayout } from "./components/PrintLayout";
@@ -31,7 +33,7 @@ import { AboutPanel } from "./components/AboutPanel";
 import { FolderCreator } from "./components/FolderCreator";
 import { ReviewCore } from "./components/ReviewCore";
 import { TourGuide, TourStep } from "./components/TourGuide";
-import { exportPdf, exportImage } from "./utils/ExportUtils";
+import { exportPdf, exportImage, exportMosaicImage, exportMosaicPdf } from "./utils/ExportUtils";
 import appLogo from "./assets/Icon_square_rounded.svg";
 import { AppInfo, Clip, ClipWithThumbnails, JobInfo, ScanResult, ThumbnailProgress, RecentProject } from "./types";
 import {
@@ -92,6 +94,7 @@ function AppContent() {
     const match = window.location.hash.match(/^#\/r\/([^/?#]+)/);
     return match ? decodeURIComponent(match[1]) : null;
   });
+  const isShotPlannerActive = activeTab === "preproduction" && activePreproductionApp === "shot-planner";
 
   useEffect(() => {
     const handleHashChange = () => {
@@ -149,6 +152,33 @@ function AppContent() {
     setActiveMediaWorkspaceApp(null);
   }, [DEV_BOOT_RESET_KEY, IS_DEV, shareRouteToken]);
 
+  useEffect(() => {
+    const markUnloading = () => {
+      isUnloadingRef.current = true;
+    };
+    window.addEventListener("beforeunload", markUnloading);
+    return () => {
+      window.removeEventListener("beforeunload", markUnloading);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!IS_DEV) return;
+
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => {
+      const firstArg = typeof args[0] === "string" ? args[0] : "";
+      if (firstArg.includes("Couldn't find callback id")) {
+        return;
+      }
+      originalWarn(...args);
+    };
+
+    return () => {
+      console.warn = originalWarn;
+    };
+  }, [IS_DEV]);
+
   // --- Phase-Isolated State ---
   type Phase = 'pre' | 'post';
   interface PhaseData {
@@ -205,11 +235,11 @@ function AppContent() {
   };
 
   const [showPrint, setShowPrint] = useState(false);
-  const [preparingExport, setPreparingExport] = useState<{ kind: "pdf" | "image"; message: string } | null>(null);
+  const [preparingExport, setPreparingExport] = useState<{ kind: "pdf" | "image" | "mosaic-pdf" | "mosaic-image"; message: string } | null>(null);
   const [showExportPanel, setShowExportPanel] = useState(false);
   const [selectedBlockIds, setSelectedBlockIds] = useState<string[]>([]);
-  const [viewFilter, setViewFilter] = useState<"all" | "picks" | "rated_min">("all");
-  const [viewMinRating, setViewMinRating] = useState<number>(3);
+  const [viewFilter] = useState<"all" | "picks" | "rated_min">("all");
+  const [viewMinRating] = useState<number>(3);
   const [jobsOpen, setJobsOpen] = useState(false);
   const [jobs, setJobs] = useState<JobInfo[]>([]);
   const [aboutOpen, setAboutOpen] = useState(false);
@@ -219,7 +249,14 @@ function AppContent() {
   const [tourRun, setTourRun] = useState(false);
   const [brandProfile, setBrandProfile] = useState<any>(null);
   const [helpMenuOpen, setHelpMenuOpen] = useState(false);
+  const [shotPlannerExportMenuOpen, setShotPlannerExportMenuOpen] = useState(false);
   const [openExportAfterScan, setOpenExportAfterScan] = useState(false);
+  const [uiNotice, setUiNotice] = useState<{ title: string; hint: string } | null>(null);
+  const [manualOrderConflict, setManualOrderConflict] = useState<{ clipId: string; nonce: number } | null>(null);
+  const [pendingExportValidation, setPendingExportValidation] = useState<null | {
+    kind: "pdf" | "image" | "mosaic-pdf" | "mosaic-image";
+    firstMissing: { clipId: string; field: "manual_order" | "shot_size" | "movement" };
+  }>(null);
   const [lookbookSortMode, setLookbookSortMode] = useState<LookbookSortMode>(() => {
     const saved = localStorage.getItem("wp_lookbook_sort_mode");
     return (saved === "canonical" || saved === "custom" || saved === "hook_first") ? (saved as LookbookSortMode) : "canonical";
@@ -237,18 +274,39 @@ function AppContent() {
   const [playingClipId, setPlayingClipId] = useState<string | null>(null);
   const [playingProgress, setPlayingProgress] = useState(0);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const exportMenuRef = useRef<HTMLDivElement | null>(null);
+  const manualOrderBufferRef = useRef("");
+  const manualOrderTimerRef = useRef<number | null>(null);
+  const rejectKeyTimeoutRef = useRef<number | null>(null);
+  const lastRejectKeyAtRef = useRef(0);
+  const shotPlannerStateRef = useRef<any>(null);
+  const isUnloadingRef = useRef(false);
+  const projectPhaseMapRef = useRef(new Map<string, Phase>());
+
 
   // Settings with Persistence
   const [thumbCount, setThumbCount] = useState<number>(() => {
     const saved = localStorage.getItem("wp_thumbCount");
     return saved ? parseInt(saved, 10) : 5;
   });
+
+  const thumbCountRef = useRef(thumbCount);
+  useEffect(() => { thumbCountRef.current = thumbCount; }, [thumbCount]);
+
   const [namingTemplate] = useState<string>(() => {
     return localStorage.getItem("wp_namingTemplate") || "ContactSheet_{PROJECT}_{DATE}";
   });
 
   const [customShotSizes, setCustomShotSizes] = useState<string[]>([]);
   const [customMovements, setCustomMovements] = useState<string[]>([]);
+  const thumbCacheContext = `count=${thumbCount}`;
+
+  const safeInvoke = useCallback(async <T,>(command: string, args?: Record<string, unknown>) => {
+    if (isUnloadingRef.current) {
+      throw new Error("app unloading");
+    }
+    return invoke<T>(command, args);
+  }, []);
 
   const loadCustomTaxonomy = useCallback(() => {
     if (!projectId) return;
@@ -274,6 +332,29 @@ function AppContent() {
     localStorage.setItem("wp_sequence_movement_filter", sequenceMovementFilter);
     localStorage.setItem("wp_shot_size_filter", shotSizeFilter);
   }, [lookbookSortMode, groupByShotSize, enableOptionalShotTags, sequenceMovementFilter, shotSizeFilter]);
+
+  useEffect(() => {
+    if (lookbookSortMode === "hook_first") {
+      setLookbookSortMode("canonical");
+    }
+  }, [lookbookSortMode]);
+
+  useEffect(() => {
+    if (!shotPlannerExportMenuOpen) return;
+    const handlePointerDown = (event: MouseEvent) => {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(event.target as Node)) {
+        setShotPlannerExportMenuOpen(false);
+      }
+    };
+    window.addEventListener("mousedown", handlePointerDown);
+    return () => window.removeEventListener("mousedown", handlePointerDown);
+  }, [shotPlannerExportMenuOpen]);
+
+  useEffect(() => {
+    if (!uiNotice) return;
+    const timer = window.setTimeout(() => setUiNotice(null), 3200);
+    return () => window.clearTimeout(timer);
+  }, [uiNotice]);
 
   // State persistence removed per user request for "blank canvas" starting experience
 
@@ -379,6 +460,63 @@ function AppContent() {
   }, []);
 
   const [hoveredClipId, setHoveredClipId] = useState<string | null>(null);
+  const [focusedClipId, setFocusedClipId] = useState<string | null>(null);
+
+
+  const focusClipField = useCallback((clipId: string, field: "manual_order" | "shot_size" | "movement") => {
+    setHoveredClipId(clipId);
+    requestAnimationFrame(() => {
+      const selector = `[data-clip-id="${clipId}"][data-clip-field="${field}"]`;
+      const input = document.querySelector<HTMLInputElement>(selector);
+      if (!input) return;
+      input.focus();
+      if (input.select) input.select();
+    });
+  }, []);
+
+  const clearManualOrderBuffer = useCallback(() => {
+    if (manualOrderTimerRef.current !== null) {
+      window.clearTimeout(manualOrderTimerRef.current);
+      manualOrderTimerRef.current = null;
+    }
+    manualOrderBufferRef.current = "";
+  }, []);
+
+  const getThumbCacheKey = useCallback((clipId: string, index: number, context = thumbCacheContext) => {
+    return `${clipId}_${index}|${context}`;
+  }, [thumbCacheContext]);
+
+  const hydrateThumbnailEntry = useCallback(async (path: string) => {
+    if (!path || isUnloadingRef.current) return null;
+    if (path.startsWith("data:")) return path;
+    try {
+      return await safeInvoke<string>("read_thumbnail", { path });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const isMissingFile = message.includes("No such file or directory") || message.includes("os error 2");
+      if (!isUnloadingRef.current && !isMissingFile) {
+        console.warn(`Failed to hydrate thumbnail ${path}`, error);
+      }
+      return null;
+    }
+  }, [safeInvoke]);
+
+  const hydrateThumbnailCacheEntries = useCallback(async (
+    entries: Array<{ clipId: string; index: number; path: string }>
+  ) => {
+    const hydrated = await Promise.all(entries.map(async ({ clipId, index, path }) => {
+      const src = await hydrateThumbnailEntry(path);
+      if (!src) return null;
+      return { clipId, index, src };
+    }));
+
+    return hydrated.filter((entry): entry is { clipId: string; index: number; src: string } => Boolean(entry));
+  }, [hydrateThumbnailEntry]);
+
+  const isManualOrderTaken = useCallback((clipId: string, order: number) => {
+    if (!order) return false;
+    return clips.some(({ clip }) => clip.id !== clipId && clip.flag !== "reject" && (clip.manual_order ?? 0) === order);
+  }, [clips]);
 
   const toggleClipSelection = useCallback((id: string) => {
     setSelectedClipIds((prev) => {
@@ -391,7 +529,23 @@ function AppContent() {
     });
   }, [clips]);
 
-  const handleUpdateMetadata = useCallback(async (clipId: string, updates: Partial<Pick<Clip, 'rating' | 'flag' | 'notes' | 'shot_size' | 'movement' | 'manual_order' | 'lut_enabled' | 'thumb_range_seconds'>>) => {
+  const handleUpdateMetadata = useCallback(async (clipId: string, updates: Partial<Pick<Clip, 'rating' | 'flag' | 'notes' | 'shot_size' | 'movement' | 'manual_order' | 'lut_enabled'>>) => {
+    const existingClip = clips.find((clipItem) => clipItem.clip.id === clipId)?.clip;
+    if (!existingClip) return false;
+
+    const manualOrder = updates.manual_order ?? existingClip.manual_order ?? 0;
+    if (isShotPlannerActive && manualOrder > 0 && isManualOrderTaken(clipId, manualOrder)) {
+      setManualOrderConflict({ clipId, nonce: Date.now() });
+      return false;
+    }
+
+    const nextFlag = updates.flag ?? existingClip.flag;
+    const shouldAutoSelect = isShotPlannerActive && nextFlag !== "reject" && (
+      (typeof updates.manual_order === "number" && updates.manual_order > 0) ||
+      (typeof updates.shot_size === "string" && updates.shot_size.trim().length > 0) ||
+      (typeof updates.movement === "string" && updates.movement.trim().length > 0)
+    );
+
     // Optimistic UI update
     setClips((prevClips) =>
       prevClips.map(clipItem => {
@@ -411,6 +565,13 @@ function AppContent() {
         next.delete(clipId);
         return next;
       });
+    } else if (shouldAutoSelect) {
+      setSelectedClipIds((prev) => {
+        if (prev.has(clipId)) return prev;
+        const next = new Set(prev);
+        next.add(clipId);
+        return next;
+      });
     }
 
     try {
@@ -422,7 +583,6 @@ function AppContent() {
         shotSize: updates.shot_size ?? null,
         movement: updates.movement ?? null,
         manualOrder: updates.manual_order ?? null,
-        thumbRangeSeconds: updates.thumb_range_seconds ?? null,
         lutEnabled: updates.lut_enabled ?? null,
       });
       if (updates.lut_enabled === 1 && projectId && projectLut) {
@@ -435,8 +595,37 @@ function AppContent() {
     } catch (err) {
       console.error("Failed to persist metadata:", err);
       setUiError({ title: "Could not save rating/flag", hint: "Retry. If this persists, export diagnostics from header actions." });
+      return false;
     }
-  }, [projectId, projectLut]);
+    return true;
+  }, [clips, isManualOrderTaken, isShotPlannerActive, projectId, projectLut]);
+
+  const handleResetShotPlannerClip = useCallback(async (clipId: string) => {
+    setSelectedClipIds((prev) => {
+      if (!prev.has(clipId)) return prev;
+      const next = new Set(prev);
+      next.delete(clipId);
+      return next;
+    });
+    await handleUpdateMetadata(clipId, {
+      shot_size: "",
+      movement: "",
+      manual_order: 0,
+      flag: "none",
+    });
+  }, [handleUpdateMetadata]);
+
+  const focusShotPlannerClip = useCallback((clipId: string) => {
+    setFocusedClipId(clipId);
+    if (hoveredClipId && hoveredClipId !== clipId && manualOrderBufferRef.current) {
+      clearManualOrderBuffer();
+    }
+  }, [clearManualOrderBuffer, hoveredClipId]);
+
+  useEffect(() => {
+    if (!isShotPlannerActive || clips.length === 0 || hoveredClipId) return;
+    setHoveredClipId(clips[0].clip.id);
+  }, [clips, hoveredClipId, isShotPlannerActive]);
 
   const handlePlayClip = useCallback(async (id: string | null) => {
     if (!id || (playingClipId === id)) {
@@ -495,119 +684,6 @@ function AppContent() {
     }
   }, [playingClipId, clips]);
 
-  // Keyboard Shortcuts
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (tourRun) return;
-      const inReview =
-        (activeTab === "preproduction" && activePreproductionApp === "shot-planner") ||
-        (activeTab === "media-workspace" && activeMediaWorkspaceApp === "clip-review");
-      if (!inReview) return;
-
-      // Don't fire shortcuts if the user is typing in an input or textarea
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-      if (e.target instanceof HTMLElement && e.target.closest("[data-tour-tooltip]")) return;
-
-      const targetId = hoveredClipId;
-      const key = e.key.toLowerCase();
-      const isCtrl = e.ctrlKey || e.metaKey;
-
-      // Global Select All / Deselect All
-      if (isCtrl && key === 's') {
-        e.preventDefault();
-        toggleSelectAll();
-        return;
-      }
-
-      // Arrow navigation
-      if ((key === "arrowdown" || key === "arrowright" || key === "arrowup" || key === "arrowleft") && clips.length > 0) {
-        e.preventDefault();
-        const visibleClipsList = sortLookbookClips(clips.filter(({ clip }) => {
-          const viewMatch = viewFilter === "picks" ? clip.flag === "pick" : viewFilter === "rated_min" ? clip.rating >= viewMinRating : true;
-          const shotSizeMatch = shotSizeFilter === "all" ? true : clip.shot_size === shotSizeFilter;
-          return viewMatch && shotSizeMatch;
-        }), lookbookSortMode);
-
-        const currentIndex = targetId ? visibleClipsList.findIndex((c) => c.clip.id === targetId) : -1;
-        const nextIndex = key === "arrowdown" || key === "arrowright"
-          ? Math.min(currentIndex + 1, visibleClipsList.length - 1)
-          : Math.max(currentIndex - 1, 0);
-
-        if (visibleClipsList[nextIndex]) {
-          setHoveredClipId(visibleClipsList[nextIndex].clip.id);
-        }
-        return;
-      }
-
-      // PDF Export
-      if (key === "p" && !isCtrl) {
-        e.preventDefault();
-        handleExport();
-        return;
-      }
-
-      // Image Export
-      if (key === "i" && !isCtrl) {
-        e.preventDefault();
-        handleExportImage();
-        return;
-      }
-
-      if (!targetId) return;
-
-      // Manual Order (Ctrl + 1-9)
-      if (isCtrl && key >= '0' && key <= '9') {
-        e.preventDefault();
-        let order = parseInt(key);
-        if (order === 0) order = 10;
-        handleUpdateMetadata(targetId, { manual_order: order });
-        return;
-      }
-
-      // Rating shortcuts (1-5)
-      if (!isCtrl && key >= '0' && key <= '5') {
-        if (key === '0') {
-          handleUpdateMetadata(targetId, { rating: 0 });
-          return;
-        }
-        handleUpdateMetadata(targetId, { rating: Number(key) });
-        return;
-      }
-
-      // Ordering shortcuts (Ctrl + 1-9)
-      if (isCtrl && key >= '1' && key <= '9') {
-        e.preventDefault();
-        handleUpdateMetadata(targetId, { manual_order: Number(key) });
-      }
-
-      // Export shortcuts
-      if (!isCtrl && key === 'p') {
-        e.preventDefault();
-        handleExport();
-      }
-      if (!isCtrl && key === 'i') {
-        e.preventDefault();
-        handleExportImage();
-      }
-
-      // Flag shortcuts
-      if (key === 'r') handleUpdateMetadata(targetId, { flag: 'reject' });
-      if (key === 'k') handleUpdateMetadata(targetId, { flag: 'pick' });
-      if (key === 'n') handleUpdateMetadata(targetId, { flag: 'none' });
-      if (key === 'u' || key === ' ') {
-        e.preventDefault();
-        handleUpdateMetadata(targetId, { flag: 'none' });
-      }
-      if (key === 's' && !isCtrl) {
-        toggleClipSelection(targetId);
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [hoveredClipId, clips, handleUpdateMetadata, tourRun, toggleClipSelection, activeTab, activePreproductionApp, activeMediaWorkspaceApp]);
-
-
   useEffect(() => {
     if (projectId && postScanTab) {
       if (postScanTab === "preproduction" || postScanTab === "shot-planner") {
@@ -633,6 +709,35 @@ function AppContent() {
     }
   }, [projectId, openExportAfterScan]);
 
+  // Trigger global thumbnail extraction on count change
+  useEffect(() => {
+    if (!isShotPlannerActive || !projectId || clips.length === 0) return;
+
+    // Clear stale cache entries for this project context to force regeneration view
+    setPhaseState(currentPhase, (prev: PhaseData) => {
+      const nextCache = { ...prev.thumbnailCache };
+      let changed = false;
+      Object.keys(nextCache).forEach(key => {
+        // Only clear keys that contain project ID (approximate match for its clips)
+        if (key.includes(projectId)) {
+          delete nextCache[key];
+          changed = true;
+        }
+      });
+      return changed ? { ...prev, thumbnailCache: nextCache } : prev;
+    });
+
+    setPhaseState(currentPhase, { extracting: true });
+    safeInvoke("extract_thumbnails", {
+      projectId,
+      thumbCount,
+    }).catch((error) => {
+      console.error("Failed to apply count settings", error);
+      setPhaseState(currentPhase, { extracting: false });
+    });
+  }, [projectId, isShotPlannerActive, thumbCount]);
+
+
   useEffect(() => {
     setSelectedClipIds((prev) => {
       let changed = false;
@@ -654,42 +759,52 @@ function AppContent() {
 
   const refreshProjectClips = useCallback(async (nextProjectId: string, targetPhase?: Phase) => {
     try {
-      const activePhase = targetPhase || (projectStates.pre.projectId === nextProjectId ? 'pre' : 'post');
       const clipRows = await invoke<ClipWithThumbnails[]>("get_clips", { projectId: nextProjectId });
 
-      setPhaseState(activePhase, { clips: clipRows });
+      // Determine phase: use provided, or look up in map, or default to current
+      const activePhase = targetPhase || projectPhaseMapRef.current.get(nextProjectId) || currentPhase;
 
-      // Hydrate for specific phase
+      setPhaseState(activePhase, (prev) => {
+        return {
+          ...prev,
+          clips: clipRows,
+        };
+      });
+
+      // Hydrate thumbnails
       const thumbEntries = clipRows.flatMap((item) =>
         item.thumbnails.map((thumb) => ({
-          key: `${thumb.clip_id}_${thumb.index}`,
+          clipId: thumb.clip_id,
+          index: thumb.index,
           path: thumb.file_path
         }))
       );
+
       if (thumbEntries.length > 0) {
-        const nextCache = { ...(projectStates[activePhase].thumbnailCache || {}) };
-        for (const { key, path } of thumbEntries) {
-          try {
-            nextCache[key] = convertFileSrc(path);
-          } catch (e) {
-            console.warn(`convertFileSrc failed for ${path}, attempting base64 rehydration`, e);
-            try {
-              const base64 = await invoke<string>("read_thumbnail", { path });
-              nextCache[key] = base64;
-            } catch (err) {
-              console.error(`Full thumbnail rehydration failure for ${path}`, err);
-            }
+        const hydratedEntries = await hydrateThumbnailCacheEntries(thumbEntries);
+
+        setPhaseState(activePhase, (prev) => {
+          const nextCache = { ...(prev.thumbnailCache || {}) };
+          for (const { clipId, index, src } of hydratedEntries) {
+            nextCache[`${clipId}_${index}`] = src;
+            nextCache[getThumbCacheKey(clipId, index)] = src;
           }
-        }
-        setPhaseState(activePhase, { thumbnailCache: nextCache });
+          return {
+            ...prev,
+            thumbnailCache: nextCache,
+          };
+        });
       }
 
       await fetchProjectSettings(nextProjectId);
+
     } catch (error) {
+
       console.error("Failed to refresh clips:", error);
       setUiError({ title: "Could not load clip previews", hint: "Retry scan. If this persists, export diagnostics." });
     }
-  }, [projectStates, setPhaseState, fetchProjectSettings]);
+  }, [setPhaseState, fetchProjectSettings, getThumbCacheKey, hydrateThumbnailCacheEntries]);
+
 
 
   // Persistent Thumbnail Listeners
@@ -701,50 +816,52 @@ function AppContent() {
       unlistenProgress = await listen<ThumbnailProgress>("thumbnail-progress", (event) => {
         const { project_id, clip_id, clip_index, total_clips, thumbnails } = event.payload;
 
-        // Find which phase this project belongs to
-        const targetPhase: Phase | null =
-          projectStates.pre.projectId === project_id ? 'pre' :
-            projectStates.post.projectId === project_id ? 'post' : null;
-
+        const targetPhase = projectPhaseMapRef.current.get(project_id);
         if (!targetPhase) return;
 
-        setPhaseState(targetPhase, (prev) => {
-          const nextProgress = { done: clip_index + 1, total: total_clips };
-          const nextClips = prev.clips.map((c) =>
-            c.clip.id === clip_id ? { ...c, thumbnails: thumbnails } : c
-          );
+        setPhaseState(targetPhase, (prev: PhaseData) => {
+          const done = clip_index + 1;
+          const nextProgress = { done, total: total_clips };
 
-          const newEntries: Record<string, string> = { ...prev.thumbnailCache };
-          thumbnails.forEach(thumb => {
-            try {
-              newEntries[`${thumb.clip_id}_${thumb.index}`] = convertFileSrc(thumb.file_path);
-            } catch (e) {
-              console.warn("Failed to convert thumbnail path:", e);
-            }
-          });
+          // Throttled updates to clips state.
+          const isAtEnd = done === total_clips;
+          const shouldUpdateClips = !isShotPlannerActive || (clip_index % 10 === 0) || isAtEnd;
+
+          // Also throttle extractProgress updates to once per 5% or once per 10 items
+          const shouldUpdateProgress = (clip_index % 10 === 0) || isAtEnd;
+
+          if (!shouldUpdateClips && !shouldUpdateProgress) {
+            return prev;
+          }
+
+          const nextClips = shouldUpdateClips
+            ? prev.clips.map((c) => c.clip.id === clip_id ? { ...c, thumbnails: thumbnails } : c)
+            : prev.clips;
 
           return {
             ...prev,
-            extractProgress: nextProgress,
+            extractProgress: shouldUpdateProgress ? nextProgress : prev.extractProgress,
             clips: nextClips,
-            thumbnailCache: newEntries
           };
         });
+
       });
 
+
       unlistenComplete = await listen("thumbnail-complete", async (event) => {
-        const payload = event.payload as { project_id: string };
+        const payload = event.payload as { project_id: string; clip_id?: string | null; jump_seconds?: number | null; thumb_count?: number | null };
         const project_id = payload.project_id;
 
-        const targetPhase: Phase | null =
-          projectStates.pre.projectId === project_id ? 'pre' :
-            projectStates.post.projectId === project_id ? 'post' : null;
-
+        const targetPhase = projectPhaseMapRef.current.get(project_id);
         if (targetPhase) {
           setPhaseState(targetPhase, { extracting: false });
+          if (payload.clip_id) {
+            // Token handling removed as it depended on jumpSeconds
+          }
           await refreshProjectClips(project_id, targetPhase);
         }
       });
+
     }
 
     setupListeners();
@@ -753,7 +870,7 @@ function AppContent() {
       if (unlistenProgress) unlistenProgress();
       if (unlistenComplete) unlistenComplete();
     };
-  }, [refreshProjectClips]); // Only depends on refreshProjectClips which is stable-ish
+  }, [refreshProjectClips]);
 
   // handleCloseProject was replaced by inline initialPhaseState reset in handleSelectFolder
 
@@ -788,13 +905,17 @@ function AppContent() {
     if (targetTab) setPostScanTab(targetTab);
 
     try {
-      const result = await invoke<ScanResult>("scan_folder", {
+      const result = await safeInvoke<ScanResult>("scan_folder", {
         folderPath: selected,
         phase: targetPhase,
       });
 
+      // Update the mapping Ref so listeners can find this project
+      projectPhaseMapRef.current.set(result.project_id, targetPhase);
+
       setPhaseState(targetPhase, {
         projectId: result.project_id,
+
         projectName: result.project_name,
         clips: result.clips.map((clip) => ({ clip, thumbnails: [] })),
         extracting: true,
@@ -803,7 +924,7 @@ function AppContent() {
 
       addRecentProject(result.project_id, result.project_name, selected as string, targetPhase);
 
-      invoke("extract_thumbnails", { projectId: result.project_id }).catch(
+      safeInvoke("extract_thumbnails", { projectId: result.project_id, thumbCount }).catch(
         (e) => {
           console.error("Thumbnail extraction error:", e);
           setUiError({ title: "Thumbnail extraction failed", hint: "Retry scan or check media read permissions." });
@@ -820,7 +941,7 @@ function AppContent() {
     } finally {
       setPhaseState(targetPhase, { scanning: false });
     }
-  }, [addRecentProject, refreshProjectClips, setPhaseState]);
+  }, [addRecentProject, refreshProjectClips, safeInvoke, setPhaseState, thumbCount]);
 
   useEffect(() => {
     if (!projectId) {
@@ -895,24 +1016,85 @@ function AppContent() {
     setActiveMediaWorkspaceApp(null);
     setTourRun(true);
   }, []);
-
-
+  const effectiveLookbookSortMode: LookbookSortMode = lookbookSortMode === "hook_first" ? "canonical" : lookbookSortMode;
+  const thumbnailsByClipId = clips.reduce<Record<string, ClipWithThumbnails["thumbnails"]>>((acc, row) => {
+    acc[row.clip.id] = row.thumbnails;
+    return acc;
+  }, {});
 
   const getExportClips = useCallback((): Clip[] => {
-    return clips
-      .filter((c) => selectedClipIds.has(c.clip.id))
+    if (!isShotPlannerActive) {
+      return clips
+        .filter((c) => selectedClipIds.has(c.clip.id))
+        .map((c) => c.clip);
+    }
+    const selected = clips
+      .filter((c) => selectedClipIds.has(c.clip.id) && c.clip.flag !== "reject")
       .map((c) => c.clip);
-  }, [clips, selectedClipIds]);
+    return sortLookbookClips(selected, effectiveLookbookSortMode);
+  }, [clips, effectiveLookbookSortMode, isShotPlannerActive, selectedClipIds]);
 
-  const handleExportImage = async () => {
-    if (selectedClipIds.size === 0) return;
-    setPreparingExport({ kind: "image", message: "Generating contact sheet image..." });
+  const getFirstMissingTag = useCallback((items: Clip[]) => {
+    for (const clip of items) {
+      if (effectiveLookbookSortMode === "custom" && !(clip.manual_order ?? 0)) {
+        return { clipId: clip.id, field: "manual_order" as const };
+      }
+      if (!(clip.shot_size ?? "").trim()) {
+        return { clipId: clip.id, field: "shot_size" as const };
+      }
+      if (!(clip.movement ?? "").trim()) {
+        return { clipId: clip.id, field: "movement" as const };
+      }
+    }
+    return null;
+  }, [effectiveLookbookSortMode]);
+
+  const runExport = useCallback(async (kind: "pdf" | "image" | "mosaic-pdf" | "mosaic-image") => {
+    const exportClips = getExportClips();
+    if (exportClips.length === 0) {
+      alert("Please select at least one clip to export.");
+      return;
+    }
+
+    if (kind === "image" || kind === "mosaic-image") {
+      setPreparingExport({ kind, message: kind === "image" ? "Generating contact sheet image..." : "Generating mosaic image..." });
+      try {
+        const exporter = kind === "image" ? exportImage : exportMosaicImage;
+        await exporter({
+          projectName: projectName || "ContactSheet",
+          clips: exportClips,
+          thumbnailsByClipId,
+          thumbnailCache,
+          thumbCount,
+          cacheKeyContext: thumbCacheContext,
+          projectLutHash: projectLut?.hash || null,
+          brandName: brandProfile?.name,
+          appVersion: appInfo?.version || "unknown",
+          onWarning: (message) => setUiError({ title: "Export branding fallback", hint: message }),
+        });
+        setUiError(null);
+      } catch (err) {
+        console.error(err);
+        setUiError({
+          title: "Image export failed",
+          hint: "Retry after thumbnails load. If it persists, check folder permissions.",
+        });
+      } finally {
+        setPreparingExport(null);
+      }
+      return;
+    }
+
+    setPreparingExport({ kind, message: kind === "pdf" ? "Generating PDF contact sheet..." : "Generating mosaic PDF..." });
     try {
-      await exportImage({
+      const exporter = kind === "pdf" ? exportPdf : exportMosaicPdf;
+      await exporter({
         projectName: projectName || "ContactSheet",
-        clips: getExportClips(),
+        clips: exportClips,
+        thumbnailsByClipId,
         thumbnailCache,
         thumbCount,
+        cacheKeyContext: thumbCacheContext,
         projectLutHash: projectLut?.hash || null,
         brandName: brandProfile?.name,
         appVersion: appInfo?.version || "unknown",
@@ -922,13 +1104,32 @@ function AppContent() {
     } catch (err) {
       console.error(err);
       setUiError({
-        title: "Image export failed",
-        hint: "Retry after thumbnails load. If it persists, check folder permissions.",
+        title: kind === "pdf" ? "PDF export failed" : "Mosaic PDF export failed",
+        hint: "Retry after thumbnails load.",
       });
     } finally {
       setPreparingExport(null);
     }
-  };
+  }, [appInfo, brandProfile, getExportClips, isShotPlannerActive, projectLut, projectName, thumbCacheContext, thumbCount, thumbnailCache, thumbnailsByClipId]);
+
+  const requestExport = useCallback((kind: "pdf" | "image" | "mosaic-pdf" | "mosaic-image") => {
+    setShotPlannerExportMenuOpen(false);
+    const exportClips = getExportClips();
+    if (exportClips.length === 0) {
+      alert("Please select at least one clip to export.");
+      return;
+    }
+    if (!isShotPlannerActive) {
+      void runExport(kind);
+      return;
+    }
+    const firstMissing = getFirstMissingTag(exportClips);
+    if (firstMissing) {
+      setPendingExportValidation({ kind, firstMissing });
+      return;
+    }
+    void runExport(kind);
+  }, [getExportClips, getFirstMissingTag, isShotPlannerActive, runExport]);
 
   const handlePromoteClip = async (clipId: string) => {
     try {
@@ -942,94 +1143,42 @@ function AppContent() {
     }
   };
 
+  const handleExportImage = useCallback(() => {
+    requestExport("image");
+  }, [requestExport]);
+
+  const handleExportMosaicImage = useCallback(() => {
+    requestExport("mosaic-image");
+  }, [requestExport]);
+
   const handleExport = useCallback(() => {
-    if (selectedClipIds.size === 0) {
-      alert("Please select at least one clip to export.");
-      return;
-    }
-    const run = async () => {
-      setPreparingExport({ kind: "pdf", message: "Generating PDF contact sheet..." });
-      try {
-        await exportPdf({
-          projectName: projectName || "ContactSheet",
-          clips: getExportClips(),
-          thumbnailCache,
-          thumbCount,
-          projectLutHash: projectLut?.hash || null,
-          brandName: brandProfile?.name,
-          appVersion: appInfo?.version || "unknown",
-          onWarning: (message) => setUiError({ title: "Export branding fallback", hint: message }),
-        });
-        setUiError(null);
-      } catch (err) {
-        console.error(err);
-        setUiError({
-          title: "PDF export failed",
-          hint: "Retry after thumbnails load.",
-        });
-      } finally {
-        setPreparingExport(null);
-      }
-    };
-    run().catch((err) => {
-      console.error(err);
-      setPreparingExport(null);
-    });
-  }, [selectedClipIds, getExportClips, thumbnailCache, thumbCount, projectLut, brandProfile, projectName, appInfo]);
+    requestExport("pdf");
+  }, [requestExport]);
+
+  const handleExportMosaicPdf = useCallback(() => {
+    requestExport("mosaic-pdf");
+  }, [requestExport]);
 
   const totalClips = clips.length;
-  const okClips = clips.filter((c) => c.clip.status === "ok").length;
-  const warnClips = clips.filter((c) => c.clip.status === "warn").length;
   const runningJobs = jobs.filter((j) => j.status === "running" || j.status === "queued").length;
   const failedJobs = jobs.filter((j) => j.status === "failed").length;
-  const totalSize = clips.reduce((acc, c) => acc + c.clip.size_bytes, 0);
-  const totalDuration = clips.reduce((acc, c) => acc + c.clip.duration_ms, 0);
   const inWorkspaceLauncher = activeTab === "media-workspace" && !activeMediaWorkspaceApp;
   const jobHudState = failedJobs > 0 ? "error" : (scanning || extracting || runningJobs > 0) ? "running" : jobs.some((j) => j.status === "done") ? "success" : "idle";
-
-  // Advanced stats for pre-production
-  const avgDuration = totalClips > 0 ? totalDuration / totalClips : 0;
-  const clipsWithAudio = clips.filter((c) => c.clip.audio_codec && c.clip.audio_codec !== "none" && c.clip.audio_codec !== "").length;
-  const fpsSet = new Set(clips.map((c) => c.clip.fps).filter(Boolean));
-  const topFps = clips.length > 0 ? [...fpsSet].sort((a, b) => b - a)[0] : 0;
-  const resolutions = new Set(clips.map((c) => `${c.clip.width}×${c.clip.height}`).filter(r => r !== "0×0"));
-  const topRes = resolutions.size > 0 ? [...resolutions][0] : "—";
-
-  // Aspect ratio detection
-  const calculateRatio = (w: number, h: number) => {
-    if (!w || !h) return null;
-    const gcd = (a: number, b: number): number => b === 0 ? a : gcd(b, a % b);
-    const common = gcd(w, h);
-    const rw = w / common;
-    const rh = h / common;
-
-    // Check for common cinematic/standard ratios
-    const ratio = w / h;
-    if (Math.abs(ratio - 16 / 9) < 0.01) return "16:9";
-    if (Math.abs(ratio - 9 / 16) < 0.01) return "9:16";
-    if (Math.abs(ratio - 2.35) < 0.02) return "2.35:1";
-    if (Math.abs(ratio - 2.39) < 0.02) return "2.39:1";
-    if (Math.abs(ratio - 1.85) < 0.01) return "1.85:1";
-    if (Math.abs(ratio - 4 / 3) < 0.01) return "4:3";
-    if (Math.abs(ratio - 1) < 0.01) return "1:1";
-
-    return `${rw}:${rh}`;
-  };
-
-  const ratioSet = new Set(clips.map(c => calculateRatio(c.clip.width, c.clip.height)).filter(Boolean));
-  const ratioLabel = ratioSet.size > 1 ? [...ratioSet].join(", ") : ratioSet.size === 1 ? [...ratioSet][0] : "";
-  const picksCount = clips.filter((c) => c.clip.flag === "pick").length;
-  const ratedCount = clips.filter((c) => c.clip.rating > 0).length;
+  const isPreproductionLauncher = activeTab === "preproduction" && !activePreproductionApp;
+  const rejectedCount = clips.filter((c) => c.clip.flag === "reject").length;
+  const exportReadyCount = clips.filter(({ clip }) => {
+    if (!selectedClipIds.has(clip.id) || clip.flag === "reject") return false;
+    if (!(clip.shot_size ?? "").trim()) return false;
+    if (!(clip.movement ?? "").trim()) return false;
+    if (effectiveLookbookSortMode === "custom" && !(clip.manual_order ?? 0)) return false;
+    return true;
+  }).length;
 
   const visibleClips = clips.filter(({ clip }) => {
-    const viewMatch =
-      viewFilter === "picks" ? clip.flag === "pick" :
-        viewFilter === "rated_min" ? clip.rating >= viewMinRating :
-          true;
     const shotSizeMatch = shotSizeFilter === "all" ? true : clip.shot_size === shotSizeFilter;
-    return viewMatch && shotSizeMatch;
+    return shotSizeMatch;
   });
-  const lookbookSorted = sortLookbookClips(visibleClips, lookbookSortMode);
+  const lookbookSorted = sortLookbookClips(visibleClips, effectiveLookbookSortMode);
   const sortedClips = lookbookSorted;
   const selectableClipIds = sortedClips
     .filter((c) => c.clip.flag !== "reject")
@@ -1044,10 +1193,168 @@ function AppContent() {
     setSelectedClipIds(new Set(selectableClipIds));
   };
 
-  const thumbnailsByClipId = clips.reduce<Record<string, ClipWithThumbnails["thumbnails"]>>((acc, row) => {
-    acc[row.clip.id] = row.thumbnails;
-    return acc;
-  }, {});
+  useEffect(() => {
+    shotPlannerStateRef.current = {
+      active: isShotPlannerActive,
+      tourRun,
+      hoveredClipId,
+      sortedClips,
+      clips,
+      effectiveLookbookSortMode,
+      requestExport,
+      setLookbookSortMode,
+      focusShotPlannerClip,
+      setShotPlannerExportMenuOpen,
+      setThumbCount,
+      toggleClipSelection,
+      handleUpdateMetadata,
+      handleResetShotPlannerClip,
+      clearManualOrderBuffer,
+    };
+  }, [
+    clearManualOrderBuffer,
+    clips,
+    effectiveLookbookSortMode,
+    handleUpdateMetadata,
+    handleResetShotPlannerClip,
+    hoveredClipId,
+    focusShotPlannerClip,
+    isShotPlannerActive,
+    requestExport,
+    sortedClips,
+    toggleClipSelection,
+    tourRun,
+  ]);
+
+  useEffect(() => {
+    const commitBufferedManualOrder = async () => {
+      const state = shotPlannerStateRef.current;
+      if (!state) return;
+      const targetId = state.hoveredClipId;
+      const buffer = manualOrderBufferRef.current;
+      if (!targetId || !buffer || state.effectiveLookbookSortMode !== "custom") return;
+      const order = Number(buffer);
+      if (!Number.isFinite(order) || order <= 0) return;
+      const ok = await state.handleUpdateMetadata(targetId, { manual_order: order });
+      if (ok) {
+        state.clearManualOrderBuffer();
+      }
+    };
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const state = shotPlannerStateRef.current;
+      if (!state?.active || state.tourRun) return;
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement) return;
+      if (e.target instanceof HTMLElement && e.target.closest("[data-tour-tooltip]")) return;
+
+      const targetId = state.hoveredClipId;
+      const key = e.key.toLowerCase();
+      const isCtrl = e.ctrlKey || e.metaKey;
+
+      if (isCtrl && (key === "3" || key === "5" || key === "7")) {
+        e.preventDefault();
+        state.setThumbCount(Number(key));
+        return;
+      }
+      if (key === "e" && !isCtrl) {
+        e.preventDefault();
+        state.setShotPlannerExportMenuOpen((prev: boolean) => !prev);
+        return;
+      }
+      if (key === "p" && !isCtrl) {
+        e.preventDefault();
+        state.requestExport("pdf");
+        return;
+      }
+      if (key === "i" && !isCtrl) {
+        e.preventDefault();
+        state.requestExport("image");
+        return;
+      }
+      if (key === "m" && !isCtrl) {
+        e.preventDefault();
+        state.setLookbookSortMode("custom");
+        return;
+      }
+      if (key === "c" && !isCtrl) {
+        e.preventDefault();
+        state.clearManualOrderBuffer();
+        state.setLookbookSortMode("canonical");
+        return;
+      }
+      if ((key === "arrowdown" || key === "arrowup") && state.sortedClips.length > 0) {
+        e.preventDefault();
+        if (manualOrderBufferRef.current) {
+          void commitBufferedManualOrder();
+        }
+        const currentIndex = targetId ? state.sortedClips.findIndex((c: ClipWithThumbnails) => c.clip.id === targetId) : -1;
+        const nextIndex = key === "arrowdown"
+          ? Math.min(currentIndex + 1, state.sortedClips.length - 1)
+          : Math.max(currentIndex - 1, 0);
+        if (state.sortedClips[nextIndex]) {
+          state.focusShotPlannerClip(state.sortedClips[nextIndex].clip.id);
+        }
+        return;
+      }
+      if (!targetId) return;
+      if (key === "r") {
+        e.preventDefault();
+        const now = Date.now();
+        if (now - lastRejectKeyAtRef.current <= 300) {
+          if (rejectKeyTimeoutRef.current !== null) {
+            window.clearTimeout(rejectKeyTimeoutRef.current);
+            rejectKeyTimeoutRef.current = null;
+          }
+          lastRejectKeyAtRef.current = 0;
+          void state.handleResetShotPlannerClip(targetId);
+          return;
+        }
+        lastRejectKeyAtRef.current = now;
+        rejectKeyTimeoutRef.current = window.setTimeout(() => {
+          const latestState = shotPlannerStateRef.current;
+          const clip = latestState?.clips.find((entry: ClipWithThumbnails) => entry.clip.id === targetId)?.clip;
+          if (clip) {
+            void latestState.handleUpdateMetadata(targetId, { flag: clip.flag === "reject" ? "none" : "reject" });
+          }
+          rejectKeyTimeoutRef.current = null;
+        }, 300);
+        return;
+      }
+      if (key === "s" && !isCtrl) {
+        e.preventDefault();
+        state.toggleClipSelection(targetId);
+        return;
+      }
+      if (state.effectiveLookbookSortMode === "custom" && key >= "0" && key <= "9" && !isCtrl) {
+        e.preventDefault();
+        manualOrderBufferRef.current = `${manualOrderBufferRef.current}${key}`.replace(/^0+/, "");
+        if (manualOrderTimerRef.current !== null) {
+          window.clearTimeout(manualOrderTimerRef.current);
+        }
+        manualOrderTimerRef.current = window.setTimeout(() => {
+          void commitBufferedManualOrder();
+        }, 200);
+        return;
+      }
+      if (key === "enter" && manualOrderBufferRef.current) {
+        e.preventDefault();
+        void commitBufferedManualOrder();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      if (manualOrderTimerRef.current !== null) {
+        window.clearTimeout(manualOrderTimerRef.current);
+        manualOrderTimerRef.current = null;
+      }
+      if (rejectKeyTimeoutRef.current !== null) {
+        window.clearTimeout(rejectKeyTimeoutRef.current);
+        rejectKeyTimeoutRef.current = null;
+      }
+    };
+  }, []);
 
   return (
     <div className="app-container">
@@ -1070,603 +1377,621 @@ function AppContent() {
         </div>
       ) : (
         <>
-      {showPrint && (
-        <div id="print-area">
-          <PrintLayout
-            projectName={projectName}
-            clips={sortedClips.filter(c => selectedClipIds.has(c.clip.id) && c.clip.flag !== "reject")}
-            thumbnailCache={thumbnailCache}
-            brandProfile={brandProfile}
-            logoSrc={appLogo}
-            appVersion={appInfo?.version || "unknown"}
-            thumbCount={thumbCount}
-            onClose={() => {
-              setShowPrint(false);
-            }}
-            projectLutHash={projectLut?.hash || null}
+          {showPrint && (
+            <div id="print-area">
+              <PrintLayout
+                projectName={projectName}
+                clips={sortedClips.filter(c => selectedClipIds.has(c.clip.id) && c.clip.flag !== "reject")}
+                thumbnailCache={thumbnailCache}
+                brandProfile={brandProfile}
+                logoSrc={appLogo}
+                appVersion={appInfo?.version || "unknown"}
+                thumbCount={thumbCount}
+                onClose={() => {
+                  setShowPrint(false);
+                }}
+                projectLutHash={projectLut?.hash || null}
 
-          />
-        </div>
-      )}
-      {preparingExport && (
-        <div className="export-preparing-overlay" role="status" aria-live="polite">
-          <div className="export-preparing-card">
-            <div className="spinner" />
-            <strong>{preparingExport.kind === "pdf" ? "Preparing PDF" : "Preparing Image"}</strong>
-            <span>{preparingExport.message}</span>
-          </div>
-        </div>
-      )}
-
-      <header className="app-header">
-        <div className="app-header-left">
-          <div className="app-logo" onClick={() => { setActiveTab('home'); setActivePreproductionApp(null); setActiveMediaWorkspaceApp(null); }}>
-            <img src={appLogo} alt="Logo" className="app-logo-img" />
-            <span className="app-title">Wrap Preview</span>
-          </div>
-          {projectName && (
-            <div className="header-project-info">
-              <span className="separator">/</span>
-              <span className="project-name-highlight">{projectName}</span>
+              />
             </div>
           )}
-        </div>
+          {preparingExport && (
+            <div className="export-preparing-overlay" role="status" aria-live="polite">
+              <div className="export-preparing-card">
+                <div className="spinner" />
+                <strong>{
+                  preparingExport.kind === "pdf" ? "Preparing PDF" :
+                    preparingExport.kind === "image" ? "Preparing Image" :
+                      preparingExport.kind === "mosaic-pdf" ? "Preparing Mosaic PDF" :
+                        "Preparing Mosaic Image"
+                }</strong>
+                <span>{preparingExport.message}</span>
+              </div>
+            </div>
+          )}
 
-        {activeTab !== "home" && (
-          <nav className="app-tabs-nav header-tabs">
-            <button className="nav-tab" onClick={() => { setActiveTab('home'); setActivePreproductionApp(null); setActiveMediaWorkspaceApp(null); }}>
-              <LayoutGrid size={14} /> Modules
-            </button>
-            {activeTab === "preproduction" ? (
-              <button
-                className="nav-tab active"
-                onClick={() => {
-                  setActiveTab('preproduction');
-                  setActivePreproductionApp(null);
-                  setActiveMediaWorkspaceApp(null);
-                }}
-              >
-                <Boxes size={14} /> Pre-production
-              </button>
-            ) : (
-              <button
-                className="nav-tab active"
-                onClick={() => {
-                  setActiveTab('media-workspace');
-                  setActivePreproductionApp(null);
-                  setActiveMediaWorkspaceApp(null);
-                }}
-              >
-                <BriefcaseBusiness size={14} /> Media Workspace
-              </button>
-            )}
-          </nav>
-        )}
-        <div className="app-header-right">
-          <nav className="header-nav">
-          </nav>
-          <>
-
-            <div className="help-menu-wrapper" style={{ position: 'relative' }}>
-              <button className="btn btn-icon" onClick={() => setHelpMenuOpen(!helpMenuOpen)} title="Help & Info">
-                <MoreHorizontal size={18} />
-              </button>
-              {helpMenuOpen && (
-                <>
-                  <div className="dropdown-backdrop" onClick={() => setHelpMenuOpen(false)} />
-                  <div className="help-dropdown menu-dropdown">
-                    <button className="dropdown-item menu-item" onClick={() => { setAboutOpen(true); setHelpMenuOpen(false); }}>
-                      <span className="menu-item-icon"><Info size={16} /></span>
-                      <span className="menu-item-label">About Wrap Preview</span>
-                    </button>
-                    <button className="dropdown-item menu-item" onClick={async () => {
-                      setHelpMenuOpen(false);
-                      const dest = await open({ directory: true, multiple: false, title: "Export Feedback Bundle" });
-                      if (!dest) return;
-                      try {
-                        const zip = await invoke<string>("export_feedback_bundle", { outputRoot: dest, lastVerificationJobId });
-                        try { await openPath(zip); } catch (openErr) {
-                          console.warn("openPath failed for feedback bundle", openErr);
-                          setUiError({ title: "Feedback bundle exported", hint: `Saved at ${zip}. Use Finder to open if auto-open is blocked.` });
-                        }
-                      } catch (e) {
-                        console.error(e);
-                        setUiError({ title: "Diagnostics export failed", hint: "Retry and verify destination folder is writable." });
-                      }
-                    }}>
-                      <span className="menu-item-icon"><MessageCircleWarning size={16} /></span>
-                      <span className="menu-item-label">Send Feedback</span>
-                    </button>
-                    <div className="dropdown-divider menu-divider" />
-                    <button className="dropdown-item menu-item" onClick={() => {
-                      if (tourRun) completeTour();
-                      else startTour();
-                    }}>
-                      <span className="menu-item-icon"><Compass size={16} /></span>
-                      <span className="menu-item-label">{tourRun ? "Hide Tour" : "Show Tour"}</span>
-                    </button>
-                  </div>
-                </>
+          <header className="app-header">
+            <div className="app-header-left">
+              <div className="app-logo" onClick={() => { setActiveTab('home'); setActivePreproductionApp(null); setActiveMediaWorkspaceApp(null); }}>
+                <img src={appLogo} alt="Logo" className="app-logo-img" />
+                <span className="app-title">Wrap Preview</span>
+              </div>
+              {projectName && (
+                <div className="header-project-info">
+                  <span className="separator">/</span>
+                  <span className="project-name-highlight">{projectName}</span>
+                </div>
               )}
             </div>
 
+            {activeTab !== "home" && !isPreproductionLauncher && (
+              <nav className="app-tabs-nav header-tabs">
+                <button className="nav-tab" onClick={() => { setActiveTab('home'); setActivePreproductionApp(null); setActiveMediaWorkspaceApp(null); }}>
+                  <LayoutGrid size={14} /> Modules
+                </button>
+                {activeTab === "preproduction" ? (
+                  <button
+                    className="nav-tab active"
+                    onClick={() => {
+                      setActiveTab('preproduction');
+                      setActivePreproductionApp(null);
+                      setActiveMediaWorkspaceApp(null);
+                    }}
+                  >
+                    <Boxes size={14} /> Pre-production
+                  </button>
+                ) : (
+                  <button
+                    className="nav-tab active"
+                    onClick={() => {
+                      setActiveTab('media-workspace');
+                      setActivePreproductionApp(null);
+                      setActiveMediaWorkspaceApp(null);
+                    }}
+                  >
+                    <BriefcaseBusiness size={14} /> Media Workspace
+                  </button>
+                )}
+              </nav>
+            )}
+            <div className="app-header-right">
+              <nav className="header-nav">
+              </nav>
+              <>
 
-            <button className={`btn btn-jobs jobs-state-${jobHudState}`} onClick={() => setJobsOpen(true)}>
-              <div className="jobs-indicator-content">
-                <BriefcaseBusiness size={16} />
-                <span className="jobs-label">
-                  {(scanning || extracting) ? (scanning ? "Scanning…" : `Extracting ${extractProgress.done}/${extractProgress.total}`) : (
-                    runningJobs > 0 ? `Running ${runningJobs}` : failedJobs > 0 ? `Errors ${failedJobs}` : "Jobs"
-                  )}
-                </span>
-                {failedJobs > 0 && <AlertTriangle size={14} className="status-icon-failed" style={{ marginLeft: 4 }} />}
-              </div>
-              {(scanning || extracting || runningJobs > 0) && (
-                <div className="jobs-progress-bar">
-                  <div className="jobs-progress-bar-fill" />
-                </div>
-              )}
-            </button>
-          </>
-        </div>
-      </header>
-
-      <div className="app-content">
-        {uiError && (
-          <div className="error-banner">
-            <strong>{uiError.title}</strong> {uiError.hint}
-          </div>
-        )}
-        {activeTab === 'preproduction' ? (
-          activePreproductionApp === 'shot-planner' ? (
-            projectId ? (
-              <div className="media-workspace">
-                <div className="stats-bar">
-                  <div className={`stat-card ${selectedClipIds.size > 0 ? 'stat-card-highlight' : ''}`}>
-                    <div className="stat-header">
-                      <span className="stat-label">Selection</span>
-                    </div>
-                    <span className="stat-value">{selectedClipIds.size}<span className="stat-value-total"> / {totalClips}</span></span>
-                    <span className="stat-sub">Selected for Export</span>
-                  </div>
-                  <div className="stat-card">
-                    <div className="stat-header">
-                      <span className="stat-label">Assets</span>
-                      <Info size={12} className="info-icon" />
-                    </div>
-                    <span className="stat-value">{totalClips}</span>
-                    <span className="stat-sub">{formatFileSize(totalSize)} • {okClips} OK / {warnClips} Warn</span>
-                  </div>
-                  <div className="stat-card">
-                    <div className="stat-header">
-                      <span className="stat-label">Duration</span>
-                    </div>
-                    <span className="stat-value">{formatDuration(totalDuration)}</span>
-                    <span className="stat-sub">Avg {formatDuration(avgDuration)}/clip</span>
-                  </div>
-                  <div className="stat-card">
-                    <div className="stat-header">
-                      <span className="stat-label">Resolution</span>
-                    </div>
-                    <span className="stat-value">{topRes}</span>
-                    <span className="stat-sub">
-                      {ratioLabel ? `${ratioLabel}` : `${resolutions.size} format${resolutions.size !== 1 ? 's' : ''}`}
-                    </span>
-                  </div>
-                  <div className="stat-card">
-                    <div className="stat-header">
-                      <span className="stat-label">FPS</span>
-                    </div>
-                    <span className="stat-value">{topFps || '—'}</span>
-                    <span className="stat-sub">{fpsSet.size} rate{fpsSet.size !== 1 ? 's' : ''}</span>
-                  </div>
-                  <div className="stat-card">
-                    <div className="stat-header">
-                      <span className="stat-label">Audio</span>
-                    </div>
-                    <span className="stat-value">{clipsWithAudio}</span>
-                    <span className="stat-sub">{totalClips > 0 ? Math.round((clipsWithAudio / totalClips) * 100) : 0}% with audio</span>
-                  </div>
-                  <div className="stat-card">
-                    <div className="stat-header">
-                      <span className="stat-label">Picks</span>
-                    </div>
-                    <span className="stat-value">{picksCount}</span>
-                    <span className="stat-sub">{ratedCount} rated</span>
-                  </div>
-                </div>
-
-                <div className="toolbar premium-toolbar">
-                  <div className="toolbar-left-group">
-                    <button className="btn btn-secondary btn-sm" onClick={() => handleSelectFolder("shot-planner")} disabled={scanning}>
-                      {scanning ? <div className="spinner" /> : <FolderOpen size={14} />}
-                      <span>{scanning ? "Scanning..." : "Load Footage"}</span>
-                    </button>
-                    <div className="toolbar-separator" />
-                    <div className="thumb-range-selector">
-                      <span className="toolbar-label">Thumbs</span>
-                      {[3, 5, 7].map((n) => (
-                        <button
-                          key={n}
-                          className={`btn btn-ghost btn-xs ${thumbCount === n ? 'active' : ''}`}
-                          onClick={() => { setThumbCount(n); localStorage.setItem('wp_thumbCount', n.toString()); }}
-                        >
-                          {n}
+                <div className="help-menu-wrapper" style={{ position: 'relative' }}>
+                  <button className="btn btn-icon" onClick={() => setHelpMenuOpen(!helpMenuOpen)} title="Help & Info">
+                    <MoreHorizontal size={18} />
+                  </button>
+                  {helpMenuOpen && (
+                    <>
+                      <div className="dropdown-backdrop" onClick={() => setHelpMenuOpen(false)} />
+                      <div className="help-dropdown menu-dropdown">
+                        <button className="dropdown-item menu-item" onClick={() => { setAboutOpen(true); setHelpMenuOpen(false); }}>
+                          <span className="menu-item-icon"><Info size={16} /></span>
+                          <span className="menu-item-label">About Wrap Preview</span>
                         </button>
-                      ))}
+                        <button className="dropdown-item menu-item" onClick={async () => {
+                          setHelpMenuOpen(false);
+                          const dest = await open({ directory: true, multiple: false, title: "Export Feedback Bundle" });
+                          if (!dest) return;
+                          try {
+                            const zip = await invoke<string>("export_feedback_bundle", { outputRoot: dest, lastVerificationJobId });
+                            try { await openPath(zip); } catch (openErr) {
+                              console.warn("openPath failed for feedback bundle", openErr);
+                              setUiError({ title: "Feedback bundle exported", hint: `Saved at ${zip}. Use Finder to open if auto-open is blocked.` });
+                            }
+                          } catch (e) {
+                            console.error(e);
+                            setUiError({ title: "Diagnostics export failed", hint: "Retry and verify destination folder is writable." });
+                          }
+                        }}>
+                          <span className="menu-item-icon"><MessageCircleWarning size={16} /></span>
+                          <span className="menu-item-label">Send Feedback</span>
+                        </button>
+                        <div className="dropdown-divider menu-divider" />
+                        <button className="dropdown-item menu-item" onClick={() => {
+                          if (tourRun) completeTour();
+                          else startTour();
+                        }}>
+                          <span className="menu-item-icon"><Compass size={16} /></span>
+                          <span className="menu-item-label">{tourRun ? "Hide Tour" : "Show Tour"}</span>
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+
+
+                <button className={`btn btn-jobs jobs-state-${jobHudState}`} onClick={() => setJobsOpen(true)}>
+                  <div className="jobs-indicator-content">
+                    <BriefcaseBusiness size={16} />
+                    <span className="jobs-label">
+                      {(scanning || extracting) ? (scanning ? "Scanning…" : `Extracting ${extractProgress.done}/${extractProgress.total}`) : (
+                        runningJobs > 0 ? `Running ${runningJobs}` : failedJobs > 0 ? `Errors ${failedJobs}` : "Jobs"
+                      )}
+                    </span>
+                    {failedJobs > 0 && <AlertTriangle size={14} className="status-icon-failed" style={{ marginLeft: 4 }} />}
+                  </div>
+                  {(scanning || extracting || runningJobs > 0) && (
+                    <div className="jobs-progress-bar">
+                      <div className="jobs-progress-bar-fill" />
                     </div>
-                    <div className="toolbar-separator" />
-                    <select
-                      className="toolbar-select"
-                      value={lookbookSortMode}
-                      onChange={(e) => setLookbookSortMode(e.target.value as LookbookSortMode)}
-                      title="Sort Mode"
-                    >
-                      <option value="canonical">Canonical Sort</option>
-                      <option value="custom">Manual Order</option>
-                      <option value="hook_first">Hook First</option>
-                    </select>
-                    <div className="toolbar-separator" />
-                    <select
-                      className="toolbar-select"
-                      value={viewFilter}
-                      onChange={(e) => setViewFilter(e.target.value as any)}
-                    >
-                      <option value="all">All Clips</option>
-                      <option value="picks">Picks Only</option>
-                      <option value="rated_min">Rated ≥</option>
-                    </select>
-                    {viewFilter === 'rated_min' && (
-                      <select
-                        className="toolbar-select"
-                        value={viewMinRating}
-                        onChange={(e) => setViewMinRating(Number(e.target.value))}
-                        style={{ width: 60 }}
-                      >
-                        {[1, 2, 3, 4, 5].map((r) => (
-                          <option key={r} value={r}>★{r}</option>
-                        ))}
-                      </select>
-                    )}
-                  </div>
-                  <div className="toolbar-right-group">
-                    <button className="btn btn-ghost btn-sm" onClick={toggleSelectAll}>
-                      {selectedSelectableCount === selectableClipIds.length ? "Deselect All" : "Select All"}
-                    </button>
-                  </div>
-                </div>
+                  )}
+                </button>
+              </>
+            </div>
+          </header>
 
-
-
-                <ClipList
-                  clips={sortedClips}
-                  thumbnailCache={thumbnailCache}
-                  selectedIds={selectedClipIds}
-                  onToggleSelection={toggleClipSelection}
-                  thumbCount={thumbCount}
-                  onUpdateMetadata={handleUpdateMetadata}
-                  onHoverClip={setHoveredClipId}
-                  shotSizeOptions={[...SHOT_SIZE_CANONICAL, ...(enableOptionalShotTags ? SHOT_SIZE_OPTIONAL : []), ...customShotSizes]}
-                  movementOptions={[...MOVEMENT_CANONICAL, ...customMovements]}
-                  lookbookSortMode={lookbookSortMode}
-                  groupByShotSize={true}
-                  onPromoteClip={handlePromoteClip}
-                  onPlayClip={handlePlayClip}
-                  playingClipId={playingClipId}
-                  playingProgress={playingProgress}
-                  focusedClipId={hoveredClipId}
-                  projectLutHash={projectLut?.hash || null}
-                  lutRenderNonce={lutRenderNonce}
-                  hideLutControls={true}
-                  onExportPDF={handleExport}
-                  onExportImage={handleExportImage}
-                />
+          <div className="app-content">
+            {uiError && (
+              <div className="error-banner">
+                <strong>{uiError.title}</strong> {uiError.hint}
               </div>
-            ) : (scanning) ? (
-              <div className="media-workspace">
-                <div className="toolbar premium-toolbar">
-                  <div className="toolbar-left-group">
-                    <button className="btn btn-secondary btn-sm" disabled>
-                      {scanning ? <div className="spinner" /> : null}
-                      <span>{scanning ? "Scanning…" : ""}</span>
-                    </button>
+            )}
+            {uiNotice && (
+              <div className="error-banner info-banner">
+                <strong>{uiNotice.title}</strong>{uiNotice.hint ? ` ${uiNotice.hint}` : ""}
+              </div>
+            )}
+            {activeTab === 'preproduction' ? (
+              activePreproductionApp === 'shot-planner' ? (
+                projectId ? (
+                  <div className="media-workspace">
+                    <div className="stats-bar">
+                      <div className={`stat-card ${selectedClipIds.size > 0 ? 'stat-card-highlight' : ''}`}>
+                        <div className="stat-header">
+                          <span className="stat-label">Selected</span>
+                        </div>
+                        <span className="stat-value">{selectedClipIds.size}<span className="stat-value-total"> / {totalClips}</span></span>
+                        <span className="stat-sub">Reference clips in export scope</span>
+                      </div>
+                      <div className="stat-card">
+                        <div className="stat-header">
+                          <span className="stat-label">Rejected</span>
+                        </div>
+                        <span className="stat-value">{rejectedCount}</span>
+                        <span className="stat-sub">Rejected clips never export</span>
+                      </div>
+                      <div className="stat-card">
+                        <div className="stat-header">
+                          <span className="stat-label">Export-ready</span>
+                        </div>
+                        <span className="stat-value">{exportReadyCount}</span>
+                        <span className="stat-sub">{effectiveLookbookSortMode === "custom" ? "Tagged with order, size, movement" : "Tagged with size and movement"}</span>
+                      </div>
+                    </div>
+
+                    <div className="toolbar premium-toolbar">
+                      <div className="toolbar-left-group">
+                        <div className="thumb-range-selector">
+                          <span className="toolbar-label">Thumbs</span>
+                          {[3, 5, 7].map((n) => (
+                            <button
+                              key={n}
+                              className={`btn btn-ghost btn-xs ${thumbCount === n ? 'active' : ''}`}
+                              onClick={() => { setThumbCount(n); localStorage.setItem('wp_thumbCount', n.toString()); }}
+                            >
+                              <span className="thumb-choice-value">{n}</span>
+                            </button>
+                          ))}
+                        </div>
+                        <div className="toolbar-separator" />
+                        <div className="shot-planner-order-mode">
+                          <span className="toolbar-label">Order mode</span>
+                          <div className="clip-mode-pill-row">
+                            <button type="button" className={`clip-mode-pill ${effectiveLookbookSortMode === "canonical" ? "active" : ""}`} onClick={() => setLookbookSortMode("canonical")}>Canonical</button>
+                            <button type="button" className={`clip-mode-pill ${effectiveLookbookSortMode === "custom" ? "active" : ""}`} onClick={() => setLookbookSortMode("custom")}>Manual</button>
+                          </div>
+                        </div>
+                        <div className="toolbar-separator" />
+                      </div>
+                      <div className="toolbar-right-group">
+                        <button className="btn btn-ghost btn-sm" onClick={toggleSelectAll}>
+                          {selectedSelectableCount === selectableClipIds.length ? "Deselect all" : "Select all"}
+                        </button>
+                        <div className="shot-planner-export" ref={exportMenuRef}>
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-sm"
+                            onClick={() => setShotPlannerExportMenuOpen((prev) => !prev)}
+                            aria-haspopup="menu"
+                            aria-expanded={shotPlannerExportMenuOpen}
+                          >
+                            <FileDown size={14} />
+                            <span>Export</span>
+                            <ChevronDown size={14} />
+                          </button>
+                          {shotPlannerExportMenuOpen && (
+                            <div className="shot-planner-export-menu" role="menu">
+                              <button type="button" className="shot-planner-export-item" onClick={() => handleExport()}>
+                                <FileDown size={14} />
+                                <span>PDF</span>
+                              </button>
+                              <button type="button" className="shot-planner-export-item" onClick={() => handleExportImage()}>
+                                <Image size={14} />
+                                <span>Image</span>
+                              </button>
+                              <button type="button" className="shot-planner-export-item" onClick={() => handleExportMosaicPdf()}>
+                                <FileDown size={14} />
+                                <span>Mosaic (PDF)</span>
+                              </button>
+                              <button type="button" className="shot-planner-export-item" onClick={() => handleExportMosaicImage()}>
+                                <Image size={14} />
+                                <span>Mosaic (Image)</span>
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                        <button className="btn btn-secondary btn-sm" onClick={() => handleSelectFolder("shot-planner")} disabled={scanning}>
+                          {scanning ? <div className="spinner" /> : <FolderOpen size={14} />}
+                          <span>{scanning ? "Scanning..." : "Load Footage"}</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    <ClipList
+                      clips={sortedClips}
+                      thumbnailCache={thumbnailCache}
+                      selectedIds={selectedClipIds}
+                      onToggleSelection={toggleClipSelection}
+                      thumbCount={thumbCount}
+                      onUpdateMetadata={handleUpdateMetadata}
+                      onHoverClip={setHoveredClipId}
+                      onFocusClip={focusShotPlannerClip}
+                      focusedClipId={focusedClipId}
+                      cacheKeyContext={thumbCacheContext}
+                      shotSizeOptions={[...SHOT_SIZE_CANONICAL, ...(enableOptionalShotTags ? SHOT_SIZE_OPTIONAL : []), ...customShotSizes]}
+                      movementOptions={[...MOVEMENT_CANONICAL, ...customMovements]}
+                      lookbookSortMode={effectiveLookbookSortMode}
+                      onResetClip={handleResetShotPlannerClip}
+                      onManualOrderInputChange={clearManualOrderBuffer}
+                      manualOrderConflict={manualOrderConflict}
+                      groupByShotSize={true}
+                      onPromoteClip={handlePromoteClip}
+                      onPlayClip={handlePlayClip}
+                      playingClipId={playingClipId}
+                      playingProgress={playingProgress}
+                      projectLutHash={projectLut?.hash || null}
+                      lutRenderNonce={lutRenderNonce}
+                      hideLutControls={true}
+                      onExportPDF={handleExport}
+                      onExportImage={handleExportImage}
+                      onExportMosaicPdf={handleExportMosaicPdf}
+                      onExportMosaicImage={handleExportMosaicImage}
+                      variant="shot-planner"
+                    />
+                  </div>
+                ) : (scanning) ? (
+                  <div className="media-workspace">
+                    <div className="toolbar premium-toolbar">
+                      <div className="toolbar-left-group">
+                        <button className="btn btn-secondary btn-sm" disabled>
+                          {scanning ? <div className="spinner" /> : null}
+                          <span>{scanning ? "Scanning…" : ""}</span>
+                        </button>
+                      </div>
+                    </div>
+                    <div className="inline-loading-state">
+                      <span style={{ fontSize: '1rem' }}>{scanning ? "Scanning folder for media files…" : ""}</span>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="media-workspace">
+                    <div className="workspace-empty-state premium-card">
+                      <div className="module-icon"><Camera size={28} strokeWidth={1.5} /></div>
+                      <h2>Shot Planner</h2>
+                      <p>Load reference clips to tag shot sizes, movement, and selections before the shoot.</p>
+                      <button className="btn btn-secondary" onClick={() => handleSelectFolder("shot-planner")}>
+                        <FolderOpen size={14} />
+                        <span>Load References</span>
+                      </button>
+                    </div>
+                  </div>
+                )
+              ) : activePreproductionApp === 'folder-creator' ? (
+                <div className="media-workspace">
+
+                  <FolderCreator />
+                </div>
+              ) : (
+                <div className="onboarding-container">
+                  <div className="onboarding-header">
+                    <span className="onboarding-eyebrow">Module</span>
+                    <h1>Pre-production</h1>
+                    <p>Plan your shoot and organize your project structure.</p>
+                  </div>
+                  <div className="onboarding-grid onboarding-grid-root">
+                    <div
+                      className="module-card premium-card"
+                      onClick={() => {
+                        if (projectStates.pre.projectId) setActivePreproductionApp('shot-planner');
+                        else handleSelectFolder('shot-planner');
+                      }}
+                    >
+                      <div className="module-icon"><Camera size={20} strokeWidth={1.5} /></div>
+                      <div className="module-info">
+                        <h3>Shot Planner</h3>
+                        <p>Analyze reference footage and export selected on-set reference sheets.</p>
+                        <span className="module-action">Open App <ArrowRight size={14} /></span>
+                      </div>
+                    </div>
+                    <div
+                      className="module-card premium-card"
+                      onClick={() => setActivePreproductionApp('folder-creator')}
+                    >
+                      <div className="module-icon"><FolderTree size={20} strokeWidth={1.5} /></div>
+                      <div className="module-info">
+                        <h3>Folder Creator</h3>
+                        <p>Generate sophisticated folder structures for multi-platform use.</p>
+                        <span className="module-action">Open App <ArrowRight size={14} /></span>
+                      </div>
+                    </div>
                   </div>
                 </div>
-                <div className="inline-loading-state">
-                  <span style={{ fontSize: '1rem' }}>{scanning ? "Scanning folder for media files…" : ""}</span>
+              )
+            ) : activeTab === 'media-workspace' ? (
+              activeMediaWorkspaceApp === 'safe-copy' ? (
+                <div className="media-workspace">
+
+                  <SafeCopy projectId={projectId ?? "__global__"} onJobCreated={setLastVerificationJobId} onError={setUiError} />
                 </div>
-              </div>
+              ) : activeMediaWorkspaceApp === 'clip-review' ? (
+                projectId ? (
+                  <div className="media-workspace">
+                    {/* Statistics and Toolbar as before, but maybe streamlined */}
+                    <ClipList
+                      clips={sortedClips}
+                      thumbnailCache={thumbnailCache}
+                      selectedIds={selectedClipIds}
+                      onToggleSelection={toggleClipSelection}
+                      thumbCount={thumbCount}
+                      onUpdateMetadata={handleUpdateMetadata}
+                      onHoverClip={setHoveredClipId}
+                      onFocusClip={setFocusedClipId}
+                      focusedClipId={focusedClipId}
+                      cacheKeyContext={thumbCacheContext}
+                      shotSizeOptions={[...SHOT_SIZE_CANONICAL, ...customShotSizes]}
+                      movementOptions={[...MOVEMENT_CANONICAL, ...customMovements]}
+                      lookbookSortMode={lookbookSortMode}
+                      groupByShotSize={false}
+                      onPromoteClip={handlePromoteClip}
+                      onPlayClip={handlePlayClip}
+                      playingClipId={playingClipId}
+                      playingProgress={playingProgress}
+                      projectLutHash={projectLut?.hash || null}
+
+                      lutRenderNonce={lutRenderNonce}
+                      onExportPDF={handleExport}
+                      onExportImage={handleExportImage}
+                    />
+                  </div>
+                ) : null
+              ) : activeMediaWorkspaceApp === 'scene-blocks' ? (
+                projectId ? (
+                  <div className="media-workspace">
+                    <BlocksView
+                      projectId={projectId}
+                      thumbnailCache={thumbnailCache}
+                      thumbnailsByClipId={thumbnailsByClipId}
+                      onSelectedBlockIdsChange={setSelectedBlockIds}
+                      onOpenDelivery={() => setShowExportPanel(true)}
+                      onOpenReview={() => setActiveMediaWorkspaceApp("clip-review")}
+                    />
+                  </div>
+                ) : null
+              ) : activeMediaWorkspaceApp === 'review-core' ? (
+                <div className="media-workspace">
+                  <ReviewCore
+                    projectId={projectId}
+                    projectName={projectName}
+                    onError={setUiError}
+                  />
+                </div>
+              ) : (
+                <div className="onboarding-container">
+                  <div className="onboarding-header">
+                    <h1>Media Workspace</h1>
+                    <p>Post-production suite for media verification and organization.</p>
+                  </div>
+                  <div className="onboarding-grid workspace-apps-grid">
+                    <div
+                      className="module-card premium-card"
+                      onClick={() => setActiveMediaWorkspaceApp('safe-copy')}
+                    >
+                      <div className="module-icon"><ShieldCheck size={20} strokeWidth={1.5} /></div>
+                      <div className="module-info">
+                        <h3>Safe Copy</h3>
+                        <p>Verify source and destination pairs before editorial work begins.</p>
+                        <span className="module-action">Open App <ArrowRight size={14} /></span>
+                      </div>
+                    </div>
+                    <div
+                      className="module-card premium-card"
+                      onClick={() => {
+                        if (projectId) setActiveMediaWorkspaceApp('clip-review');
+                        else handleSelectFolder("clip-review");
+                      }}
+                    >
+                      <div className="module-icon"><Camera size={20} strokeWidth={1.5} /></div>
+                      <div className="module-info">
+                        <h3>Open Workspace / Review</h3>
+                        <p>{projectId ? "Continue reviewing thumbnails, metadata, and audio." : "Load a footage folder to unlock Review, Scene Blocks, and Delivery."}</p>
+                        <span className="module-action">{projectId ? "Open App" : "Load Workspace"} <ArrowRight size={14} /></span>
+                      </div>
+                    </div>
+                    <div
+                      className="module-card premium-card"
+                      onClick={() => {
+                        setActiveMediaWorkspaceApp('review-core');
+                      }}
+                    >
+                      <div className="module-icon"><Film size={20} strokeWidth={1.5} /></div>
+                      <div className="module-info">
+                        <h3>Review Core</h3>
+                        <p>{projectId ? "Play app-managed HLS proxies, inspect versions, and confirm metadata." : "Create or reopen a Review Core project to import and review media independently."}</p>
+                        <span className="module-action">Open App <ArrowRight size={14} /></span>
+                      </div>
+                    </div>
+                    <div
+                      className={`module-card premium-card ${!projectId ? "disabled" : ""}`}
+                      onClick={() => {
+                        if (projectId) setActiveMediaWorkspaceApp('scene-blocks');
+                      }}
+                    >
+                      <div className="module-icon"><Boxes size={20} strokeWidth={1.5} /></div>
+                      <div className="module-info">
+                        <h3>Scene Blocks</h3>
+                        <p>{projectId ? "Organize reviewed clips into deterministic editorial groups." : "Available after a workspace is opened in Review."}</p>
+                        <span className="module-action">{projectId ? "Open App" : "Workspace required"}</span>
+                      </div>
+                    </div>
+                    <div
+                      className={`module-card premium-card ${!projectId ? "disabled" : ""}`}
+                      onClick={() => { if (projectId) setShowExportPanel(true); }}
+                    >
+                      <div className="module-icon"><FileDown size={20} strokeWidth={1.5} /></div>
+                      <div className="module-info">
+                        <h3>Delivery</h3>
+                        <p>{projectId ? "Export Resolve timelines and Director Packs from the current scope." : "Available after clips are loaded into the workspace."}</p>
+                        <span className="module-action">{projectId ? "Open App" : "Workspace required"}</span>
+                      </div>
+                    </div>
+                  </div>
+                  {inWorkspaceLauncher && !projectId && (
+                    <div className="workspace-launcher-hint">
+                      <strong>Review Core</strong> can now run independently. <strong>Scene Blocks</strong> and <strong>Delivery</strong> still require an opened workspace.
+                    </div>
+                  )}
+                </div>
+              )
             ) : (
-              <div className="media-workspace">
-                <div className="workspace-empty-state premium-card">
-                  <div className="module-icon"><Camera size={28} strokeWidth={1.5} /></div>
-                  <h2>Shot Planner</h2>
-                  <p>Load reference clips to tag shot sizes, movement, and selections before the shoot.</p>
-                  <button className="btn btn-secondary" onClick={() => handleSelectFolder("shot-planner")}>
-                    <FolderOpen size={14} />
-                    <span>Load References</span>
+              <div className="onboarding-container">
+                <div className="onboarding-header">
+                  <span className="onboarding-eyebrow">Modules</span>
+                  <h1>Wrap Preview Suite</h1>
+                  <p>Offline media control for shoots and post.</p>
+                </div>
+                <div className="onboarding-grid onboarding-grid-root">
+                  <div
+                    className="module-card premium-card tour-home-preproduction"
+                    onClick={() => {
+                      setActiveTab("preproduction");
+                      setActivePreproductionApp(null);
+                      setActiveMediaWorkspaceApp(null);
+                    }}
+                  >
+                    <div className="module-icon"><Boxes size={22} strokeWidth={1.35} /></div>
+                    <div className="module-info">
+                      <span className="module-label">Pre-Production</span>
+                      <h2>Pre-Production</h2>
+                      <p>Plan shots, build references, generate folder structure.</p>
+                      <span className="module-action">Enter Module <ArrowRight size={16} /></span>
+                    </div>
+                  </div>
+                  <div
+                    className="module-card premium-card tour-home-postproduction"
+                    onClick={() => {
+                      setActiveTab("media-workspace");
+                      setActivePreproductionApp(null);
+                      setActiveMediaWorkspaceApp(null);
+                    }}
+                  >
+                    <div className="module-icon"><BriefcaseBusiness size={22} strokeWidth={1.35} /></div>
+                    <div className="module-info">
+                      <span className="module-label">Post-Production</span>
+                      <h2>Post-Production</h2>
+                      <p>Review footage, verify copies, build selects, export handoff.</p>
+                      <span className="module-action">Enter Module <ArrowRight size={16} /></span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {pendingExportValidation && (
+            <div className="export-modal-backdrop" onClick={() => setPendingExportValidation(null)}>
+              <div className="export-modal export-validation-modal" onClick={(e) => e.stopPropagation()}>
+                <div className="export-modal-header">
+                  <div className="export-modal-icon">
+                    <AlertTriangle size={18} />
+                  </div>
+                  <div>
+                    <h3 className="export-modal-title">Missing tags</h3>
+                    <p className="export-modal-subtitle">Some selected clips are missing order or shot tags. Fill them now?</p>
+                  </div>
+                </div>
+                <div className="export-modal-actions">
+                  <button
+                    className="btn btn-secondary"
+                    onClick={() => {
+                      focusClipField(pendingExportValidation.firstMissing.clipId, pendingExportValidation.firstMissing.field);
+                      setPendingExportValidation(null);
+                    }}
+                  >
+                    Fill now
+                  </button>
+                  <button
+                    className="btn btn-accent"
+                    onClick={() => {
+                      const kind = pendingExportValidation.kind;
+                      setPendingExportValidation(null);
+                      setUiNotice({
+                        title: "Untagged clips will be placed at the end of the export.",
+                        hint: ""
+                      });
+                      void runExport(kind);
+                    }}
+                  >
+                    Export anyway
                   </button>
                 </div>
               </div>
-            )
-          ) : activePreproductionApp === 'folder-creator' ? (
-            <div className="media-workspace">
+            </div>
+          )}
 
-              <FolderCreator />
-            </div>
-          ) : (
-            <div className="onboarding-container">
-              <div className="onboarding-header">
-                <h1>Pre-production</h1>
-                <p>Plan your shoot and organize your project structure.</p>
-              </div>
-              <div className="onboarding-grid">
-              <div
-                className="module-card premium-card"
-                onClick={() => {
-                  if (projectStates.pre.projectId) setActivePreproductionApp('shot-planner');
-                  else handleSelectFolder('shot-planner');
-                }}
-              >
-                  <div className="module-icon"><Camera size={20} strokeWidth={1.5} /></div>
-                  <div className="module-info">
-                    <h3>Shot Planner</h3>
-                    <p>Analyze reference footage and export selected on-set reference sheets.</p>
-                    <span className="module-action">Open App <ArrowRight size={14} /></span>
-                  </div>
-                </div>
-                <div
-                  className="module-card premium-card"
-                  onClick={() => setActivePreproductionApp('folder-creator')}
-                >
-                  <div className="module-icon"><FolderTree size={20} strokeWidth={1.5} /></div>
-                  <div className="module-info">
-                    <h3>Folder Creator</h3>
-                    <p>Generate sophisticated folder structures for multi-platform use.</p>
-                    <span className="module-action">Open App <ArrowRight size={14} /></span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )
-        ) : activeTab === 'media-workspace' ? (
-          activeMediaWorkspaceApp === 'safe-copy' ? (
-            <div className="media-workspace">
+          {showExportPanel && projectId && (
+            <ExportPanel
+              projectId={projectId}
+              clips={clips.map(c => c.clip).filter((c) => c.flag !== "reject")}
+              selectedBlockIds={selectedBlockIds}
+              currentFilterMode={viewFilter}
+              currentFilterMinRating={viewMinRating}
+              onError={setUiError}
+              onClose={() => setShowExportPanel(false)}
+            />
+          )}
 
-              <SafeCopy projectId={projectId ?? "__global__"} onJobCreated={setLastVerificationJobId} onError={setUiError} />
-            </div>
-          ) : activeMediaWorkspaceApp === 'clip-review' ? (
-            projectId ? (
-              <div className="media-workspace">
-                {/* Statistics and Toolbar as before, but maybe streamlined */}
-                <ClipList
-                  clips={sortedClips}
-                  thumbnailCache={thumbnailCache}
-                  selectedIds={selectedClipIds}
-                  onToggleSelection={toggleClipSelection}
-                  thumbCount={thumbCount}
-                  onUpdateMetadata={handleUpdateMetadata}
-                  onHoverClip={setHoveredClipId}
-                  shotSizeOptions={[...SHOT_SIZE_CANONICAL, ...customShotSizes]}
-                  movementOptions={[...MOVEMENT_CANONICAL, ...customMovements]}
-                  lookbookSortMode={lookbookSortMode}
-                  groupByShotSize={false}
-                  onPromoteClip={handlePromoteClip}
-                  onPlayClip={handlePlayClip}
-                  playingClipId={playingClipId}
-                  playingProgress={playingProgress}
-                  focusedClipId={hoveredClipId}
-                  projectLutHash={projectLut?.hash || null}
-                  lutRenderNonce={lutRenderNonce}
-                  onExportPDF={handleExport}
-                  onExportImage={handleExportImage}
-                />
-              </div>
-            ) : null
-          ) : activeMediaWorkspaceApp === 'scene-blocks' ? (
-            projectId ? (
-              <div className="media-workspace">
-                <BlocksView
-                  projectId={projectId}
-                  thumbnailCache={thumbnailCache}
-                  thumbnailsByClipId={thumbnailsByClipId}
-                  onSelectedBlockIdsChange={setSelectedBlockIds}
-                  onOpenDelivery={() => setShowExportPanel(true)}
-                  onOpenReview={() => setActiveMediaWorkspaceApp("clip-review")}
-                />
-              </div>
-            ) : null
-          ) : activeMediaWorkspaceApp === 'review-core' ? (
-            <div className="media-workspace">
-              <ReviewCore
-                projectId={projectId}
-                projectName={projectName}
-                onError={setUiError}
-              />
-            </div>
-          ) : (
-            <div className="onboarding-container">
-              <div className="onboarding-header">
-                <h1>Media Workspace</h1>
-                <p>Post-production suite for media verification and organization.</p>
-              </div>
-              <div className="onboarding-grid workspace-apps-grid">
-                <div
-                  className="module-card premium-card"
-                  onClick={() => setActiveMediaWorkspaceApp('safe-copy')}
-                >
-                  <div className="module-icon"><ShieldCheck size={20} strokeWidth={1.5} /></div>
-                  <div className="module-info">
-                    <h3>Safe Copy</h3>
-                    <p>Verify source and destination pairs before editorial work begins.</p>
-                    <span className="module-action">Open App <ArrowRight size={14} /></span>
-                  </div>
-                </div>
-                <div
-                  className="module-card premium-card"
-                  onClick={() => {
-                    if (projectId) setActiveMediaWorkspaceApp('clip-review');
-                    else handleSelectFolder("clip-review");
-                  }}
-                >
-                  <div className="module-icon"><Camera size={20} strokeWidth={1.5} /></div>
-                  <div className="module-info">
-                    <h3>Open Workspace / Review</h3>
-                    <p>{projectId ? "Continue reviewing thumbnails, metadata, and audio." : "Load a footage folder to unlock Review, Scene Blocks, and Delivery."}</p>
-                    <span className="module-action">{projectId ? "Open App" : "Load Workspace"} <ArrowRight size={14} /></span>
-                  </div>
-                </div>
-                <div
-                  className="module-card premium-card"
-                  onClick={() => {
-                    setActiveMediaWorkspaceApp('review-core');
-                  }}
-                >
-                  <div className="module-icon"><Film size={20} strokeWidth={1.5} /></div>
-                  <div className="module-info">
-                    <h3>Review Core</h3>
-                    <p>{projectId ? "Play app-managed HLS proxies, inspect versions, and confirm metadata." : "Create or reopen a Review Core project to import and review media independently."}</p>
-                    <span className="module-action">Open App <ArrowRight size={14} /></span>
-                  </div>
-                </div>
-                <div
-                  className={`module-card premium-card ${!projectId ? "disabled" : ""}`}
-                  onClick={() => {
-                    if (projectId) setActiveMediaWorkspaceApp('scene-blocks');
-                  }}
-                >
-                  <div className="module-icon"><Boxes size={20} strokeWidth={1.5} /></div>
-                  <div className="module-info">
-                    <h3>Scene Blocks</h3>
-                    <p>{projectId ? "Organize reviewed clips into deterministic editorial groups." : "Available after a workspace is opened in Review."}</p>
-                    <span className="module-action">{projectId ? "Open App" : "Workspace required"}</span>
-                  </div>
-                </div>
-                <div
-                  className={`module-card premium-card ${!projectId ? "disabled" : ""}`}
-                  onClick={() => { if (projectId) setShowExportPanel(true); }}
-                >
-                  <div className="module-icon"><FileDown size={20} strokeWidth={1.5} /></div>
-                  <div className="module-info">
-                    <h3>Delivery</h3>
-                    <p>{projectId ? "Export Resolve timelines and Director Packs from the current scope." : "Available after clips are loaded into the workspace."}</p>
-                    <span className="module-action">{projectId ? "Open App" : "Workspace required"}</span>
-                  </div>
-                </div>
-              </div>
-              {inWorkspaceLauncher && !projectId && (
-                <div className="workspace-launcher-hint">
-                  <strong>Review Core</strong> can now run independently. <strong>Scene Blocks</strong> and <strong>Delivery</strong> still require an opened workspace.
-                </div>
-              )}
-            </div>
-          )
-        ) : (
-          <div className="onboarding-container">
-            <div className="onboarding-header">
-              <span className="onboarding-eyebrow">Modules</span>
-              <h1>Wrap Preview Suite</h1>
-              <p>Offline media control for shoots and post.</p>
-            </div>
-            <div className="onboarding-grid onboarding-grid-root">
-              <div
-                className="module-card premium-card tour-home-preproduction"
-                onClick={() => {
-                  setActiveTab("preproduction");
-                  setActivePreproductionApp(null);
-                  setActiveMediaWorkspaceApp(null);
-                }}
-              >
-                <div className="module-icon"><Boxes size={22} strokeWidth={1.35} /></div>
-                <div className="module-info">
-                  <span className="module-label">Pre-Production</span>
-                  <h2>Pre-Production</h2>
-                  <p>Plan shots, build references, generate folder structure.</p>
-                  <span className="module-action">Enter Module <ArrowRight size={16} /></span>
-                </div>
-              </div>
-              <div
-                className="module-card premium-card tour-home-postproduction"
-                onClick={() => {
-                  setActiveTab("media-workspace");
-                  setActivePreproductionApp(null);
-                  setActiveMediaWorkspaceApp(null);
-                }}
-              >
-                <div className="module-icon"><BriefcaseBusiness size={22} strokeWidth={1.35} /></div>
-                <div className="module-info">
-                  <span className="module-label">Post-Production</span>
-                  <h2>Post-Production</h2>
-                  <p>Review footage, verify copies, build selects, export handoff.</p>
-                  <span className="module-action">Enter Module <ArrowRight size={16} /></span>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {showExportPanel && projectId && (
-        <ExportPanel
-          projectId={projectId}
-          clips={clips.map(c => c.clip).filter((c) => c.flag !== "reject")}
-          selectedBlockIds={selectedBlockIds}
-          currentFilterMode={viewFilter}
-          currentFilterMinRating={viewMinRating}
-          onError={setUiError}
-          onClose={() => setShowExportPanel(false)}
-        />
-      )}
-
-      <JobsPanel open={jobsOpen} jobs={jobs} onClose={() => setJobsOpen(false)} onRefresh={refreshJobs} extracting={extracting} extractProgress={extractProgress} scanning={scanning} />
-      <AboutPanel open={aboutOpen} info={appInfo} onResetTour={resetTour} onClose={() => setAboutOpen(false)} />
+          <JobsPanel open={jobsOpen} jobs={jobs} onClose={() => setJobsOpen(false)} onRefresh={refreshJobs} extracting={extracting} extractProgress={extractProgress} scanning={scanning} />
+          <AboutPanel open={aboutOpen} info={appInfo} onResetTour={resetTour} onClose={() => setAboutOpen(false)} />
 
 
-      <TourGuide
-        run={tourRun}
-        steps={tourSteps}
-        onComplete={completeTour}
-        onClose={completeTour}
-      />
+          <TourGuide
+            run={tourRun}
+            steps={tourSteps}
+            onComplete={completeTour}
+            onClose={completeTour}
+          />
 
-      {(activeTab !== 'home' || activePreproductionApp || activeMediaWorkspaceApp) && (
-        <button
-          className="subtle-back-button"
-          onClick={() => {
-            if (activeMediaWorkspaceApp) setActiveMediaWorkspaceApp(null);
-            else if (activePreproductionApp) setActivePreproductionApp(null);
-            else setActiveTab('home');
-          }}
-          title="Back to Dashboard"
-        >
-          <ArrowLeft size={14} />
-          <span>Back</span>
-        </button>
-      )}
+          {(activeTab !== 'home' || activePreproductionApp || activeMediaWorkspaceApp) && (
+            <button
+              className="subtle-back-button"
+              onClick={() => {
+                if (activeMediaWorkspaceApp) setActiveMediaWorkspaceApp(null);
+                else if (activePreproductionApp) setActivePreproductionApp(null);
+                else setActiveTab('home');
+              }}
+              title="Back to Dashboard"
+            >
+              <ArrowLeft size={14} />
+              <span>Back</span>
+            </button>
+          )}
         </>
       )}
     </div>
   );
-}
-
-// ─── Utilities ───
-
-function formatFileSize(bytes: number): string {
-  if (bytes === 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(1024));
-  return `${(bytes / Math.pow(1024, i)).toFixed(i > 1 ? 1 : 0)} ${units[i]} `;
-}
-
-function formatDuration(ms: number): string {
-  if (ms === 0) return "0s";
-  const totalSecs = Math.floor(ms / 1000);
-  const hours = Math.floor(totalSecs / 3600);
-  const mins = Math.floor((totalSecs % 3600) / 60);
-  const secs = totalSecs % 60;
-  if (hours > 0) return `${hours}h ${mins} m`;
-  if (mins > 0) return `${mins}m ${secs} s`;
-  return `${secs} s`;
 }
 
 export default function App() {

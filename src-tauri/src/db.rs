@@ -63,7 +63,6 @@ pub struct Clip {
     pub manual_order: i32,
     pub audio_envelope: Option<Vec<u8>>,
     pub lut_enabled: i32,
-    pub thumb_range_seconds: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -402,12 +401,6 @@ impl Database {
             }
             if !columns.contains(&"camera_angle".to_string()) {
                 conn.execute("ALTER TABLE clips ADD COLUMN camera_angle TEXT", [])?;
-            }
-            if !columns.contains(&"thumb_range_seconds".to_string()) {
-                conn.execute(
-                    "ALTER TABLE clips ADD COLUMN thumb_range_seconds INTEGER",
-                    [],
-                )?;
             }
 
             conn.execute_batch(
@@ -939,8 +932,7 @@ impl Database {
                 movement TEXT,
                 manual_order INTEGER NOT NULL DEFAULT 0,
                 audio_envelope BLOB,
-                lut_enabled INTEGER NOT NULL DEFAULT 0,
-                thumb_range_seconds INTEGER,
+                lut_enabled INTEGER NOT NULL DEFAULT 0
                 FOREIGN KEY (project_id) REFERENCES projects(id)
             );
 
@@ -1306,7 +1298,11 @@ impl Database {
         }
     }
 
-    pub fn touch_review_core_project(&self, project_id: &str, last_opened_at: &str) -> SqlResult<()> {
+    pub fn touch_review_core_project(
+        &self,
+        project_id: &str,
+        last_opened_at: &str,
+    ) -> SqlResult<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "UPDATE review_core_projects
@@ -1947,7 +1943,10 @@ impl Database {
         Ok(rows)
     }
 
-    pub fn get_review_core_frame_note(&self, note_id: &str) -> SqlResult<Option<ReviewCoreFrameNote>> {
+    pub fn get_review_core_frame_note(
+        &self,
+        note_id: &str,
+    ) -> SqlResult<Option<ReviewCoreFrameNote>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT id, project_id, asset_id, asset_version_id, timestamp_ms, frame_number, title,
@@ -2250,8 +2249,9 @@ impl Database {
                 id, project_id, root_id, rel_path, filename, file_path, size_bytes, created_at, duration_ms, fps, width, height,
                 video_codec, video_bitrate, format_name, audio_codec, audio_channels, audio_sample_rate,
                 camera_iso, camera_white_balance, camera_lens, camera_aperture, camera_angle, audio_summary, timecode, status, rating, flag, notes,
-                shot_size, movement, manual_order, audio_envelope, lut_enabled, thumb_range_seconds
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35)
+                shot_size, movement, manual_order, audio_envelope, lut_enabled
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34)
+
             ON CONFLICT(id) DO UPDATE SET
                 project_id = excluded.project_id,
                 root_id = excluded.root_id,
@@ -2284,8 +2284,8 @@ impl Database {
                 shot_size = excluded.shot_size,
                 movement = excluded.movement,
                 manual_order = excluded.manual_order,
-                audio_envelope = excluded.audio_envelope,
-                thumb_range_seconds = excluded.thumb_range_seconds
+                audio_envelope = excluded.audio_envelope
+
                 -- intentionally excluding lut_enabled from UPDATE to prevent rescans from overwriting it",
             params![
                 clip.id,
@@ -2322,7 +2322,6 @@ impl Database {
                 clip.manual_order,
                 clip.audio_envelope,
                 clip.lut_enabled,
-                clip.thumb_range_seconds,
             ],
         )?;
         Ok(())
@@ -2334,7 +2333,8 @@ impl Database {
             "SELECT id, project_id, root_id, rel_path, filename, file_path, size_bytes, created_at, duration_ms, fps, width, height,
                     video_codec, video_bitrate, format_name, audio_codec, audio_channels, audio_sample_rate,
                     camera_iso, camera_white_balance, camera_lens, camera_aperture, camera_angle, audio_summary, timecode, status, rating, flag, notes,
-                    shot_size, movement, manual_order, audio_envelope, lut_enabled, thumb_range_seconds
+                    shot_size, movement, manual_order, audio_envelope, lut_enabled
+
              FROM clips WHERE id = ?1",
         )?;
         let mut rows = stmt.query_map(params![id], |row| {
@@ -2373,7 +2373,6 @@ impl Database {
                 manual_order: row.get(31)?,
                 audio_envelope: row.get(32)?,
                 lut_enabled: row.get(33)?,
-                thumb_range_seconds: row.get(34)?,
             })
         })?;
         match rows.next() {
@@ -2389,7 +2388,8 @@ impl Database {
             "SELECT id, project_id, root_id, rel_path, filename, file_path, size_bytes, created_at, duration_ms, fps, width, height,
                     video_codec, video_bitrate, format_name, audio_codec, audio_channels, audio_sample_rate,
                     camera_iso, camera_white_balance, camera_lens, camera_aperture, camera_angle, audio_summary, timecode, status, rating, flag, notes,
-                    shot_size, movement, manual_order, audio_envelope, lut_enabled, thumb_range_seconds
+                    shot_size, movement, manual_order, audio_envelope, lut_enabled
+
              FROM clips WHERE project_id = ?1 ORDER BY filename",
         )?;
         let clips = stmt
@@ -2429,7 +2429,6 @@ impl Database {
                     manual_order: row.get(31)?,
                     audio_envelope: row.get(32)?,
                     lut_enabled: row.get(33)?,
-                    thumb_range_seconds: row.get(34)?,
                 })
             })?
             .filter_map(|r| r.ok())
@@ -2444,7 +2443,8 @@ impl Database {
             "SELECT id, project_id, root_id, rel_path, filename, file_path, size_bytes, created_at, duration_ms, fps, width, height,
                     video_codec, video_bitrate, format_name, audio_codec, audio_channels, audio_sample_rate,
                     camera_iso, camera_white_balance, camera_lens, camera_aperture, camera_angle, audio_summary, timecode, status, rating, flag, notes,
-                    shot_size, movement, manual_order, audio_envelope, lut_enabled, thumb_range_seconds
+                    shot_size, movement, manual_order, audio_envelope, lut_enabled
+
              FROM clips WHERE id IN ({})",
             placeholders
         );
@@ -2486,7 +2486,6 @@ impl Database {
                     manual_order: row.get(31)?,
                     audio_envelope: row.get(32)?,
                     lut_enabled: row.get(33)?,
-                    thumb_range_seconds: row.get(34)?,
                 })
             })?
             .filter_map(|r| r.ok())
@@ -2551,15 +2550,6 @@ impl Database {
         Ok(())
     }
 
-    pub fn update_clip_thumb_range(&self, clip_id: &str, range_seconds: u32) -> SqlResult<()> {
-        let conn = self.conn.lock().unwrap();
-        conn.execute(
-            "UPDATE clips SET thumb_range_seconds = ?1 WHERE id = ?2",
-            params![range_seconds, clip_id],
-        )?;
-        Ok(())
-    }
-
     pub fn update_audio_envelope(&self, clip_id: &str, envelope: &[u8]) -> SqlResult<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
@@ -2578,13 +2568,13 @@ impl Database {
         Ok(())
     }
 
-    // pub fn delete_thumbnails_for_clip(&self, clip_id: &str) -> SqlResult<usize> {
-    //     let conn = self.conn.lock().unwrap();
-    //     conn.execute(
-    //         "DELETE FROM thumbnails WHERE clip_id = ?1",
-    //         params![clip_id],
-    //     )
-    // }
+    pub fn delete_thumbnails_for_clip(&self, clip_id: &str) -> SqlResult<usize> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM thumbnails WHERE clip_id = ?1",
+            params![clip_id],
+        )
+    }
 
     pub fn get_thumbnails(&self, clip_id: &str) -> SqlResult<Vec<Thumbnail>> {
         let conn = self.conn.lock().unwrap();
@@ -2601,6 +2591,7 @@ impl Database {
                 })
             })?
             .filter_map(|r| r.ok())
+            .filter(|thumb| Path::new(&thumb.file_path).exists())
             .collect();
         Ok(thumbs)
     }
@@ -2693,7 +2684,8 @@ impl Database {
             "SELECT c.id, c.project_id, c.root_id, c.rel_path, c.filename, c.file_path, c.size_bytes, c.created_at, c.duration_ms, c.fps, c.width, c.height,
                     c.video_codec, c.video_bitrate, c.format_name, c.audio_codec, c.audio_channels, c.audio_sample_rate,
                     c.camera_iso, c.camera_white_balance, c.camera_lens, c.camera_aperture, c.camera_angle, c.audio_summary, c.timecode, c.status, c.rating, c.flag, c.notes,
-                    c.shot_size, c.movement, c.manual_order, c.audio_envelope, c.lut_enabled, c.thumb_range_seconds
+                    c.shot_size, c.movement, c.manual_order, c.audio_envelope, c.lut_enabled
+
              FROM block_clips bc
              JOIN clips c ON c.id = bc.clip_id
              WHERE bc.block_id = ?1
@@ -2736,7 +2728,6 @@ impl Database {
                     manual_order: row.get(31)?,
                     audio_envelope: row.get(32)?,
                     lut_enabled: row.get(33)?,
-                    thumb_range_seconds: row.get(34)?,
                 })
             })?
             .filter_map(|r| r.ok())

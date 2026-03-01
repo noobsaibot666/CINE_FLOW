@@ -189,7 +189,6 @@ mod tests {
             manual_order: 0,
             audio_envelope: None,
             lut_enabled: 0,
-            thumb_range_seconds: None,
         }
     }
 

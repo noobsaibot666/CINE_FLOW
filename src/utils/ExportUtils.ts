@@ -1,19 +1,27 @@
 import { save } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { jsPDF } from "jspdf";
-import { Clip } from "../types";
+import { Clip, Thumbnail } from "../types";
 import { drawFooter, drawHeader } from "./ExportBranding";
 import { formatDuration, formatCodecLabel, getAudioBadge } from "./clipMetadata";
+import { getDisplayedThumbsForClip } from "./shotPlannerThumbnails";
 
 interface ExportOptions {
   projectName: string;
   clips: Clip[];
+  thumbnailsByClipId: Record<string, Thumbnail[]>;
   thumbnailCache: Record<string, string>;
   thumbCount: number;
+  cacheKeyContext?: string;
   projectLutHash?: string | null;
   brandName?: string;
   appVersion?: string;
   onWarning?: (message: string) => void;
+}
+
+interface MosaicAsset {
+  clip: Clip;
+  dataUrl: string;
 }
 
 function assetUrlToPath(url: string): string {
@@ -40,12 +48,62 @@ async function readThumbAsDataUrl(urlOrPath: string): Promise<string | null> {
   }
 }
 
+async function loadImage(dataUrl: string): Promise<HTMLImageElement> {
+  const img = new Image();
+  await new Promise<void>((resolve, reject) => {
+    img.onload = () => resolve();
+    img.onerror = () => reject(new Error("image load failed"));
+    img.src = dataUrl;
+  });
+  return img;
+}
+
+async function collectMosaicAssets(
+  clips: Clip[],
+  thumbnailsByClipId: Record<string, Thumbnail[]>,
+  thumbnailCache: Record<string, string>,
+  thumbCount: number,
+  onWarning?: (message: string) => void,
+  cacheKeyContext?: string,
+): Promise<MosaicAsset[]> {
+  const assets: MosaicAsset[] = [];
+  let skipped = 0;
+
+  for (const clip of clips) {
+    const firstThumb = getDisplayedThumbsForClip({
+      clipId: clip.id,
+      thumbnails: thumbnailsByClipId[clip.id] ?? [],
+      thumbnailCache,
+      thumbCount,
+      cacheKeyContext,
+    })[0]?.src;
+    if (!firstThumb) {
+      skipped += 1;
+      continue;
+    }
+    const dataUrl = await readThumbAsDataUrl(firstThumb);
+    if (!dataUrl) {
+      skipped += 1;
+      continue;
+    }
+    assets.push({ clip, dataUrl });
+  }
+
+  if (skipped > 0) {
+    onWarning?.("Some clips had no thumbnails yet and were skipped.");
+  }
+
+  return assets;
+}
+
 export async function exportPdf(options: ExportOptions): Promise<boolean> {
   const {
     projectName,
     clips,
+    thumbnailsByClipId,
     thumbnailCache,
     thumbCount,
+    cacheKeyContext,
     projectLutHash,
     brandName,
     appVersion = "unknown",
@@ -118,17 +176,22 @@ export async function exportPdf(options: ExportOptions): Promise<boolean> {
       const clip = pageClips[ci];
       const rowY = clipAreaTop + ci * clipRowH;
       const thumbStripH = clipRowH * 0.65;
-      const thumbW = usableW / thumbCount;
+      const displayedThumbs = getDisplayedThumbsForClip({
+        clipId: clip.id,
+        thumbnails: thumbnailsByClipId[clip.id] ?? [],
+        thumbnailCache,
+        thumbCount,
+        cacheKeyContext,
+      });
+      const thumbW = usableW / Math.max(displayedThumbs.length, 1);
 
       pdf.setFillColor(20, 20, 20);
       pdf.rect(margin, rowY, usableW, thumbStripH, "F");
 
-      for (let ti = 0; ti < thumbCount; ti++) {
-        const cacheKey = `${clip.id}_${ti}`;
-        let thumbPath = thumbnailCache[cacheKey];
-        if (!thumbPath) continue;
+      for (let ti = 0; ti < displayedThumbs.length; ti++) {
+        let thumbPath = displayedThumbs[ti].src;
 
-        if (projectLutHash && clip.lut_enabled === 1) {
+        if (!thumbPath.startsWith("data:") && projectLutHash && clip.lut_enabled === 1) {
           const parts = thumbPath.split("/");
           const filename = parts.pop();
           const newFilename = `lut_${projectLutHash}_${filename}`;
@@ -213,8 +276,10 @@ export async function exportImage(options: ExportOptions): Promise<boolean> {
   const {
     projectName,
     clips,
+    thumbnailsByClipId,
     thumbnailCache,
     thumbCount,
+    cacheKeyContext,
     projectLutHash,
     brandName,
     appVersion = "unknown",
@@ -285,13 +350,20 @@ export async function exportImage(options: ExportOptions): Promise<boolean> {
   for (let ci = 0; ci < clips.length; ci++) {
     const clip = clips[ci];
     const rowY = headerH + ci * rowH;
+    const displayedThumbs = getDisplayedThumbsForClip({
+      clipId: clip.id,
+      thumbnails: thumbnailsByClipId[clip.id] ?? [],
+      thumbnailCache,
+      thumbCount,
+      cacheKeyContext,
+    });
+    const displayedCount = Math.max(displayedThumbs.length, 1);
+    const rowThumbW = stripW / displayedCount;
 
-    for (let ti = 0; ti < thumbCount; ti++) {
-      const cacheKey = `${clip.id}_${ti}`;
-      let thumbPath = thumbnailCache[cacheKey];
-      if (!thumbPath) continue;
+    for (let ti = 0; ti < displayedThumbs.length; ti++) {
+      let thumbPath = displayedThumbs[ti].src;
 
-      if (projectLutHash && clip.lut_enabled === 1) {
+      if (!thumbPath.startsWith("data:") && projectLutHash && clip.lut_enabled === 1) {
         const parts = thumbPath.split("/");
         const filename = parts.pop();
         thumbPath = [...parts, `lut_${projectLutHash}_${filename}`].join("/");
@@ -306,11 +378,11 @@ export async function exportImage(options: ExportOptions): Promise<boolean> {
           img.onerror = () => reject(new Error("thumbnail draw failed"));
           img.src = dataUrl;
         });
-        const x = marginX + ti * thumbW;
-        ctx.drawImage(img, x, rowY, thumbW - 2, thumbH);
+        const x = marginX + ti * rowThumbW;
+        ctx.drawImage(img, x, rowY, rowThumbW - 2, thumbH);
       } catch {
         ctx.fillStyle = "#222";
-        ctx.fillRect(marginX + ti * thumbW, rowY, thumbW - 2, thumbH);
+        ctx.fillRect(marginX + ti * rowThumbW, rowY, rowThumbW - 2, thumbH);
       }
     }
 
@@ -375,6 +447,134 @@ export async function exportImage(options: ExportOptions): Promise<boolean> {
 
   await invoke("save_image_data_url", { path: filePath, dataUrl: canvas.toDataURL("image/jpeg", 0.92) });
   return true;
+}
+
+export async function exportMosaicImage(options: ExportOptions): Promise<boolean> {
+  const { projectName, clips, thumbnailsByClipId, thumbnailCache, thumbCount, onWarning, cacheKeyContext } = options;
+  const assets = await collectMosaicAssets(clips, thumbnailsByClipId, thumbnailCache, thumbCount, onWarning, cacheKeyContext);
+  if (assets.length === 0) {
+    onWarning?.("Some clips had no thumbnails yet and were skipped.");
+    return false;
+  }
+
+  const pages = chunkArray(assets, 25);
+  for (let pageIndex = 0; pageIndex < pages.length; pageIndex += 1) {
+    const filePath = await save({
+      filters: [{ name: "Image", extensions: ["jpeg"] }],
+      defaultPath: `${projectName}_Mosaic${pages.length > 1 ? `_p${pageIndex + 1}` : ""}.jpeg`,
+    });
+    if (!filePath) return false;
+
+    const pageAssets = pages[pageIndex];
+    const grid = getMosaicGrid(pageAssets.length);
+    const canvas = document.createElement("canvas");
+    canvas.width = 2048;
+    canvas.height = 2048;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("Canvas context unavailable");
+
+    ctx.fillStyle = "#111215";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    const gap = 20;
+    const margin = 28;
+    const tileSize = Math.floor((canvas.width - margin * 2 - gap * (grid - 1)) / grid);
+
+    for (let index = 0; index < pageAssets.length; index += 1) {
+      const { dataUrl } = pageAssets[index];
+      const img = await loadImage(dataUrl);
+      const column = index % grid;
+      const row = Math.floor(index / grid);
+      const x = margin + column * (tileSize + gap);
+      const y = margin + row * (tileSize + gap);
+      drawSquareTile(ctx, img, x, y, tileSize);
+    }
+
+    await invoke("save_image_data_url", { path: filePath, dataUrl: canvas.toDataURL("image/jpeg", 0.92) });
+  }
+  return true;
+}
+
+export async function exportMosaicPdf(options: ExportOptions): Promise<boolean> {
+  const { projectName, clips, thumbnailsByClipId, thumbnailCache, thumbCount, onWarning, cacheKeyContext } = options;
+  const filePath = await save({
+    filters: [{ name: "PDF Document", extensions: ["pdf"] }],
+    defaultPath: `${projectName}_Mosaic.pdf`,
+  });
+  if (!filePath) return false;
+
+  const assets = await collectMosaicAssets(clips, thumbnailsByClipId, thumbnailCache, thumbCount, onWarning, cacheKeyContext);
+  if (assets.length === 0) {
+    onWarning?.("Some clips had no thumbnails yet and were skipped.");
+    return false;
+  }
+
+  const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: [210, 210] });
+  const pageW = 210;
+  const pageH = 210;
+  const margin = 10;
+  const gap = 3;
+  const pages = chunkArray(assets, 25);
+
+  for (let pageIndex = 0; pageIndex < pages.length; pageIndex += 1) {
+    if (pageIndex > 0) pdf.addPage();
+    pdf.setFillColor(17, 18, 21);
+    pdf.rect(0, 0, pageW, pageH, "F");
+
+    const pageAssets = pages[pageIndex];
+    const grid = getMosaicGrid(pageAssets.length);
+    const tileSize = (pageW - margin * 2 - gap * (grid - 1)) / grid;
+    for (let index = 0; index < pageAssets.length; index += 1) {
+      const column = index % grid;
+      const row = Math.floor(index / grid);
+      const x = margin + column * (tileSize + gap);
+      const y = margin + row * (tileSize + gap);
+      const { dataUrl } = pageAssets[index];
+      try {
+        const img = await loadImage(dataUrl);
+        const square = cropToSquare(img);
+        pdf.addImage(square.toDataURL("image/jpeg", 0.92), "JPEG", x, y, tileSize, tileSize, undefined, "FAST");
+      } catch (error) {
+        console.warn("Failed to add mosaic thumb to PDF", error);
+      }
+    }
+  }
+
+  await invoke("save_image_data_url", { path: filePath, dataUrl: pdf.output("datauristring") });
+  return true;
+}
+
+function cropToSquare(img: HTMLImageElement): HTMLCanvasElement {
+  const size = Math.min(img.width, img.height);
+  const sx = (img.width - size) / 2;
+  const sy = (img.height - size) / 2;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("square crop context unavailable");
+  ctx.drawImage(img, sx, sy, size, size, 0, 0, size, size);
+  return canvas;
+}
+
+function drawSquareTile(
+  ctx: CanvasRenderingContext2D,
+  img: HTMLImageElement,
+  x: number,
+  y: number,
+  size: number,
+) {
+  const square = cropToSquare(img);
+  ctx.fillStyle = "#17181c";
+  ctx.fillRect(x, y, size, size);
+  ctx.drawImage(square, x, y, size, size);
+}
+
+function getMosaicGrid(count: number): number {
+  if (count <= 4) return 2;
+  if (count <= 9) return 3;
+  if (count <= 16) return 4;
+  return 5;
 }
 
 function chunkArray<T>(arr: T[], size: number): T[][] {

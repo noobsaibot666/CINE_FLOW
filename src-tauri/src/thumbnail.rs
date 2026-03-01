@@ -11,33 +11,22 @@ const MAX_WIDTH: u32 = 640;
 const BLACK_THRESHOLD: f64 = 15.0;
 
 /// Calculate smart sampling timestamps for a clip
-pub fn calculate_timestamps(duration_ms: u64, count: u32, range_secs: Option<u32>) -> Vec<u64> {
+pub fn calculate_timestamps(duration_ms: u64, count: u32) -> Vec<u64> {
     let duration_secs = duration_ms as f64 / 1000.0;
-    let sampling_duration = match range_secs {
-        Some(r) if r > 0 => (r as f64).min(duration_secs),
-        _ => duration_secs,
-    };
-
-    if sampling_duration <= SKIP_SECONDS * 2.0 {
-        // Very short sampling window or clip — just sample the middle of it
-        return vec![(sampling_duration * 500.0) as u64];
-    }
-
     let usable_start = SKIP_SECONDS;
-    let usable_duration = (sampling_duration - usable_start * 2.0).max(0.1);
+    let usable_end = (duration_secs - usable_start).max(usable_start);
+    let usable_duration = (usable_end - usable_start).max(0.1);
 
     if count <= 1 {
-        return vec![(sampling_duration * 500.0) as u64];
+        return vec![(((usable_start + usable_end) * 0.5) * 1000.0) as u64];
     }
 
     let mut timestamps = Vec::new();
     for i in 0..count {
-        // Evenly space samples across the usable duration
         let pos = 0.1 + (0.8 * (i as f64 / (count - 1) as f64));
         let ts = usable_start + (usable_duration * pos);
         timestamps.push((ts * 1000.0) as u64);
     }
-
     timestamps
 }
 

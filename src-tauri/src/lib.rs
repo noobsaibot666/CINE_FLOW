@@ -130,6 +130,7 @@ pub fn run() {
             commands::rename_scene_block,
             commands::merge_scene_blocks,
             commands::split_scene_block,
+            commands::promote_clip_to_block,
             commands::set_project_lut,
             commands::remove_project_lut,
             commands::set_clip_lut_enabled,

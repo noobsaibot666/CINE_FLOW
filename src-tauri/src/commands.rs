@@ -7,7 +7,7 @@ use crate::db::{
     VerificationItem, VerificationJob, VerificationQueueItem,
 };
 use crate::ffprobe;
-use crate::jobs::JobInfo;
+use crate::jobs::{JobInfo, JobStatus};
 use crate::review_core;
 use crate::scanner;
 use crate::thumbnail;
@@ -211,6 +211,9 @@ pub async fn get_clips(
 #[tauri::command]
 pub async fn extract_thumbnails(
     project_id: String,
+    thumb_count: Option<u32>,
+    clip_id: Option<String>,
+
     app: AppHandle,
     state: State<'_, Arc<AppState>>,
 ) -> Result<String, String> {
@@ -218,172 +221,192 @@ pub async fn extract_thumbnails(
         .perf_log
         .start("extract_thumbnails", Some(project_id.clone()));
     let db = &state.db;
-    let (job_id, cancel_flag) = state.job_manager.create_job("thumbnails", None);
+    let job_id = format!("thumbnails:{}", project_id);
+
+    // Cancel existing thumbnail job for this project if it exists
+    if let Some(existing) = state.job_manager.get_job(&job_id) {
+        if existing.status == JobStatus::Running || existing.status == JobStatus::Queued {
+            state.job_manager.cancel_job(&job_id);
+            // Give it a tiny bit of time to settle if needed, but usually create_job overwrites the record anyway
+        }
+    }
+
+    let (job_id, cancel_flag) = state.job_manager.create_job("thumbnails", Some(job_id));
     state
         .job_manager
         .mark_running(&job_id, "Thumbnail extraction started");
     emit_job_state(&app, &state.job_manager, &job_id);
 
-    let clips = db
+    let mut clips = db
         .get_clips(&project_id)
         .map_err(|e| format!("Failed to get clips: {}", e))?;
+    if let Some(target_clip_id) = clip_id.as_ref() {
+        clips.retain(|clip| clip.id == *target_clip_id);
+    }
 
     let total_clips = clips.len();
-    let semaphore = Arc::new(Semaphore::new(10)); // Increased clip concurrency to 10
+    let state_clone = state.inner().clone();
+    let app_clone = app.clone();
+    let job_id_clone = job_id.clone();
+    let project_id_clone = project_id.clone();
 
-    let mut handles = Vec::new();
+    tokio::spawn(async move {
+        let semaphore = Arc::new(Semaphore::new(10));
+        let mut handles = Vec::new();
 
-    for (clip_idx, clip) in clips.into_iter().enumerate() {
-        if cancel_flag.load(Ordering::Relaxed) {
-            break;
-        }
-
-        let project_id_clone = project_id.clone();
-        let app_clone = app.clone();
-        let state_clone = state.inner().clone();
-        let semaphore_clone = semaphore.clone();
-        let job_id_clone = job_id.clone();
-        let cache_dir_clone = state.cache_dir.clone();
-        let cancel_flag_clone = cancel_flag.clone();
-
-        let handle = tokio::spawn(async move {
-            if clip.status == "fail" || clip.duration_ms == 0 {
-                let _ = app_clone.emit(
-                    "thumbnail-progress",
-                    ThumbnailProgress {
-                        project_id: project_id_clone,
-                        clip_id: clip.id.clone(),
-                        clip_index: clip_idx,
-                        total_clips,
-                        status: "skipped".to_string(),
-                        thumbnails: vec![],
-                    },
-                );
-                return;
+        for (clip_idx, clip) in clips.into_iter().enumerate() {
+            if cancel_flag.load(Ordering::Relaxed) {
+                break;
             }
 
-            let _permit = semaphore_clone.acquire_owned().await.ok();
+            let project_id_inner = project_id_clone.clone();
+            let app_inner = app_clone.clone();
+            let state_inner = state_clone.clone();
+            let semaphore_inner = semaphore.clone();
+            let job_id_inner = job_id_clone.clone();
+            let cache_dir_clone = state_inner.cache_dir.clone();
+            let cancel_flag_clone = cancel_flag.clone();
 
-            // Extract 7 thumbnails
-            let timestamps =
-                thumbnail::calculate_timestamps(clip.duration_ms, 7, clip.thumb_range_seconds);
-            let clip_cache_dir = format!("{}/{}", cache_dir_clone, clip.id);
-
-            // Only create if missing, don't wipe everything!
-            std::fs::create_dir_all(&clip_cache_dir).ok();
-
-            let mut thumb_results: Vec<Thumbnail> = Vec::new();
-
-            for (idx, &ts) in timestamps.iter().enumerate() {
-                let thumb_ext = if Path::new(&clip.file_path)
-                    .extension()
-                    .map(|e| e.to_string_lossy().eq_ignore_ascii_case("braw"))
-                    .unwrap_or(false)
-                {
-                    "png"
-                } else {
-                    "jpg"
-                };
-                let output_path = format!("{}/thumb_{}.{}", clip_cache_dir, idx, thumb_ext);
-
-                // PERFORMANCE: Check if thumbnail already exists and is valid
-                let exists = Path::new(&output_path).exists();
-                if exists {
-                    let thumb = Thumbnail {
-                        clip_id: clip.id.clone(),
-                        index: idx as u32,
-                        timestamp_ms: ts, // Best effort
-                        file_path: output_path.clone(),
-                    };
-                    thumb_results.push(thumb);
-                    continue;
+            let handle = tokio::spawn(async move {
+                if clip.status == "fail" || clip.duration_ms == 0 {
+                    let _ = app_inner.emit(
+                        "thumbnail-progress",
+                        ThumbnailProgress {
+                            project_id: project_id_inner,
+                            clip_id: clip.id.clone(),
+                            clip_index: clip_idx,
+                            total_clips,
+                            status: "skipped".to_string(),
+                            thumbnails: vec![],
+                        },
+                    );
+                    return;
                 }
 
-                // Run blocking FFmpeg on a dedicated thread
-                let file_path = clip.file_path.clone();
-                let output_path_clone = output_path.clone();
-                let duration_ms = clip.duration_ms;
+                let _permit = semaphore_inner.acquire_owned().await.ok();
 
-                let cancel_flag_inner = cancel_flag_clone.clone();
-                let result = tokio::task::spawn_blocking(move || {
-                    thumbnail::extract_with_fallback(
-                        &file_path,
-                        &output_path_clone,
-                        ts,
-                        duration_ms,
-                        Some(&cancel_flag_inner),
-                    )
-                })
-                .await;
+                let thumb_target = thumb_count.unwrap_or(7);
 
-                match result {
-                    Ok(Ok(actual_ts)) => {
+                let timestamps = thumbnail::calculate_timestamps(clip.duration_ms, thumb_target);
+                let clip_cache_dir =
+                    format!("{}/{}/count_{}", cache_dir_clone, clip.id, thumb_target);
+
+                let _ = state_inner.db.delete_thumbnails_for_clip(&clip.id);
+                std::fs::create_dir_all(&clip_cache_dir).ok();
+
+                let mut thumb_results: Vec<Thumbnail> = Vec::new();
+
+                for (idx, &ts) in timestamps.iter().enumerate() {
+                    let thumb_ext = if Path::new(&clip.file_path)
+                        .extension()
+                        .map(|e| e.to_string_lossy().eq_ignore_ascii_case("braw"))
+                        .unwrap_or(false)
+                    {
+                        "png"
+                    } else {
+                        "jpg"
+                    };
+                    let output_path = format!("{}/thumb_{}.{}", clip_cache_dir, idx, thumb_ext);
+
+                    if Path::new(&output_path).exists() {
                         let thumb = Thumbnail {
                             clip_id: clip.id.clone(),
                             index: idx as u32,
-                            timestamp_ms: actual_ts,
-                            file_path: output_path,
+                            timestamp_ms: ts,
+                            file_path: output_path.clone(),
                         };
-                        let _ = state_clone.db.upsert_thumbnail(&thumb);
+                        let _ = state_inner.db.upsert_thumbnail(&thumb);
                         thumb_results.push(thumb);
+                        continue;
                     }
-                    Ok(Err(e)) => {
-                        eprintln!(
-                            "Thumbnail extraction failed for clip {}: {}",
-                            clip.file_path, e
-                        );
-                    }
-                    Err(e) => {
-                        eprintln!(
-                            "Thumbnail extraction task panicked for clip {}: {}",
-                            clip.file_path, e
-                        );
+
+                    let file_path = clip.file_path.clone();
+                    let output_path_clone = output_path.clone();
+                    let duration_ms = clip.duration_ms;
+
+                    let cancel_flag_inner = cancel_flag_clone.clone();
+                    let result = tokio::task::spawn_blocking(move || {
+                        thumbnail::extract_with_fallback(
+                            &file_path,
+                            &output_path_clone,
+                            ts,
+                            duration_ms,
+                            Some(&cancel_flag_inner),
+                        )
+                    })
+                    .await;
+
+                    match result {
+                        Ok(Ok(actual_ts)) => {
+                            let thumb = Thumbnail {
+                                clip_id: clip.id.clone(),
+                                index: idx as u32,
+                                timestamp_ms: actual_ts,
+                                file_path: output_path,
+                            };
+                            let _ = state_inner.db.upsert_thumbnail(&thumb);
+                            thumb_results.push(thumb);
+                        }
+                        Ok(Err(e)) => {
+                            eprintln!(
+                                "Thumbnail extraction failed for clip {}: {}",
+                                clip.file_path, e
+                            );
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "Thumbnail extraction task panicked for clip {}: {}",
+                                clip.file_path, e
+                            );
+                        }
                     }
                 }
-            }
 
-            let _ = app_clone.emit(
-                "thumbnail-progress",
-                ThumbnailProgress {
-                    project_id: project_id_clone,
-                    clip_id: clip.id.clone(),
-                    clip_index: clip_idx,
-                    total_clips,
-                    status: "done".to_string(),
-                    thumbnails: thumb_results,
-                },
-            );
+                let _ = app_inner.emit(
+                    "thumbnail-progress",
+                    ThumbnailProgress {
+                        project_id: project_id_inner,
+                        clip_id: clip.id.clone(),
+                        clip_index: clip_idx,
+                        total_clips,
+                        status: "done".to_string(),
+                        thumbnails: thumb_results,
+                    },
+                );
 
-            state_clone.job_manager.update_progress(
-                &job_id_clone,
-                (clip_idx + 1) as f32 / total_clips.max(1) as f32,
-                Some(format!("Processed {}/{} clips", clip_idx + 1, total_clips)),
-            );
-            emit_job_state(&app_clone, &state_clone.job_manager, &job_id_clone);
-        });
+                state_inner.job_manager.update_progress(
+                    &job_id_inner,
+                    (clip_idx + 1) as f32 / total_clips.max(1) as f32,
+                    Some(format!("Processed {}/{} clips", clip_idx + 1, total_clips)),
+                );
+                emit_job_state(&app_inner, &state_inner.job_manager, &job_id_inner);
+            });
 
-        handles.push(handle);
-    }
+            handles.push(handle);
+        }
 
-    // Wait for all clips to complete
-    for handle in handles {
-        let _ = handle.await;
-    }
+        for handle in handles {
+            let _ = handle.await;
+        }
 
-    let _ = app.emit(
-        "thumbnail-complete",
-        serde_json::json!({
-            "project_id": project_id,
-        }),
-    );
+        let _ = app_clone.emit(
+            "thumbnail-complete",
+            serde_json::json!({
+                "project_id": project_id_clone,
+                "clip_id": clip_id,
+                "thumb_count": thumb_count,
+            }),
+        );
 
-    if !crate::jobs::JobManager::is_cancelled(&cancel_flag) {
-        state
-            .job_manager
-            .mark_done(&job_id, "Thumbnail extraction complete");
-    }
-    emit_job_state(&app, &state.job_manager, &job_id);
-    state.perf_log.end(&perf_id, "ok", None);
+        if !crate::jobs::JobManager::is_cancelled(&cancel_flag) {
+            state_clone
+                .job_manager
+                .mark_done(&job_id_clone, "Thumbnail extraction complete");
+        }
+        emit_job_state(&app_clone, &state_clone.job_manager, &job_id_clone);
+        state_clone.perf_log.end(&perf_id, "ok", None);
+    });
+
     Ok(job_id)
 }
 
@@ -402,8 +425,18 @@ pub async fn get_project(
 pub async fn read_thumbnail(path: String) -> Result<String, String> {
     let bytes =
         std::fs::read(&path).map_err(|e| format!("Failed to read thumbnail at {}: {}", path, e))?;
+    let mime = match std::path::Path::new(&path)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("png") => "image/png",
+        Some("webp") => "image/webp",
+        _ => "image/jpeg",
+    };
     let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes);
-    Ok(format!("data:image/jpeg;base64,{}", b64))
+    Ok(format!("data:{};base64,{}", mime, b64))
 }
 
 #[tauri::command]
@@ -1646,7 +1679,6 @@ pub async fn update_clip_metadata(
     movement: Option<String>,
     manual_order: Option<i32>,
     lut_enabled: Option<i32>,
-    thumb_range_seconds: Option<u32>,
     state: State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
     let db = &state.db;
@@ -1661,16 +1693,11 @@ pub async fn update_clip_metadata(
         lut_enabled,
     )
     .map_err(|e| format!("Failed to update clip metadata: {}", e))?;
+    // Invalidate cache for this clip to trigger re-extraction
+    let cache_dir = format!("{}/{}", state.cache_dir, clip_id);
+    let _ = std::fs::remove_dir_all(&cache_dir);
+    let _ = std::fs::create_dir_all(&cache_dir);
 
-    if let Some(range) = thumb_range_seconds {
-        db.update_clip_thumb_range(&clip_id, range)
-            .map_err(|e| format!("Failed to update clip thumb range: {}", e))?;
-
-        // Invalidate cache for this clip to trigger re-extraction
-        let cache_dir = format!("{}/{}", state.cache_dir, clip_id);
-        let _ = std::fs::remove_dir_all(&cache_dir);
-        let _ = std::fs::create_dir_all(&cache_dir);
-    }
     Ok(())
 }
 
@@ -2003,6 +2030,15 @@ pub async fn split_scene_block(
         .map_err(|e| e.to_string())?;
     db.refresh_scene_block_stats(&block_id)
         .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn promote_clip_to_block(
+    _project_id: String,
+    _clip_id: String,
+    _state: State<'_, Arc<AppState>>,
+) -> Result<(), String> {
     Ok(())
 }
 
@@ -2597,7 +2633,10 @@ pub async fn review_core_list_assets_with_versions(
     project_id: String,
     state: State<'_, Arc<AppState>>,
 ) -> Result<Vec<ReviewCoreAssetWithVersions>, String> {
-    let assets = state.db.list_assets(&project_id).map_err(|e| e.to_string())?;
+    let assets = state
+        .db
+        .list_assets(&project_id)
+        .map_err(|e| e.to_string())?;
     let mut payload = Vec::with_capacity(assets.len());
     for asset in assets {
         let versions = state
@@ -2900,8 +2939,9 @@ pub async fn review_core_extract_frame(
         asset.project_id, asset.id, version.version_number, note_id
     );
     let frame_key = format!("{}/frame.jpg", note_dir_key);
-    let frame_path = review_core::storage::safe_relative_path(&state.review_core_base_dir, &frame_key)
-        .map_err(fail_job)?;
+    let frame_path =
+        review_core::storage::safe_relative_path(&state.review_core_base_dir, &frame_key)
+            .map_err(fail_job)?;
     if let Some(parent) = frame_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| fail_job(e.to_string()))?;
     }
@@ -2909,13 +2949,18 @@ pub async fn review_core_extract_frame(
     let proxy_path = version
         .proxy_mp4_key
         .as_deref()
-        .and_then(|key| review_core::storage::safe_relative_path(&state.review_core_base_dir, key).ok())
+        .and_then(|key| {
+            review_core::storage::safe_relative_path(&state.review_core_base_dir, key).ok()
+        })
         .filter(|path| path.exists());
     let source_path = if let Some(proxy) = proxy_path {
         proxy
     } else {
-        review_core::storage::safe_relative_path(&state.review_core_base_dir, &version.original_file_key)
-            .map_err(fail_job)?
+        review_core::storage::safe_relative_path(
+            &state.review_core_base_dir,
+            &version.original_file_key,
+        )
+        .map_err(fail_job)?
     };
     if !source_path.exists() {
         return Err(fail_job(format!(
@@ -2927,10 +2972,7 @@ pub async fn review_core_extract_frame(
     state.job_manager.update_progress(
         &job_id,
         0.3,
-        Some(format!(
-            "Seeking frame at {} ms",
-            clamped_timestamp
-        )),
+        Some(format!("Seeking frame at {} ms", clamped_timestamp)),
     );
     emit_job_state(&app, &state.job_manager, &job_id);
 
@@ -3070,7 +3112,10 @@ pub async fn review_core_update_frame_note(
     };
 
     let next_vector_data = if let Some(raw) = updates.vector_data.as_deref() {
-        Some(normalize_frame_note_vector_data(raw, existing.timestamp_ms)?)
+        Some(normalize_frame_note_vector_data(
+            raw,
+            existing.timestamp_ms,
+        )?)
     } else {
         None
     };
@@ -3104,7 +3149,8 @@ pub async fn review_core_delete_frame_note(
         .get_review_core_frame_note(&note_id)
         .map_err(|e| e.to_string())?
         .ok_or("Frame note not found")?;
-    let frame_path = review_core::storage::safe_relative_path(&state.review_core_base_dir, &note.image_key)?;
+    let frame_path =
+        review_core::storage::safe_relative_path(&state.review_core_base_dir, &note.image_key)?;
     if let Some(parent) = frame_path.parent() {
         let _ = std::fs::remove_dir_all(parent);
     }
@@ -3511,9 +3557,7 @@ pub async fn review_core_share_export_download(
         .map_err(|e| e.to_string())?
         .ok_or("Asset version not found")?;
 
-    let download_key = version
-        .proxy_mp4_key
-        .ok_or("PROXY_NOT_READY".to_string())?;
+    let download_key = version.proxy_mp4_key.ok_or("PROXY_NOT_READY".to_string())?;
 
     let source_path =
         review_core::storage::safe_relative_path(&state.review_core_base_dir, &download_key)?;
@@ -3917,7 +3961,6 @@ fn build_clip_from_file(
                 manual_order: existing.as_ref().map(|c| c.manual_order).unwrap_or(0),
                 audio_envelope: existing.as_ref().and_then(|c| c.audio_envelope.clone()),
                 lut_enabled: existing.as_ref().map(|c| c.lut_enabled).unwrap_or(0),
-                thumb_range_seconds: None,
             }
         }
         Err(e) => {
@@ -3963,7 +4006,6 @@ fn build_clip_from_file(
                 manual_order: existing.as_ref().map(|c| c.manual_order).unwrap_or(0),
                 audio_envelope: existing.as_ref().and_then(|c| c.audio_envelope.clone()),
                 lut_enabled: existing.as_ref().map(|c| c.lut_enabled).unwrap_or(0),
-                thumb_range_seconds: None,
             }
         }
     }
@@ -4236,7 +4278,8 @@ fn frame_note_to_summary(
     state: &State<'_, Arc<AppState>>,
     note: ReviewCoreFrameNote,
 ) -> Result<ReviewCoreFrameNoteSummary, String> {
-    let image_path = review_core::storage::safe_relative_path(&state.review_core_base_dir, &note.image_key)?;
+    let image_path =
+        review_core::storage::safe_relative_path(&state.review_core_base_dir, &note.image_key)?;
     Ok(ReviewCoreFrameNoteSummary {
         id: note.id.clone(),
         project_id: note.project_id.clone(),
@@ -4822,7 +4865,6 @@ mod tests {
             manual_order: 0,
             audio_envelope: None,
             lut_enabled: 0,
-            thumb_range_seconds: None,
         }
     }
 
@@ -5196,7 +5238,9 @@ pub async fn purge_cache(state: State<'_, Arc<AppState>>) -> Result<serde_json::
 
 #[cfg(debug_assertions)]
 #[tauri::command]
-pub async fn dev_reset_all_data(state: State<'_, Arc<AppState>>) -> Result<serde_json::Value, String> {
+pub async fn dev_reset_all_data(
+    state: State<'_, Arc<AppState>>,
+) -> Result<serde_json::Value, String> {
     state.db.reset_file()?;
 
     if state.app_data_dir.exists() {

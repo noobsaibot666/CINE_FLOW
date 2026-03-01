@@ -33,7 +33,6 @@ export interface Clip {
     manual_order?: number | null;
     audio_envelope?: number[]; // Represented as byte array/number array from Rust Vec<u8>
     lut_enabled: number;
-    thumb_range_seconds?: number | null;
 }
 
 export interface Thumbnail {
