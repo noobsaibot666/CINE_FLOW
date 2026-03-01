@@ -45,6 +45,8 @@ import {
   ReviewCoreThumbnailInfo,
 } from "../types";
 
+const REVIEW_CORE_DEBUG = import.meta.env.DEV;
+
 interface ReviewCoreProps {
   projectId?: string | null;
   projectName?: string | null;
@@ -56,6 +58,7 @@ interface ReviewCoreProps {
 
 type ApprovalStatus = "draft" | "in_review" | "approved" | "rejected";
 type AnnotationTool = "pointer" | "pen" | "arrow" | "rect" | "circle" | "text";
+type ReviewCorePanelTab = "feedback" | "share";
 type NormalizedPoint = [number, number];
 type CommonAsset = ReviewCoreAsset | ReviewCoreSharedAssetSummary;
 type CommonVersion = ReviewCoreAssetVersion | ReviewCoreSharedVersionSummary;
@@ -137,6 +140,19 @@ interface FrameNoteVectorData {
   items: AnnotationItem[];
 }
 
+interface FeedbackItem {
+  id: string;
+  source: "comment" | "frame_note";
+  timestamp_ms: number;
+  resolved: boolean;
+  author_name: string;
+  text: string;
+  type_label: "Text" | "Draw";
+  version_label: string;
+  comment?: ReviewCoreComment;
+  note?: ReviewCoreFrameNote;
+}
+
 const DEFAULT_ANNOTATION_STYLE: AnnotationStyle = {
   stroke: "#00d1ff",
   width: 2,
@@ -185,8 +201,8 @@ export function ReviewCore({
   const [savingApproval, setSavingApproval] = useState(false);
   const [commentText, setCommentText] = useState("");
   const [commentAuthor, setCommentAuthor] = useState("Anonymous");
+  const [selectedCommentId, setSelectedCommentId] = useState<string | null>(null);
   const [submittingComment, setSubmittingComment] = useState(false);
-  const [highlightedCommentId, setHighlightedCommentId] = useState<string | null>(null);
   const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
   const [editingCommentText, setEditingCommentText] = useState("");
   const [savingCommentId, setSavingCommentId] = useState<string | null>(null);
@@ -222,7 +238,6 @@ export function ReviewCore({
   const [reviewerNameActive, setReviewerNameActive] = useState<string | null>(null);
   const [expandedAssetIds, setExpandedAssetIds] = useState<string[]>([]);
   const [markerHoverId, setMarkerHoverId] = useState<string | null>(null);
-  const [lastUserScrollTime, setLastUserScrollTime] = useState(0);
   const [activeProject, setActiveProject] = useState<ReviewCoreProjectSummary | null>(null);
   const [recentProjects, setRecentProjects] = useState<ReviewCoreProjectSummary[]>([]);
   const [loadingProjects, setLoadingProjects] = useState(usesEmbeddedProjectPicker);
@@ -230,9 +245,8 @@ export function ReviewCore({
   const [newProjectName, setNewProjectName] = useState("");
   const [shareLibrary, setShareLibrary] = useState<ReviewCoreAssetWithVersions[]>([]);
   const [frameNotes, setFrameNotes] = useState<ReviewCoreFrameNote[]>([]);
-  const [loadingFrameNotes, setLoadingFrameNotes] = useState(false);
   const [grabbingFrame, setGrabbingFrame] = useState(false);
-  const [frameNotesSearch, setFrameNotesSearch] = useState("");
+  const [feedbackSearch, setFeedbackSearch] = useState("");
   const [showFrameNotes, setShowFrameNotes] = useState(true);
   const [selectedFrameNoteId, setSelectedFrameNoteId] = useState<string | null>(null);
   const [editingFrameNoteId, setEditingFrameNoteId] = useState<string | null>(null);
@@ -241,12 +255,20 @@ export function ReviewCore({
   const [exportingFrameNoteId, setExportingFrameNoteId] = useState<string | null>(null);
   const [onionSkinEnabled, setOnionSkinEnabled] = useState(false);
   const [onionSkinOpacity, setOnionSkinOpacity] = useState(0.45);
+  const [showQuickNoteComposer, setShowQuickNoteComposer] = useState(false);
+  const [activePanelTab, setActivePanelTab] = useState<ReviewCorePanelTab>("feedback");
+  const [mediaReadyStatus, setMediaReadyStatus] = useState<"idle" | "processing" | "finalizing" | "ready" | "failed">("idle");
+  const [mediaReadyAttempt, setMediaReadyAttempt] = useState(0);
+  const [verifiedMediaUrls, setVerifiedMediaUrls] = useState<{ playlistUrl: string; posterUrl: string } | null>(null);
+  const [mediaProbeNonce, setMediaProbeNonce] = useState(0);
+  const [frameNoteImageCache, setFrameNoteImageCache] = useState<Record<string, string>>({});
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const videoStageRef = useRef<HTMLDivElement | null>(null);
   const hlsRef = useRef<Hls | null>(null);
   const pendingSeekSecondsRef = useRef<number | null>(null);
   const dragStateRef = useRef<{ mode: "draw" | "move"; start: NormalizedPoint; itemId?: string } | null>(null);
+  const previousVersionStatusRef = useRef<string | null>(null);
 
   const selectedAsset = useMemo(
     () => assets.find((asset) => asset.id === selectedAssetId) || null,
@@ -321,35 +343,10 @@ export function ReviewCore({
     for (const version of versions) versionMap.set(version.id, version);
     return { assetMap, versionMap };
   }, [assets, shareLibrary, versions]);
-  const filteredFrameNotes = useMemo(() => {
-    const query = frameNotesSearch.trim().toLowerCase();
-    return frameNotes.filter((note) => {
-      const asset = frameNoteIndex.assetMap.get(note.asset_id);
-      const assetName = asset?.filename.toLowerCase() || "";
-      const title = note.title?.toLowerCase() || "";
-      if (!query) return true;
-      return assetName.includes(query) || title.includes(query);
-    });
-  }, [frameNotes, frameNotesSearch, frameNoteIndex]);
-  const groupedFrameNotes = useMemo(() => {
-    const groups = new Map<string, { asset: CommonAsset | null; version: CommonVersion | null; notes: ReviewCoreFrameNote[] }>();
-    for (const note of filteredFrameNotes) {
-      const key = `${note.asset_id}:${note.asset_version_id}`;
-      if (!groups.has(key)) {
-        groups.set(key, {
-          asset: frameNoteIndex.assetMap.get(note.asset_id) || null,
-          version: frameNoteIndex.versionMap.get(note.asset_version_id) || null,
-          notes: [],
-        });
-      }
-      groups.get(key)?.notes.push(note);
-    }
-    return Array.from(groups.values()).sort((a, b) => {
-      const assetA = a.asset?.filename || "";
-      const assetB = b.asset?.filename || "";
-      return assetA.localeCompare(assetB) || (b.version?.version_number || 0) - (a.version?.version_number || 0);
-    });
-  }, [filteredFrameNotes, frameNoteIndex]);
+  const assetFrameNotes = useMemo(() => {
+    if (!selectedAsset) return [];
+    return frameNotes.filter((note) => note.asset_id === selectedAsset.id);
+  }, [frameNotes, selectedAsset]);
   const selectedFrameNote = useMemo(
     () => frameNotes.find((note) => note.id === selectedFrameNoteId) || null,
     [frameNotes, selectedFrameNoteId]
@@ -357,6 +354,84 @@ export function ReviewCore({
   const parsedFrameNoteDraft = useMemo(
     () => parseFrameNoteData(selectedFrameNote?.vector_data, selectedFrameNote?.timestamp_ms),
     [selectedFrameNote]
+  );
+  const feedbackItems = useMemo(() => {
+    const query = feedbackSearch.trim().toLowerCase();
+    const items: FeedbackItem[] = [];
+    for (const comment of comments) {
+      const text = comment.text;
+      const author = normalizeReviewerName(comment.author_name);
+      if (
+        query &&
+        !text.toLowerCase().includes(query) &&
+        !author.toLowerCase().includes(query)
+      ) {
+        continue;
+      }
+      items.push({
+        id: `comment:${comment.id}`,
+        source: "comment",
+        timestamp_ms: comment.timestamp_ms,
+        resolved: comment.resolved,
+        author_name: author,
+        text,
+        type_label: "Text",
+        version_label: selectedVersion ? `v${selectedVersion.version_number}` : "Current",
+        comment,
+      });
+    }
+    for (const note of assetFrameNotes) {
+      if (!showFrameNotes) continue;
+      const version = frameNoteIndex.versionMap.get(note.asset_version_id);
+      const text = note.title?.trim() || "Marked frame";
+      if (
+        query &&
+        !text.toLowerCase().includes(query) &&
+        !(frameNoteIndex.assetMap.get(note.asset_id)?.filename.toLowerCase() || "").includes(query)
+      ) {
+        continue;
+      }
+      items.push({
+        id: `note:${note.id}`,
+        source: "frame_note",
+        timestamp_ms: note.timestamp_ms,
+        resolved: note.hidden,
+        author_name: "Frame Note",
+        text,
+        type_label: "Draw",
+        version_label: version ? `v${version.version_number}` : "Unknown",
+        note,
+      });
+    }
+    return items.sort((a, b) => a.timestamp_ms - b.timestamp_ms);
+  }, [assetFrameNotes, comments, feedbackSearch, frameNoteIndex, selectedVersion, showFrameNotes]);
+  const activeFeedbackId = useMemo(() => {
+    let best: string | null = null;
+    for (const item of feedbackItems) {
+      if (currentTime * 1000 >= item.timestamp_ms) {
+        best = item.id;
+      } else {
+        break;
+      }
+    }
+    return best;
+  }, [feedbackItems, currentTime]);
+  const selectedFeedbackItem = useMemo(() => {
+    if (selectedFrameNoteId) {
+      return feedbackItems.find((item) => item.source === "frame_note" && item.note?.id === selectedFrameNoteId) || null;
+    }
+    if (selectedCommentId) {
+      return feedbackItems.find((item) => item.source === "comment" && item.comment?.id === selectedCommentId) || null;
+    }
+    return null;
+  }, [feedbackItems, selectedCommentId, selectedFrameNoteId]);
+  const feedbackThumbnailNotes = useMemo(
+    () =>
+      assetFrameNotes
+        .filter(() => showFrameNotes)
+        .filter((note) => !note.hidden)
+        .sort((a, b) => a.timestamp_ms - b.timestamp_ms),
+    [assetFrameNotes, showFrameNotes]
   );
   const onionSkinVisible =
     showFrameNotes &&
@@ -376,31 +451,6 @@ export function ReviewCore({
     : projectId
       ? "App-managed proxy review"
       : "Standalone project review";
-
-  const commentListRef = useRef<HTMLDivElement | null>(null);
-
-  const activeCommentId = useMemo(() => {
-    const sorted = [...comments].sort((a, b) => a.timestamp_ms - b.timestamp_ms);
-    let best = null;
-    for (const comment of sorted) {
-      if (currentTime * 1000 >= comment.timestamp_ms) {
-        best = comment.id;
-      } else {
-        break;
-      }
-    }
-    return best;
-  }, [comments, currentTime]);
-
-  useEffect(() => {
-    const isUserScrollingRecently = Date.now() - lastUserScrollTime < 3000;
-    if (activeCommentId && commentListRef.current && !isUserScrollingRecently) {
-      const activeEl = commentListRef.current.querySelector(`[data-comment-id="${activeCommentId}"]`);
-      if (activeEl) {
-        activeEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
-      }
-    }
-  }, [activeCommentId, lastUserScrollTime]);
 
   useEffect(() => {
     invoke<string>("review_core_get_server_base_url")
@@ -441,6 +491,23 @@ export function ReviewCore({
       console.error("Failed touching Review Core project", error);
       onError?.({ title: "Review Core project failed", hint: String(error) });
     }
+  };
+
+  const handleBackToProjects = () => {
+    if (!usesEmbeddedProjectPicker) return;
+    setActiveProject(null);
+    persistLastProjectId(null);
+    setAssets([]);
+    setVersions([]);
+    setComments([]);
+    setAnnotations([]);
+    setFrameNotes([]);
+    setSelectedAssetId(null);
+    setSelectedVersionId(null);
+    setSelectedCommentId(null);
+    setSelectedFrameNoteId(null);
+    setVerifiedMediaUrls(null);
+    setMediaReadyStatus("idle");
   };
 
   useEffect(() => {
@@ -596,7 +663,6 @@ export function ReviewCore({
       setSelectedFrameNoteId(null);
       return;
     }
-    setLoadingFrameNotes(true);
     try {
       const nextNotes = await invoke<ReviewCoreFrameNote[]>("review_core_list_frame_notes", {
         projectId: effectiveProjectId,
@@ -606,8 +672,6 @@ export function ReviewCore({
     } catch (error) {
       console.error("Failed loading frame notes", error);
       onError?.({ title: "Frame Notes failed", hint: String(error) });
-    } finally {
-      setLoadingFrameNotes(false);
     }
   };
 
@@ -639,6 +703,19 @@ export function ReviewCore({
   }, [selectedFrameNote, editingFrameNoteId, onionSkinEnabled]);
 
   useEffect(() => {
+    if (!selectedFrameNote || frameNoteImageCache[selectedFrameNote.id]) return;
+    invoke<string>("review_core_read_frame_note_image", {
+      noteId: selectedFrameNote.id,
+    })
+      .then((dataUrl) => {
+        setFrameNoteImageCache((current) => ({ ...current, [selectedFrameNote.id]: dataUrl }));
+      })
+      .catch((error) => {
+        console.warn("Failed loading frame note image data", error);
+      });
+  }, [selectedFrameNote?.id, frameNoteImageCache]);
+
+  useEffect(() => {
     if (!selectedAssetId) {
       setVersions([]);
       setSelectedVersionId(null);
@@ -662,15 +739,9 @@ export function ReviewCore({
     }
 
     const loadVersionData = async () => {
+      setThumbnails([]);
       try {
-        const [nextThumbs, nextComments, nextAnnotations, nextApproval] = await Promise.all([
-          isShareMode
-            ? invoke<ReviewCoreThumbnailInfo[]>("review_core_share_list_thumbnails", {
-              token: shareToken,
-              assetVersionId: selectedVersionId,
-              sessionToken: shareSessionToken,
-            })
-            : invoke<ReviewCoreThumbnailInfo[]>("review_core_list_thumbnails", { versionId: selectedVersionId }),
+        const [nextComments, nextAnnotations, nextApproval] = await Promise.all([
           canShowComments
             ? isShareMode
               ? invoke<ReviewCoreComment[]>("review_core_share_list_comments", {
@@ -693,7 +764,6 @@ export function ReviewCore({
               () => ({ ...DEFAULT_APPROVAL, asset_version_id: selectedVersionId })
             ),
         ]);
-        setThumbnails(nextThumbs);
         setComments(nextComments);
         setAnnotations(nextAnnotations);
         setApproval(nextApproval);
@@ -712,16 +782,212 @@ export function ReviewCore({
   }, [selectedVersionId, isShareMode, shareToken, shareSessionToken, canShowComments]);
 
   useEffect(() => {
-    const video = videoRef.current;
-    if (!video || !selectedAsset || !selectedVersion || !serverBaseUrl) return;
+    let cancelled = false;
+    let timeoutId: number | null = null;
 
-    const queryParts: string[] = [];
-    if (isShareMode && shareToken) queryParts.push(`t=${encodeURIComponent(shareToken)}`);
-    if (isShareMode && shareSessionToken) queryParts.push(`s=${encodeURIComponent(shareSessionToken)}`);
-    const tokenQuery = queryParts.length > 0 ? `?${queryParts.join("&")}` : "";
-    const playlistUrl = `${serverBaseUrl}/media/${selectedAsset.project_id}/${selectedAsset.id}/${selectedVersion.id}/hls/index.m3u8${tokenQuery}`;
-    const posterUrl = `${serverBaseUrl}/media/${selectedAsset.project_id}/${selectedAsset.id}/${selectedVersion.id}/poster.jpg${tokenQuery}`;
-    video.poster = selectedVersion.processing_status === "ready" ? posterUrl : "";
+    const resetMedia = () => {
+      setVerifiedMediaUrls(null);
+      setThumbnails([]);
+      setMediaReadyAttempt(0);
+    };
+
+    if (!selectedAsset || !selectedVersion || !serverBaseUrl) {
+      resetMedia();
+      setMediaReadyStatus("idle");
+      return () => {
+        if (timeoutId != null) window.clearTimeout(timeoutId);
+      };
+    }
+
+    if (REVIEW_CORE_DEBUG) {
+      console.info("[Wrap Preview][ReviewCore] media selection", {
+        project_id: selectedAsset.project_id,
+        asset_id: selectedAsset.id,
+        version_id: selectedVersion.id,
+        processing_status: selectedVersion.processing_status,
+        playlist_url: buildMediaUrl({
+          serverBaseUrl,
+          projectId: selectedAsset.project_id,
+          assetId: selectedAsset.id,
+          versionId: selectedVersion.id,
+          type: "playlist",
+          shareToken,
+          sessionToken: shareSessionToken,
+        }),
+        poster_url: buildMediaUrl({
+          serverBaseUrl,
+          projectId: selectedAsset.project_id,
+          assetId: selectedAsset.id,
+          versionId: selectedVersion.id,
+          type: "poster",
+          shareToken,
+          sessionToken: shareSessionToken,
+        }),
+        thumbnails_base: `${serverBaseUrl}/media/${selectedAsset.project_id}/${selectedAsset.id}/${selectedVersion.id}/thumbs/`,
+      });
+    }
+
+    if (selectedVersion.processing_status === "failed") {
+      resetMedia();
+      setMediaReadyStatus("failed");
+      return () => {
+        if (timeoutId != null) window.clearTimeout(timeoutId);
+      };
+    }
+
+    if (selectedVersion.processing_status !== "ready") {
+      resetMedia();
+      setMediaReadyStatus("processing");
+      return () => {
+        if (timeoutId != null) window.clearTimeout(timeoutId);
+      };
+    }
+
+    const playlistUrl = buildMediaUrl({
+      serverBaseUrl,
+      projectId: selectedAsset.project_id,
+      assetId: selectedAsset.id,
+      versionId: selectedVersion.id,
+      type: "playlist",
+      shareToken,
+      sessionToken: shareSessionToken,
+    });
+    const posterUrl = buildMediaUrl({
+      serverBaseUrl,
+      projectId: selectedAsset.project_id,
+      assetId: selectedAsset.id,
+      versionId: selectedVersion.id,
+      type: "poster",
+      shareToken,
+      sessionToken: shareSessionToken,
+    });
+
+    if (REVIEW_CORE_DEBUG) {
+      console.info("[Wrap Preview][ReviewCore] media attach", {
+        project_id: selectedAsset.project_id,
+        asset_id: selectedAsset.id,
+        version_id: selectedVersion.id,
+        processing_status: selectedVersion.processing_status,
+        playlist_url: playlistUrl,
+        poster_url: posterUrl,
+        thumbnails_base: `${serverBaseUrl}/media/${selectedAsset.project_id}/${selectedAsset.id}/${selectedVersion.id}/thumbs/`,
+      });
+    }
+
+    const verifyMedia = async (attempt: number) => {
+      setMediaReadyStatus("finalizing");
+      setMediaReadyAttempt(attempt);
+      try {
+        const [posterResponse, playlistResponse] = await Promise.all([
+          fetch(`${posterUrl}${posterUrl.includes("?") ? "&" : "?"}v=${attempt}`, { cache: "no-store" }),
+          fetch(`${playlistUrl}${playlistUrl.includes("?") ? "&" : "?"}v=${attempt}`, { cache: "no-store" }),
+        ]);
+        if (cancelled) return;
+        let nextThumbs: ReviewCoreThumbnailInfo[] = [];
+        let thumbsError: string | null = null;
+        if (posterResponse.ok && playlistResponse.ok) {
+          try {
+            nextThumbs = isShareMode
+              ? await invoke<ReviewCoreThumbnailInfo[]>("review_core_share_list_thumbnails", {
+                token: shareToken,
+                assetVersionId: selectedVersion.id,
+                sessionToken: shareSessionToken,
+              })
+              : await invoke<ReviewCoreThumbnailInfo[]>("review_core_list_thumbnails", { versionId: selectedVersion.id });
+          } catch (error) {
+            thumbsError = String(error);
+          }
+        }
+        if (posterResponse.ok && playlistResponse.ok && !thumbsError && nextThumbs.length > 0) {
+          setVerifiedMediaUrls({ posterUrl, playlistUrl });
+          setMediaReadyStatus("ready");
+          if (!cancelled) {
+            setThumbnails(nextThumbs);
+          }
+          return;
+        }
+        if (REVIEW_CORE_DEBUG) {
+          const missing: string[] = [];
+          if (!posterResponse.ok) missing.push("poster.jpg");
+          if (!playlistResponse.ok) missing.push("index.m3u8");
+          if (thumbsError || nextThumbs.length === 0) missing.push("thumb list");
+          if (missing.length > 0) {
+            console.info("[Wrap Preview][ReviewCore] media probe missing", {
+              project_id: selectedAsset.project_id,
+              asset_id: selectedAsset.id,
+              version_id: selectedVersion.id,
+              attempt,
+              missing,
+              thumbnail_error: thumbsError,
+            });
+          }
+        }
+      } catch (error) {
+        if (cancelled) return;
+        console.warn("[Wrap Preview][ReviewCore] media probe failed", error);
+      }
+
+      if (attempt >= 5) {
+        setVerifiedMediaUrls(null);
+        setMediaReadyStatus("finalizing");
+        return;
+      }
+      timeoutId = window.setTimeout(() => {
+        void verifyMedia(attempt + 1);
+      }, Math.min(500 * 2 ** (attempt - 1), 4000));
+    };
+
+    void verifyMedia(1);
+    return () => {
+      cancelled = true;
+      if (timeoutId != null) window.clearTimeout(timeoutId);
+    };
+  }, [
+    selectedAsset,
+    selectedVersion,
+    serverBaseUrl,
+    isShareMode,
+    shareToken,
+    shareSessionToken,
+    mediaProbeNonce,
+  ]);
+
+  useEffect(() => {
+    const currentStatus = selectedVersion?.processing_status ?? null;
+    const previousStatus = previousVersionStatusRef.current;
+    previousVersionStatusRef.current = currentStatus;
+    if (currentStatus !== "ready" || previousStatus === "ready") {
+      return;
+    }
+    const timeoutId = window.setTimeout(() => {
+      setMediaProbeNonce((value) => value + 1);
+    }, 1500);
+    return () => window.clearTimeout(timeoutId);
+  }, [selectedVersion?.id, selectedVersion?.processing_status]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    if (mediaReadyStatus === "ready" && verifiedMediaUrls && selectedAsset && selectedVersion) {
+      return;
+    }
+    if (hlsRef.current) {
+      hlsRef.current.destroy();
+      hlsRef.current = null;
+    }
+    video.pause();
+    video.poster = "";
+    video.removeAttribute("src");
+    video.load();
+    setCurrentTime(0);
+    setDuration(selectedAsset?.duration_ms ? selectedAsset.duration_ms / 1000 : 0);
+  }, [mediaReadyStatus, verifiedMediaUrls, selectedAsset?.id, selectedVersion?.id]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !selectedAsset || !selectedVersion || !verifiedMediaUrls) return;
+
+    video.poster = verifiedMediaUrls.posterUrl;
     video.pause();
     video.removeAttribute("src");
     video.load();
@@ -733,17 +999,13 @@ export function ReviewCore({
       hlsRef.current = null;
     }
 
-    if (selectedVersion.processing_status !== "ready") {
-      return;
-    }
-
     if (Hls.isSupported()) {
       const hls = new Hls();
-      hls.loadSource(playlistUrl);
+      hls.loadSource(verifiedMediaUrls.playlistUrl);
       hls.attachMedia(video);
       hlsRef.current = hls;
     } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
-      video.src = playlistUrl;
+      video.src = verifiedMediaUrls.playlistUrl;
     }
 
     return () => {
@@ -752,7 +1014,7 @@ export function ReviewCore({
         hlsRef.current = null;
       }
     };
-  }, [selectedAsset, selectedVersion, serverBaseUrl, isShareMode, shareToken, shareSessionToken]);
+  }, [selectedAsset, selectedVersion, verifiedMediaUrls]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -799,6 +1061,16 @@ export function ReviewCore({
       window.removeEventListener("resize", updateFrameRect);
     };
   }, [selectedAsset, selectedVersion]);
+
+  useEffect(() => {
+    if (!selectedAssetId || !selectedVersion || selectedVersion.processing_status !== "processing") {
+      return;
+    }
+    const intervalId = window.setInterval(() => {
+      void refreshVersions(selectedAssetId);
+    }, 2500);
+    return () => window.clearInterval(intervalId);
+  }, [selectedAssetId, selectedVersion?.id, selectedVersion?.processing_status]);
 
   const updateFrameRect = () => {
     const container = videoStageRef.current;
@@ -901,6 +1173,9 @@ export function ReviewCore({
           authorName: commentAuthor,
         });
       setComments((prev) => [...prev, created].sort((a, b) => a.timestamp_ms - b.timestamp_ms));
+      setSelectedCommentId(created.id);
+      setSelectedFrameNoteId(null);
+      setShowQuickNoteComposer(false);
       setCommentText("");
     } catch (error) {
       console.error("Failed adding comment", error);
@@ -912,8 +1187,8 @@ export function ReviewCore({
 
   const seekToComment = (comment: ReviewCoreComment) => {
     handleThumbnailSeek(comment.timestamp_ms / 1000);
-    setHighlightedCommentId(comment.id);
-    window.setTimeout(() => setHighlightedCommentId((current) => (current === comment.id ? null : current)), 1500);
+    setSelectedCommentId(comment.id);
+    setSelectedFrameNoteId(null);
   };
 
   const toggleResolved = async (comment: ReviewCoreComment) => {
@@ -1040,6 +1315,7 @@ export function ReviewCore({
     setAnnotatingCommentId(null);
     setAnnotationDraft(null);
     setSelectedFrameNoteId(note.id);
+    setSelectedCommentId(null);
     setEditingFrameNoteId(note.id);
     setAnnotationTool("pointer");
     setSelectedAnnotationItemId(null);
@@ -1071,6 +1347,7 @@ export function ReviewCore({
       const note = createdNote.find((item) => item.id === result.note_id);
       if (note) {
         setFrameNotes(createdNote);
+        setSelectedCommentId(null);
         openFrameNoteEditor(note);
       }
     } catch (error) {
@@ -1166,23 +1443,6 @@ export function ReviewCore({
       setSharePasswordError(String(error));
     } finally {
       setVerifyingSharePassword(false);
-    }
-  };
-
-  const handleUpdateReviewerName = async () => {
-    if (!isShareMode || !shareToken || !shareSessionToken) return;
-    const name = prompt("Enter your display name:", reviewerNameActive || "");
-    if (name === null) return;
-    try {
-      await invoke("review_core_share_set_display_name", {
-        token: shareToken,
-        sessionToken: shareSessionToken,
-        displayName: name,
-      });
-      setReviewerNameActive(name.trim() || null);
-      setCommentAuthor(name.trim() || "Guest Reviewer");
-    } catch (error) {
-      console.error("Failed to update reviewer name", error);
     }
   };
 
@@ -1300,6 +1560,24 @@ export function ReviewCore({
       });
     } finally {
       setDownloading(false);
+    }
+  };
+
+  const handleRetryMediaAttach = () => {
+    setVerifiedMediaUrls(null);
+    setThumbnails([]);
+    setMediaProbeNonce((value) => value + 1);
+  };
+
+  const selectFeedbackItem = (item: FeedbackItem) => {
+    if (item.source === "comment" && item.comment) {
+      seekToComment(item.comment);
+      return;
+    }
+    if (item.note) {
+      setSelectedCommentId(null);
+      setSelectedFrameNoteId(item.note.id);
+      handleThumbnailSeek(item.note.timestamp_ms / 1000);
     }
   };
 
@@ -1586,7 +1864,14 @@ export function ReviewCore({
         <aside className="review-core-sidebar">
           <div className="section-header">
             <div className="section-header-top">
-              <span className="section-title">Library</span>
+              <div className="review-core-library-title">
+                {!isShareMode && usesEmbeddedProjectPicker && activeProject && (
+                  <button className="btn-link btn-xs" onClick={handleBackToProjects}>
+                    Projects
+                  </button>
+                )}
+                <span className="section-title">Library</span>
+              </div>
               <span className="section-count highlight">{assets.length}</span>
             </div>
             <div className="review-core-library-controls">
@@ -1702,6 +1987,79 @@ export function ReviewCore({
 
                 <div className="review-core-video-frame">
                   <div className="review-core-video-stage" ref={videoStageRef}>
+                    <div className="review-core-stage-actions">
+                      {canAddComments && (
+                        <button
+                          className="btn btn-secondary btn-sm"
+                          onClick={() => {
+                            setShowQuickNoteComposer((current) => !current);
+                            setSelectedFrameNoteId(null);
+                            setSelectedCommentId(null);
+                          }}
+                          disabled={!selectedVersionId}
+                        >
+                          <Type size={14} />
+                          <span>Add Note</span>
+                        </button>
+                      )}
+                      {!isShareMode && (
+                        <button className="btn btn-secondary btn-sm" onClick={handleGrabFrame} disabled={grabbingFrame || !selectedVersionId}>
+                          {grabbingFrame ? <LoaderCircle size={14} className="review-core-spin" /> : <Image size={14} />}
+                          <span>{grabbingFrame ? "Capturing…" : "Mark Frame"}</span>
+                        </button>
+                      )}
+                      {!isShareMode && (
+                        <button
+                          className={`btn btn-secondary btn-sm ${onionSkinEnabled ? "active" : ""}`}
+                          onClick={() => setOnionSkinEnabled((current) => !current)}
+                          disabled={!selectedFrameNote || selectedFrameNote.asset_id !== selectedAsset.id || selectedFrameNote.asset_version_id === selectedVersionId || selectedFrameNote.hidden}
+                        >
+                          <Layers3 size={14} />
+                          <span>Compare</span>
+                        </button>
+                      )}
+                      {!isShareMode && onionSkinEnabled && (
+                        <label className="review-core-stage-opacity">
+                          <span>Opacity</span>
+                          <input
+                            type="range"
+                            min="0.1"
+                            max="0.9"
+                            step="0.05"
+                            value={onionSkinOpacity}
+                            onChange={(event) => setOnionSkinOpacity(Number(event.target.value))}
+                          />
+                        </label>
+                      )}
+                    </div>
+                    {showQuickNoteComposer && canAddComments && (
+                      <div className="review-core-stage-note-composer">
+                        {!isShareMode && (
+                          <input
+                            className="input-text"
+                            value={commentAuthor}
+                            onChange={(event) => setCommentAuthor(event.target.value)}
+                            placeholder="Author"
+                            maxLength={80}
+                          />
+                        )}
+                        <textarea
+                          className="input-text review-core-comment-textarea"
+                          value={commentText}
+                          onChange={(event) => setCommentText(event.target.value)}
+                          placeholder="Add a note at this timecode"
+                          maxLength={2000}
+                        />
+                        <div className="review-core-stage-note-actions">
+                          <button className="btn btn-secondary btn-sm" onClick={() => setShowQuickNoteComposer(false)}>
+                            Cancel
+                          </button>
+                          <button className="btn btn-secondary btn-sm" onClick={addComment} disabled={submittingComment || !commentText.trim()}>
+                            {submittingComment ? "Saving…" : "Save Note"}
+                          </button>
+                        </div>
+                      </div>
+                    )}
                     <video ref={videoRef} controls playsInline preload="metadata" />
                     {onionSkinVisible && selectedFrameNote && frameRect.width > 0 && frameRect.height > 0 && (
                       <div
@@ -1786,11 +2144,33 @@ export function ReviewCore({
                       )}
                       </div>
                     )}
-                    {selectedVersion && selectedVersion.processing_status !== "ready" && (
+                    {selectedVersion && mediaReadyStatus !== "ready" && (
                       <div className="review-core-player-overlay">
-                        {selectedVersion.processing_status === "failed"
-                          ? "Processing failed. Re-import the asset to retry."
-                          : "Processing proxy, poster, and thumbnails…"}
+                        <div className="review-core-processing-state">
+                          {selectedVersion.processing_status === "failed" ? (
+                            <>
+                              <span className="review-core-processing-label">Processing failed</span>
+                              <span className="review-core-processing-copy">Re-import the asset to retry.</span>
+                            </>
+                          ) : (
+                            <>
+                              <span className="review-core-processing-label">
+                                {mediaReadyStatus === "finalizing" ? "Still finalizing…" : "Processing…"}
+                              </span>
+                              <span className="review-core-processing-copy">
+                                {mediaReadyStatus === "finalizing"
+                                  ? `Preparing poster, proxy, and timeline files${mediaReadyAttempt > 0 ? ` · attempt ${mediaReadyAttempt}/5` : ""}`
+                                  : "Preparing proxy, poster, and feedback surfaces"}
+                              </span>
+                              <span className="review-core-processing-bar" />
+                              {REVIEW_CORE_DEBUG && (
+                                <button className="review-core-debug-action" onClick={handleRetryMediaAttach}>
+                                  Retry media attach
+                                </button>
+                              )}
+                            </>
+                          )}
+                        </div>
                       </div>
                     )}
                   </div>
@@ -1800,26 +2180,26 @@ export function ReviewCore({
                         className="review-core-timeline-playhead"
                         style={{ left: `${(currentTime / (duration || 1)) * 100}%` }}
                       />
-                      {comments.map((comment) => {
-                        const isActive = activeCommentId === comment.id;
-                        const markerPosition = (comment.timestamp_ms / 1000 / (duration || 1)) * 100;
-                        const reviewer = reviewerIdentities.get(normalizeReviewerName(comment.author_name));
+                      {feedbackItems.map((item) => {
+                        const isActive = activeFeedbackId === item.id;
+                        const markerPosition = (item.timestamp_ms / 1000 / (duration || 1)) * 100;
+                        const markerColor = item.source === "frame_note" ? "#22c55e" : getReviewerColor(item.author_name);
                         return (
                           <div
-                            key={comment.id}
-                            className={`review-core-timeline-marker ${isActive ? "active" : ""} ${comment.resolved ? "resolved" : ""}`}
-                            style={{ left: `${markerPosition}%`, "--marker-color": reviewer?.color || "#64748b" } as CSSProperties}
+                            key={item.id}
+                            className={`review-core-timeline-marker ${isActive ? "active" : ""} ${item.resolved ? "resolved" : ""} ${item.source === "frame_note" ? "draw" : "text"}`}
+                            style={{ left: `${markerPosition}%`, "--marker-color": markerColor } as CSSProperties}
                             onClick={(e) => {
                               e.stopPropagation();
-                              seekToComment(comment);
+                              selectFeedbackItem(item);
                             }}
-                            onMouseEnter={() => setMarkerHoverId(comment.id)}
+                            onMouseEnter={() => setMarkerHoverId(item.id)}
                             onMouseLeave={() => setMarkerHoverId(null)}
                           >
-                            {markerHoverId === comment.id && (
+                            {markerHoverId === item.id && (
                               <div className="review-core-marker-tooltip">
-                                <span className="tooltip-time">{formatTimecode(comment.timestamp_ms / 1000, selectedAsset)}</span>
-                                <span className="tooltip-text">{comment.author_name} — {truncateText(comment.text, 60)}</span>
+                                <span className="tooltip-time">{formatTimecode(item.timestamp_ms / 1000, selectedAsset)}</span>
+                                <span className="tooltip-text">{item.author_name} — {truncateText(item.text, 60)}</span>
                               </div>
                             )}
                           </div>
@@ -1829,28 +2209,53 @@ export function ReviewCore({
                   </div>
                 </div>
 
-                {thumbnails.length > 0 && serverBaseUrl && selectedVersion && (
-                  <div className="review-core-thumb-strip">
-                    {thumbnails.map((thumb) => {
-                      const thumbQueryParts: string[] = [];
-                      if (isShareMode && shareToken) thumbQueryParts.push(`t=${encodeURIComponent(shareToken)}`);
-                      if (isShareMode && shareSessionToken) thumbQueryParts.push(`s=${encodeURIComponent(shareSessionToken)}`);
-                      const tokenQuery = thumbQueryParts.length > 0 ? `?${thumbQueryParts.join("&")}` : "";
-                      const thumbUrl = `${serverBaseUrl}/media/${selectedAsset.project_id}/${selectedAsset.id}/${selectedVersion.id}/thumbs/${thumb.file_name}${tokenQuery}`;
-                      return (
+                {isShareMode
+                  ? thumbnails.length > 0 && serverBaseUrl && selectedVersion && mediaReadyStatus === "ready" && (
+                    <div className="review-core-thumb-strip">
+                      {thumbnails.map((thumb) => {
+                        const thumbUrl = buildMediaUrl({
+                          serverBaseUrl,
+                          projectId: selectedAsset.project_id,
+                          assetId: selectedAsset.id,
+                          versionId: selectedVersion.id,
+                          type: "thumb",
+                          file: thumb.file_name,
+                          shareToken,
+                          sessionToken: shareSessionToken,
+                        });
+                        return (
+                          <button
+                            key={thumb.file_name}
+                            className="review-core-thumb-button"
+                            onClick={() => handleThumbnailSeek(thumb.approx_seconds)}
+                            title={`Seek to ${formatApproxTime(thumb.approx_seconds)}`}
+                          >
+                            <img src={thumbUrl} alt={thumb.file_name} />
+                            <span>{formatApproxTime(thumb.approx_seconds)}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )
+                  : feedbackThumbnailNotes.length > 0 && (
+                    <div className="review-core-thumb-strip review-core-feedback-strip">
+                      {feedbackThumbnailNotes.map((note) => (
                         <button
-                          key={thumb.file_name}
-                          className="review-core-thumb-button"
-                          onClick={() => handleThumbnailSeek(thumb.approx_seconds)}
-                          title={`Seek to ${formatApproxTime(thumb.approx_seconds)}`}
+                          key={note.id}
+                          className={`review-core-thumb-button ${selectedFrameNoteId === note.id ? "active" : ""}`}
+                          onClick={() => {
+                            setSelectedCommentId(null);
+                            setSelectedFrameNoteId(note.id);
+                            handleThumbnailSeek(note.timestamp_ms / 1000);
+                          }}
+                          title={note.title || formatTimecode(note.timestamp_ms / 1000, selectedAsset)}
                         >
-                          <img src={thumbUrl} alt={thumb.file_name} />
-                          <span>{formatApproxTime(thumb.approx_seconds)}</span>
+                          <img src={frameNoteImageCache[note.id] || note.frame_url} alt={note.title || "Feedback frame"} />
+                          <span>{formatTimecode(note.timestamp_ms / 1000, selectedAsset)}</span>
                         </button>
-                      );
-                    })}
-                  </div>
-                )}
+                      ))}
+                    </div>
+                  )}
 
                 {selectedVersion?.processing_status === "failed" && getVersionLastError(selectedVersion, selectedAsset) && (
                   <div className="review-core-error-card">
@@ -1887,111 +2292,165 @@ export function ReviewCore({
                   </div>
                 )}
               </div>
-
               {!isShareMode && (
-                <div className="review-core-frame-notes-card">
+                <div className="review-core-panel-tabs">
+                  <button className={`btn btn-secondary btn-sm ${activePanelTab === "feedback" ? "active" : ""}`} onClick={() => setActivePanelTab("feedback")}>
+                    Feedback
+                  </button>
+                  <button className={`btn btn-secondary btn-sm ${activePanelTab === "share" ? "active" : ""}`} onClick={() => setActivePanelTab("share")}>
+                    Share
+                  </button>
+                </div>
+              )}
+
+              {(isShareMode || activePanelTab === "feedback") && (
+                <div className="review-core-feedback-card">
                   <div className="section-header">
-                    <span className="section-title">Frame Notes</span>
-                    <span className="section-count highlight">{frameNotes.length}</span>
+                    <span className="section-title">Feedback</span>
+                    <span className="section-count highlight">{feedbackItems.length}</span>
                   </div>
-                  <div className="review-core-frame-notes-toolbar">
-                    <label className="review-core-share-toggle">
-                      <input type="checkbox" checked={showFrameNotes} onChange={(event) => setShowFrameNotes(event.target.checked)} />
-                      <span>Show Frame Notes</span>
-                    </label>
-                    <button className="btn btn-secondary btn-sm" onClick={handleGrabFrame} disabled={grabbingFrame || !selectedVersionId}>
-                      {grabbingFrame ? <LoaderCircle size={14} className="review-core-spin" /> : <Image size={14} />}
-                      <span>{grabbingFrame ? "Capturing…" : "Grab Frame"}</span>
-                    </button>
-                  </div>
-                  <div className="review-core-frame-notes-layout">
-                    <aside className="review-core-frame-notes-sidebar">
-                      <input
-                        className="input-text btn-xs"
-                        placeholder="Search by file or note title..."
-                        value={frameNotesSearch}
-                        onChange={(event) => setFrameNotesSearch(event.target.value)}
-                      />
-                      {loadingFrameNotes ? (
-                        <div className="empty-state">Loading Frame Notes…</div>
-                      ) : groupedFrameNotes.length === 0 ? (
-                        <div className="empty-state review-core-empty">
-                          <Image size={18} />
-                          <p>No Frame Notes yet. Pause the player and use <strong>Grab Frame</strong>.</p>
-                        </div>
-                      ) : (
-                        <div className="review-core-frame-note-groups">
-                          {groupedFrameNotes.map((group) => (
-                            <div key={`${group.asset?.id || "asset"}-${group.version?.id || "version"}`} className="review-core-frame-note-group">
-                              <div className="review-core-frame-note-group-title">
-                                <strong>{group.asset?.filename || "Unknown asset"}</strong>
-                                <span>{group.version ? `v${group.version.version_number}` : "Unknown version"}</span>
-                              </div>
-                              {group.notes.map((note) => (
-                                <div
-                                  key={note.id}
-                                  className={`review-core-frame-note-row ${selectedFrameNoteId === note.id ? "active" : ""} ${note.hidden ? "hidden-note" : ""}`}
-                                >
-                                  <button className="review-core-frame-note-main" onClick={() => setSelectedFrameNoteId(note.id)}>
-                                    <strong>{note.title || formatTimecode(note.timestamp_ms / 1000, (group.asset || selectedAsset || TIMECODE_FALLBACK_ASSET) as any)}</strong>
-                                    <span>
-                                      {formatTimecode(note.timestamp_ms / 1000, (group.asset || selectedAsset || TIMECODE_FALLBACK_ASSET) as any)}
-                                      {note.frame_number != null ? ` · Frame ${note.frame_number}` : ""}
-                                    </span>
-                                  </button>
-                                  <div className="review-core-frame-note-row-actions">
-                                    <button className="btn btn-secondary btn-sm" onClick={() => updateFrameNoteMeta(note.id, { hidden: !note.hidden })}>
-                                      {note.hidden ? <Eye size={14} /> : <EyeOff size={14} />}
-                                    </button>
-                                    <button className="btn btn-secondary btn-sm" onClick={() => exportFrameNoteJpg(note)} disabled={exportingFrameNoteId === note.id}>
-                                      <SaveIcon size={14} />
-                                    </button>
-                                    <button className="btn btn-secondary btn-sm" onClick={() => deleteFrameNote(note)}>
-                                      <Trash2 size={14} />
-                                    </button>
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
-                          ))}
-                        </div>
+                  {reviewerIdentities.size > 0 && (
+                    <div className="review-core-reviewer-summary">
+                      {visibleReviewerIdentities.map((reviewer) => (
+                        <span
+                          key={reviewer.name}
+                          className="review-core-reviewer-chip"
+                          style={{ "--reviewer-color": reviewer.color } as CSSProperties}
+                        >
+                          <span className="review-core-author-badge">{reviewer.initials}</span>
+                          {reviewer.name}
+                        </span>
+                      ))}
+                      {hiddenReviewerCount > 0 && (
+                        <span className="review-core-reviewer-chip review-core-reviewer-chip-muted">+{hiddenReviewerCount}</span>
                       )}
+                    </div>
+                  )}
+                  <div className="review-core-feedback-layout">
+                    <aside className="review-core-feedback-sidebar">
+                      <div className="review-core-feedback-toolbar">
+                        <input
+                          className="input-text btn-xs"
+                          placeholder="Search feedback..."
+                          value={feedbackSearch}
+                          onChange={(event) => setFeedbackSearch(event.target.value)}
+                        />
+                        {!isShareMode && (
+                          <label className="review-core-share-toggle">
+                            <input type="checkbox" checked={showFrameNotes} onChange={(event) => setShowFrameNotes(event.target.checked)} />
+                            <span>Show Frame Notes</span>
+                          </label>
+                        )}
+                      </div>
+                      <div className="review-core-feedback-list">
+                        {feedbackItems.map((item) => {
+                          const isActive = selectedFeedbackItem?.id === item.id || activeFeedbackId === item.id;
+                          return (
+                            <button
+                              key={item.id}
+                              className={`review-core-feedback-row ${isActive ? "active" : ""} ${item.resolved ? "resolved" : ""}`}
+                              onClick={() => selectFeedbackItem(item)}
+                            >
+                              <span className={`review-core-feedback-kind ${item.source}`}>
+                                {item.type_label}
+                              </span>
+                              <strong>{formatTimecode(item.timestamp_ms / 1000, selectedAsset)}</strong>
+                              <span className="review-core-feedback-row-copy">{truncateText(item.text, 70)}</span>
+                              <span className="review-core-feedback-row-meta">
+                                <span className="review-core-author-badge" style={{ "--reviewer-color": item.source === "frame_note" ? "#22c55e" : getReviewerColor(item.author_name) } as CSSProperties}>
+                                  {item.source === "frame_note" ? "DF" : getReviewerInitials(item.author_name)}
+                                </span>
+                                {item.author_name} · {item.version_label}
+                              </span>
+                            </button>
+                          );
+                        })}
+                        {feedbackItems.length === 0 && (
+                          <div className="empty-state review-core-empty">
+                            <Type size={18} />
+                            <p>No feedback yet. Use <strong>Add Note</strong> or <strong>Mark Frame</strong> from the player.</p>
+                          </div>
+                        )}
+                      </div>
                     </aside>
-                    <section className="review-core-frame-notes-detail">
-                      {selectedFrameNote ? (
+                    <section className="review-core-feedback-detail">
+                      {selectedFeedbackItem?.source === "comment" && selectedFeedbackItem.comment ? (
+                        <div className="review-core-feedback-detail-card">
+                          <div className="review-core-feedback-detail-head">
+                            <div>
+                              <div className="section-title">Text Feedback</div>
+                              <div className="review-core-subtitle">
+                                {formatTimecode(selectedFeedbackItem.comment.timestamp_ms / 1000, selectedAsset)} · {selectedFeedbackItem.author_name}
+                              </div>
+                            </div>
+                            {!isShareMode && (
+                              <div className="review-core-feedback-detail-actions">
+                                <button className="btn btn-secondary btn-sm" onClick={() => toggleResolved(selectedFeedbackItem.comment!)}>
+                                  {selectedFeedbackItem.comment.resolved ? "Unresolve" : "Resolve"}
+                                </button>
+                                <button className="btn btn-secondary btn-sm" onClick={() => openAnnotationEditor(selectedFeedbackItem.comment!)}>
+                                  <PenTool size={14} />
+                                  <span>Annotate</span>
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                          {editingCommentId === selectedFeedbackItem.comment.id ? (
+                            <div className="review-core-comment-edit">
+                              <textarea
+                                className="input-text review-core-comment-textarea"
+                                value={editingCommentText}
+                                onChange={(event) => setEditingCommentText(event.target.value)}
+                              />
+                              <div className="review-core-comment-edit-actions">
+                                <button className="btn btn-secondary btn-sm" onClick={() => { setEditingCommentId(null); setEditingCommentText(""); }}>
+                                  Cancel
+                                </button>
+                                <button className="btn btn-secondary btn-sm" onClick={() => saveEditedComment(selectedFeedbackItem.comment!.id)} disabled={savingCommentId === selectedFeedbackItem.comment.id}>
+                                  {savingCommentId === selectedFeedbackItem.comment.id ? "Saving…" : "Save"}
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            <>
+                              <p className="review-core-feedback-detail-copy">{selectedFeedbackItem.comment.text}</p>
+                              {!isShareMode && (
+                                <div className="review-core-feedback-detail-actions">
+                                  <button className="btn btn-secondary btn-sm" onClick={() => { setEditingCommentId(selectedFeedbackItem.comment!.id); setEditingCommentText(selectedFeedbackItem.comment!.text); }}>
+                                    <Edit3 size={14} />
+                                    <span>Edit</span>
+                                  </button>
+                                  <button className="btn btn-secondary btn-sm" onClick={() => deleteComment(selectedFeedbackItem.comment!)}>
+                                    Delete
+                                  </button>
+                                </div>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      ) : selectedFrameNote ? (
                         <>
                           <div className="review-core-frame-note-detail-header">
                             <div>
-                              <div className="section-title">Selected Note</div>
+                              <div className="section-title">Draw Feedback</div>
                               <div className="review-core-subtitle">
                                 {frameNoteIndex.assetMap.get(selectedFrameNote.asset_id)?.filename || "Unknown asset"} ·
                                 {" "}v{frameNoteIndex.versionMap.get(selectedFrameNote.asset_version_id)?.version_number || "?"} ·
                                 {" "}{formatTimecode(selectedFrameNote.timestamp_ms / 1000, (frameNoteIndex.assetMap.get(selectedFrameNote.asset_id) || selectedAsset || TIMECODE_FALLBACK_ASSET) as any)}
                               </div>
                             </div>
-                            <div className="review-core-frame-note-toggle-row">
-                              <label className="review-core-share-toggle">
-                                <input
-                                  type="checkbox"
-                                  checked={onionSkinEnabled}
-                                  onChange={(event) => setOnionSkinEnabled(event.target.checked)}
-                                  disabled={selectedFrameNote.asset_id !== selectedAsset?.id || selectedFrameNote.asset_version_id === selectedVersionId}
-                                />
-                                <span>Onion Skin</span>
-                              </label>
-                              <div className="review-core-frame-note-opacity">
-                                <Layers3 size={14} />
-                                <input
-                                  type="range"
-                                  min="0.1"
-                                  max="0.9"
-                                  step="0.05"
-                                  value={onionSkinOpacity}
-                                  onChange={(event) => setOnionSkinOpacity(Number(event.target.value))}
-                                  disabled={!onionSkinEnabled}
-                                />
+                            {!isShareMode && (
+                              <div className="review-core-feedback-detail-actions">
+                                <button className="btn btn-secondary btn-sm" onClick={() => updateFrameNoteMeta(selectedFrameNote.id, { hidden: !selectedFrameNote.hidden })}>
+                                  {selectedFrameNote.hidden ? <Eye size={14} /> : <EyeOff size={14} />}
+                                  <span>{selectedFrameNote.hidden ? "Show" : "Hide"}</span>
+                                </button>
+                                <button className="btn btn-secondary btn-sm" onClick={() => exportFrameNoteJpg(selectedFrameNote)} disabled={exportingFrameNoteId === selectedFrameNote.id}>
+                                  <SaveIcon size={14} />
+                                  <span>{exportingFrameNoteId === selectedFrameNote.id ? "Exporting…" : "Export JPG"}</span>
+                                </button>
                               </div>
-                            </div>
+                            )}
                           </div>
                           <input
                             className="input-text"
@@ -2005,7 +2464,7 @@ export function ReviewCore({
                             onBlur={(event) => updateFrameNoteMeta(selectedFrameNote.id, { title: event.target.value })}
                           />
                           <div className="review-core-frame-note-editor">
-                            <img src={selectedFrameNote.frame_url} alt={selectedFrameNote.title || "Frame note"} />
+                            <img src={frameNoteImageCache[selectedFrameNote.id] || selectedFrameNote.frame_url} alt={selectedFrameNote.title || "Frame note"} />
                             <div className="review-core-frame-note-overlay">
                               {editingFrameNoteId === selectedFrameNote.id && (
                                 <div className="review-core-annotation-toolbar">
@@ -2060,15 +2519,11 @@ export function ReviewCore({
                                 {activeDraftItem && renderAnnotationItems([activeDraftItem], selectedAnnotationItemId)}
                               </svg>
                               <div className="review-core-annotation-footer">
-                                <span>{selectedFrameNote.hidden ? "Hidden note" : "Visible note"} · {selectedFrameNote.frame_number != null ? `Frame ${selectedFrameNote.frame_number}` : "Frame note"}</span>
+                                <span>{selectedFrameNote.hidden ? "Hidden draw feedback" : "Visible draw feedback"} · {selectedFrameNote.frame_number != null ? `Frame ${selectedFrameNote.frame_number}` : "Frame note"}</span>
                                 <div className="review-core-annotation-footer-actions">
                                   {editingFrameNoteId === selectedFrameNote.id ? (
                                     <>
                                       <button className="btn btn-secondary btn-sm" onClick={closeFrameNoteEditor}>Cancel</button>
-                                      <button className="btn btn-secondary btn-sm" onClick={() => exportFrameNoteJpg(selectedFrameNote)} disabled={exportingFrameNoteId === selectedFrameNote.id}>
-                                        <SaveIcon size={14} />
-                                        <span>{exportingFrameNoteId === selectedFrameNote.id ? "Exporting…" : "Export JPG"}</span>
-                                      </button>
                                       <button className="btn btn-secondary btn-sm" onClick={saveFrameNote} disabled={savingFrameNote}>
                                         <SaveIcon size={14} />
                                         <span>{savingFrameNote ? "Saving…" : "Save"}</span>
@@ -2076,11 +2531,14 @@ export function ReviewCore({
                                     </>
                                   ) : (
                                     <>
-                                      <button className="btn btn-secondary btn-sm" onClick={() => openFrameNoteEditor(selectedFrameNote)}>Edit Markup</button>
-                                      <button className="btn btn-secondary btn-sm" onClick={() => exportFrameNoteJpg(selectedFrameNote)} disabled={exportingFrameNoteId === selectedFrameNote.id}>
-                                        <SaveIcon size={14} />
-                                        <span>{exportingFrameNoteId === selectedFrameNote.id ? "Exporting…" : "Export JPG"}</span>
-                                      </button>
+                                      {!isShareMode && (
+                                        <>
+                                          <button className="btn btn-secondary btn-sm" onClick={() => openFrameNoteEditor(selectedFrameNote)}>Edit Markup</button>
+                                          <button className="btn btn-secondary btn-sm" onClick={() => deleteFrameNote(selectedFrameNote)}>
+                                            Delete
+                                          </button>
+                                        </>
+                                      )}
                                     </>
                                   )}
                                 </div>
@@ -2091,7 +2549,7 @@ export function ReviewCore({
                       ) : (
                         <div className="empty-state review-core-empty">
                           <Image size={18} />
-                          <p>Select a Frame Note to inspect, annotate, export, or compare across versions.</p>
+                          <p>Select feedback from the marker bar, draw thumbnails, or the list to inspect it here.</p>
                         </div>
                       )}
                     </section>
@@ -2099,165 +2557,7 @@ export function ReviewCore({
                 </div>
               )}
 
-              {canShowComments && (
-                <div className="review-core-comments-card">
-                  <div className="section-header">
-                    <span className="section-title">Comments</span>
-                    <span className="section-count highlight">{comments.length}</span>
-                  </div>
-                  {reviewerIdentities.size > 0 && (
-                    <div className="review-core-reviewer-summary">
-                      {visibleReviewerIdentities.map((reviewer) => (
-                        <span
-                          key={reviewer.name}
-                          className="review-core-reviewer-chip"
-                          style={{ "--reviewer-color": reviewer.color } as CSSProperties}
-                        >
-                          <span className="review-core-author-badge">{reviewer.initials}</span>
-                          {reviewer.name}
-                        </span>
-                      ))}
-                      {hiddenReviewerCount > 0 && (
-                        <span className="review-core-reviewer-chip review-core-reviewer-chip-muted">
-                          +{hiddenReviewerCount}
-                        </span>
-                      )}
-                    </div>
-                  )}
-                  {canAddComments && (
-                    <div className="review-core-comment-composer">
-                      <div className="review-core-comment-meta">
-                        <span>Current time</span>
-                        <strong>{formatTimecode(currentTime, selectedAsset)}</strong>
-                      </div>
-                      {isShareMode ? (
-                        <div className="review-core-comment-identity">
-                          <span>Commenting as <strong>{reviewerNameActive || "Guest"}</strong></span>
-                          <button className="btn-link btn-xs" onClick={handleUpdateReviewerName}>Edit</button>
-                        </div>
-                      ) : (
-                        <input
-                          className="input-text"
-                          value={commentAuthor}
-                          onChange={(event) => setCommentAuthor(event.target.value)}
-                          placeholder="Author"
-                          maxLength={80}
-                        />
-                      )}
-                      <textarea
-                        className="input-text review-core-comment-textarea"
-                        value={commentText}
-                        onChange={(event) => setCommentText(event.target.value)}
-                        placeholder="Add a version-scoped comment"
-                        maxLength={2000}
-                        onKeyDown={(event) => {
-                          if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-                            event.preventDefault();
-                            addComment();
-                          }
-                        }}
-                      />
-                      <div className="review-core-comment-actions">
-                        <span className="review-core-comment-shortcut">Cmd/Ctrl + Enter</span>
-                        <button className="btn btn-secondary btn-sm" onClick={addComment} disabled={submittingComment || !selectedVersionId}>
-                          {submittingComment ? "Adding…" : "Add"}
-                        </button>
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="review-core-comments-list" ref={commentListRef} onScroll={() => setLastUserScrollTime(Date.now())}>
-                    {comments.map((comment) => {
-                      const isEditing = editingCommentId === comment.id;
-                      const hasAnnotation = annotationsByCommentId.has(comment.id);
-                      const isActive = activeCommentId === comment.id;
-                      return (
-                        <div
-                          key={comment.id}
-                          data-comment-id={comment.id}
-                          className={`review-core-comment-row ${isActive ? "active-high" : ""} ${highlightedCommentId === comment.id ? "highlighted" : ""} ${comment.resolved ? "resolved" : ""}`}
-                        >
-                          <div className="review-core-comment-main">
-                            <button className="review-core-comment-jump" onClick={() => seekToComment(comment)}>
-                              <div className="review-core-comment-head">
-                                <strong>{formatTimecode(comment.timestamp_ms / 1000, selectedAsset)}</strong>
-                                {comment.frame_number != null && !selectedAsset.is_vfr && (
-                                  <span className="review-core-comment-frame">Frame {comment.frame_number}</span>
-                                )}
-                                {hasAnnotation && <span className="review-core-comment-badge">Annotated</span>}
-                              </div>
-                              {!isEditing && <p>{comment.text}</p>}
-                              {!isEditing && (
-                                <span
-                                  className="review-core-comment-author"
-                                  style={{ "--reviewer-color": getReviewerColor(comment.author_name) } as CSSProperties}
-                                >
-                                  <span className="review-core-author-badge">{getReviewerInitials(comment.author_name)}</span>
-                                  {comment.author_name}
-                                </span>
-                              )}
-                            </button>
-                            {isEditing && !isShareMode && (
-                              <div className="review-core-comment-edit">
-                                <textarea
-                                  className="input-text review-core-comment-textarea"
-                                  value={editingCommentText}
-                                  onChange={(event) => setEditingCommentText(event.target.value)}
-                                  onKeyDown={(event) => {
-                                    if (event.key === "Escape") {
-                                      setEditingCommentId(null);
-                                      setEditingCommentText("");
-                                    }
-                                  }}
-                                />
-                                <div className="review-core-comment-edit-actions">
-                                  <button className="btn btn-secondary btn-sm" onClick={() => { setEditingCommentId(null); setEditingCommentText(""); }}>
-                                    Cancel
-                                  </button>
-                                  <button className="btn btn-secondary btn-sm" onClick={() => saveEditedComment(comment.id)} disabled={savingCommentId === comment.id}>
-                                    {savingCommentId === comment.id ? "Saving…" : "Save"}
-                                  </button>
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                          {!isShareMode ? (
-                            <div className="review-core-comment-row-actions">
-                              <button className="btn btn-secondary btn-sm" onClick={() => toggleResolved(comment)}>
-                                {comment.resolved ? "Unresolve" : "Resolve"}
-                              </button>
-                              <button className="btn btn-secondary btn-sm" onClick={() => { setEditingCommentId(comment.id); setEditingCommentText(comment.text); }}>
-                                <Edit3 size={14} />
-                                <span>Edit</span>
-                              </button>
-                              <button className="btn btn-secondary btn-sm" onClick={() => openAnnotationEditor(comment)}>
-                                <PenTool size={14} />
-                                <span>Annotate</span>
-                              </button>
-                              <button className="btn btn-secondary btn-sm" onClick={() => deleteComment(comment)}>
-                                Delete
-                              </button>
-                            </div>
-                          ) : (
-                            <div className="review-core-comment-row-actions">
-                              <button className="btn btn-secondary btn-sm" onClick={() => seekToComment(comment)}>
-                                Jump
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                    {comments.length === 0 && (
-                      <div className="empty-state" style={{ padding: "16px 0" }}>
-                        No comments for this version yet.
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {!isShareMode && (
+              {!isShareMode && activePanelTab === "share" && (
                 <div className="review-core-share-card">
                   <div className="section-header">
                     <span className="section-title">Share</span>
@@ -2441,6 +2741,38 @@ export function ReviewCore({
 
 function buildShareLink(token: string) {
   return `${window.location.origin}/#/r/${token}`;
+}
+
+function buildMediaUrl({
+  serverBaseUrl,
+  projectId,
+  assetId,
+  versionId,
+  type,
+  file,
+  shareToken,
+  sessionToken,
+}: {
+  serverBaseUrl: string;
+  projectId: string;
+  assetId: string;
+  versionId: string;
+  type: "playlist" | "poster" | "thumb";
+  file?: string;
+  shareToken?: string | null;
+  sessionToken?: string | null;
+}) {
+  const query = new URLSearchParams();
+  if (shareToken) query.set("t", shareToken);
+  if (sessionToken) query.set("s", sessionToken);
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  if (type === "playlist") {
+    return `${serverBaseUrl}/media/${projectId}/${assetId}/${versionId}/hls/index.m3u8${suffix}`;
+  }
+  if (type === "poster") {
+    return `${serverBaseUrl}/media/${projectId}/${assetId}/${versionId}/poster.jpg${suffix}`;
+  }
+  return `${serverBaseUrl}/media/${projectId}/${assetId}/${versionId}/thumbs/${file}${suffix}`;
 }
 
 function buildProxyFileName(filename: string, versionNumber?: number) {
@@ -2716,7 +3048,10 @@ function renderAnnotationItems(items: AnnotationItem[], selectedId: string | nul
 }
 
 async function renderFrameNoteExport(note: ReviewCoreFrameNote) {
-  const image = await loadImage(note.frame_url);
+  const imageDataUrl = await invoke<string>("review_core_read_frame_note_image", {
+    noteId: note.id,
+  });
+  const image = await loadImage(imageDataUrl);
   const canvas = document.createElement("canvas");
   canvas.width = image.naturalWidth || image.width;
   canvas.height = image.naturalHeight || image.height;

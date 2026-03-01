@@ -1,7 +1,8 @@
 import { useState, useCallback, useMemo, useRef } from "react";
 import { FolderTree, Plus, Trash2, RotateCcw, Download, Folder, FileType, ChevronRight, Hash, UploadCloud } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
-import { save } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
+import { openPath } from "@tauri-apps/plugin-opener";
 
 interface FolderNode {
   id: string;
@@ -10,15 +11,23 @@ interface FolderNode {
   children?: FolderNode[];
 }
 
+const MAX_STRUCTURE_DEPTH = 12;
+const MAX_STRUCTURE_NODES = 1000;
+
 export function FolderCreator() {
   const [structure, setStructure] = useState<FolderNode[]>([
     { id: "root", name: "PROJECT_NAME", type: "folder", children: [] }
   ]);
   const [creating, setCreating] = useState(false);
+  const [creatingOnDisk, setCreatingOnDisk] = useState(false);
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const resetStructure = useCallback(() => {
     setStructure([{ id: "root", name: "PROJECT_NAME", type: "folder", children: [] }]);
+    setErrorMessage(null);
+    setStatusMessage(null);
   }, []);
 
   const addNode = useCallback((parentId: string, type: "folder" | "file") => {
@@ -84,17 +93,35 @@ export function FolderCreator() {
         const json = JSON.parse(event.target?.result as string);
 
         // Recursive function to validate and ensure all nodes have required properties
-        const validateStructure = (nodes: any[]): FolderNode[] => {
+        let nodeCount = 0;
+        const validateStructure = (nodes: any[], depth: number): FolderNode[] => {
           if (!Array.isArray(nodes)) return [];
+          if (depth > MAX_STRUCTURE_DEPTH) {
+            throw new Error(`Folder structure exceeds the ${MAX_STRUCTURE_DEPTH}-level depth limit.`);
+          }
           return nodes.map((node: any) => {
+            nodeCount += 1;
+            if (nodeCount > MAX_STRUCTURE_NODES) {
+              throw new Error(`Folder structure exceeds the ${MAX_STRUCTURE_NODES} node limit.`);
+            }
+            const rawName = typeof node.name === "string" ? node.name.trim() : "";
+            if (!rawName) {
+              throw new Error("Folder structure contains an empty node name.");
+            }
+            if (rawName.startsWith("/") || rawName.startsWith("\\") || /^[a-zA-Z]:[\\/]/.test(rawName)) {
+              throw new Error("Absolute paths are not allowed in imported folder schemas.");
+            }
+            if (rawName.split(/[\\/]/).some((segment: string) => segment === "..")) {
+              throw new Error("Path traversal segments are not allowed in imported folder schemas.");
+            }
             const validNode: FolderNode = {
               id: typeof node.id === 'string' && node.id ? node.id : Math.random().toString(36).substr(2, 9),
-              name: typeof node.name === 'string' ? node.name.replace(/[\/\\?%*:|"<>]/g, '_') : "unnamed_node",
+              name: rawName.replace(/[\/\\?%*:|"<>]/g, '_'),
               type: node.type === "file" ? "file" : "folder",
             };
 
             if (validNode.type === "folder" && Array.isArray(node.children)) {
-              validNode.children = validateStructure(node.children);
+              validNode.children = validateStructure(node.children, depth + 1);
             } else if (validNode.type === "folder") {
               validNode.children = [];
             }
@@ -109,15 +136,19 @@ export function FolderCreator() {
           rawData = [json];
         }
 
-        const newStructure = validateStructure(rawData);
+        const newStructure = validateStructure(rawData, 1);
         if (newStructure.length > 0) {
           // If first element isn't root folder, wrap it
           setStructure(newStructure);
+          setErrorMessage(null);
+          setStatusMessage("JSON structure loaded.");
         } else {
           console.error("No valid structure found in JSON");
+          setErrorMessage("No valid folder structure was found in that JSON file.");
         }
       } catch (err) {
         console.error("Failed to parse JSON", err);
+        setErrorMessage(err instanceof Error ? err.message : "Could not parse JSON structure.");
       }
 
       // Reset input so the same file can be uploaded again if needed
@@ -143,6 +174,8 @@ export function FolderCreator() {
 
   const handleCreate = async () => {
     setCreating(true);
+    setErrorMessage(null);
+    setStatusMessage(null);
     try {
       const dest = await save({
         filters: [{ name: "ZIP Archive", extensions: ["zip"] }],
@@ -150,11 +183,41 @@ export function FolderCreator() {
       });
       if (dest) {
         await invoke("create_folder_zip", { structure, outputPath: dest });
+        setStatusMessage(`ZIP saved to ${dest}`);
       }
     } catch (e) {
       console.error(e);
+      setErrorMessage(`ZIP export failed: ${String(e)}`);
     } finally {
       setCreating(false);
+    }
+  };
+
+  const handleCreateOnDisk = async () => {
+    setCreatingOnDisk(true);
+    setErrorMessage(null);
+    setStatusMessage(null);
+    try {
+      const dest = await open({
+        directory: true,
+        multiple: false,
+        title: "Choose destination folder"
+      });
+      if (!dest || typeof dest !== "string") {
+        return;
+      }
+      await invoke("create_folder_structure", { structure, outputRoot: dest });
+      setStatusMessage(`Folder structure created in ${dest}`);
+      try {
+        await openPath(dest);
+      } catch (openErr) {
+        console.warn("openPath failed for folder structure output", openErr);
+      }
+    } catch (e) {
+      console.error(e);
+      setErrorMessage(`Create on disk failed: ${String(e)}`);
+    } finally {
+      setCreatingOnDisk(false);
     }
   };
 
@@ -217,12 +280,22 @@ export function FolderCreator() {
           <button className="btn btn-secondary btn-glass" onClick={resetStructure}>
             <RotateCcw size={16} /> Reset
           </button>
-          <button className="btn btn-primary btn-glow" onClick={handleCreate} disabled={creating}>
+          <button className="btn btn-secondary btn-glass" onClick={handleCreateOnDisk} disabled={creating || creatingOnDisk}>
+            {creatingOnDisk ? <div className="spinner" /> : <Folder size={16} />}
+            <span>{creatingOnDisk ? "Creating..." : "Create on disk"}</span>
+          </button>
+          <button className="btn btn-primary btn-glow" onClick={handleCreate} disabled={creating || creatingOnDisk}>
             {creating ? <div className="spinner" /> : <Download size={16} />}
             <span>{creating ? "Packaging ZIP..." : "Export structure"}</span>
           </button>
         </div>
       </div>
+
+      {(statusMessage || errorMessage) && (
+        <div className={`folder-creator-status ${errorMessage ? "error" : "success"}`}>
+          {errorMessage || statusMessage}
+        </div>
+      )}
 
       <div className="folder-creator-workspace">
         <div className="workspace-section segment">
@@ -310,6 +383,25 @@ export function FolderCreator() {
           gap: 24px;
           flex: 1;
           min-height: 0;
+        }
+        .folder-creator-status {
+          margin-bottom: 18px;
+          padding: 12px 14px;
+          border-radius: 12px;
+          border: 1px solid rgba(255,255,255,0.08);
+          background: rgba(255,255,255,0.02);
+          color: rgba(255,255,255,0.84);
+          font-size: 0.92rem;
+        }
+        .folder-creator-status.error {
+          border-color: rgba(180, 82, 82, 0.28);
+          background: rgba(120, 38, 38, 0.16);
+          color: #f4c1c1;
+        }
+        .folder-creator-status.success {
+          border-color: rgba(74, 126, 126, 0.28);
+          background: rgba(28, 52, 52, 0.16);
+          color: #d0e7e7;
         }
 
         .workspace-section {

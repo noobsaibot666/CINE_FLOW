@@ -1,7 +1,11 @@
 use serde::Deserialize;
 use std::fs::File;
 use std::io::Write;
+use std::path::{Component, Path, PathBuf};
 use zip::write::FileOptions;
+
+const MAX_STRUCTURE_DEPTH: usize = 12;
+const MAX_STRUCTURE_NODES: usize = 1000;
 
 #[derive(Deserialize, Debug)]
 pub struct FolderNode {
@@ -14,6 +18,7 @@ pub fn create_zip_from_structure(
     structure: Vec<FolderNode>,
     output_path: &str,
 ) -> Result<(), String> {
+    validate_structure(&structure)?;
     let file = File::create(output_path).map_err(|e| e.to_string())?;
     let mut zip = zip::ZipWriter::new(file);
     let options = FileOptions::default()
@@ -25,6 +30,26 @@ pub fn create_zip_from_structure(
     }
 
     zip.finish().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub fn create_structure_on_disk(structure: Vec<FolderNode>, output_root: &str) -> Result<(), String> {
+    validate_structure(&structure)?;
+    let root = Path::new(output_root);
+    std::fs::create_dir_all(root).map_err(|e| e.to_string())?;
+
+    for node in structure {
+        add_node_to_disk(&node, root)?;
+    }
+
+    Ok(())
+}
+
+fn validate_structure(structure: &[FolderNode]) -> Result<(), String> {
+    let mut node_count = 0usize;
+    for node in structure {
+        validate_node(node, 1, &mut node_count)?;
+    }
     Ok(())
 }
 
@@ -56,4 +81,76 @@ fn add_node_to_zip<W: Write + std::io::Seek>(
     }
 
     Ok(())
+}
+
+fn add_node_to_disk(node: &FolderNode, parent_path: &Path) -> Result<(), String> {
+    let name = sanitize_node_name(&node.name)?;
+    let current_path = parent_path.join(name);
+
+    if node.r#type == "folder" {
+        std::fs::create_dir_all(&current_path).map_err(|e| e.to_string())?;
+        if let Some(children) = &node.children {
+            for child in children {
+                add_node_to_disk(child, &current_path)?;
+            }
+        }
+    } else {
+        if let Some(parent) = current_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        File::create(&current_path).map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
+fn validate_node(node: &FolderNode, depth: usize, node_count: &mut usize) -> Result<(), String> {
+    if depth > MAX_STRUCTURE_DEPTH {
+        return Err(format!(
+            "Folder structure exceeds the {}-level depth limit",
+            MAX_STRUCTURE_DEPTH
+        ));
+    }
+    *node_count += 1;
+    if *node_count > MAX_STRUCTURE_NODES {
+        return Err(format!(
+            "Folder structure exceeds the {} node limit",
+            MAX_STRUCTURE_NODES
+        ));
+    }
+    sanitize_node_name(&node.name)?;
+    if node.r#type != "folder" && node.r#type != "file" {
+        return Err("Folder structure nodes must be either folder or file".to_string());
+    }
+    if let Some(children) = &node.children {
+        for child in children {
+            validate_node(child, depth + 1, node_count)?;
+        }
+    }
+    Ok(())
+}
+
+fn sanitize_node_name(name: &str) -> Result<PathBuf, String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err("Folder node names cannot be empty".to_string());
+    }
+
+    let candidate = PathBuf::from(trimmed);
+    if candidate.is_absolute() {
+        return Err("Absolute paths are not allowed in folder structure nodes".to_string());
+    }
+    if candidate
+        .components()
+        .any(|component| {
+            matches!(
+                component,
+                Component::CurDir | Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        })
+    {
+        return Err("Folder structure nodes cannot contain path traversal segments".to_string());
+    }
+
+    Ok(candidate)
 }

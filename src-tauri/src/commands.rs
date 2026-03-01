@@ -3017,6 +3017,33 @@ pub async fn review_core_list_frame_notes(
 }
 
 #[tauri::command]
+pub async fn review_core_read_frame_note_image(
+    note_id: String,
+    file_name: Option<String>,
+    state: State<'_, Arc<AppState>>,
+) -> Result<String, String> {
+    let note = state
+        .db
+        .get_review_core_frame_note(&note_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("Frame note not found")?;
+    let base_path =
+        review_core::storage::safe_relative_path(&state.review_core_base_dir, &note.image_key)?;
+    let requested_file = match file_name.as_deref() {
+        Some("annotated.jpg") => "annotated.jpg",
+        _ => "frame.jpg",
+    };
+    let image_path = base_path
+        .parent()
+        .ok_or("Frame note path invalid")?
+        .join(requested_file);
+    let bytes = std::fs::read(&image_path)
+        .map_err(|e| format!("Failed to read frame note image: {}", e))?;
+    let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes);
+    Ok(format!("data:image/jpeg;base64,{}", b64))
+}
+
+#[tauri::command]
 pub async fn review_core_update_frame_note(
     note_id: String,
     updates: ReviewCoreFrameNoteUpdateInput,
@@ -5053,6 +5080,43 @@ mod tests {
         let result = resolve_share_link(&db, "token-1");
         assert!(matches!(result, Err(ReviewCoreShareError::Expired)));
     }
+
+    #[test]
+    fn protected_share_download_requires_valid_session() {
+        let db_path = std::env::temp_dir().join(format!(
+            "wrap-preview-share-download-test-{}.db",
+            uuid::Uuid::new_v4()
+        ));
+        let db = Database::new(db_path.to_str().unwrap()).unwrap();
+        db.upsert_project(&Project {
+            id: "p1".to_string(),
+            root_path: "/tmp".to_string(),
+            name: "P".to_string(),
+            created_at: "2026-01-01".to_string(),
+        })
+        .unwrap();
+        let link = ReviewCoreShareLink {
+            id: "share-protected".to_string(),
+            project_id: "p1".to_string(),
+            token: "token-protected".to_string(),
+            asset_version_ids_json: "[\"v1\"]".to_string(),
+            expires_at: None,
+            password_hash: Some("$2b$12$example".to_string()),
+            allow_comments: true,
+            allow_download: true,
+            created_at: "2026-01-01".to_string(),
+        };
+        db.create_review_core_share_link(&link).unwrap();
+
+        assert!(matches!(
+            validate_share_session(&db, &link, None),
+            Err(ReviewCoreShareError::Forbidden)
+        ));
+        assert!(matches!(
+            validate_share_session(&db, &link, Some("bad-session")),
+            Err(ReviewCoreShareError::Forbidden)
+        ));
+    }
 }
 
 #[tauri::command]
@@ -5076,6 +5140,14 @@ pub async fn create_folder_zip(
     output_path: String,
 ) -> Result<(), String> {
     folders_impl::create_zip_from_structure(structure, &output_path)
+}
+
+#[tauri::command]
+pub async fn create_folder_structure(
+    structure: Vec<folders_impl::FolderNode>,
+    output_root: String,
+) -> Result<(), String> {
+    folders_impl::create_structure_on_disk(structure, &output_root)
 }
 
 #[tauri::command]
