@@ -1,7 +1,8 @@
 use serde::Deserialize;
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::Write;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Component, Path};
 use zip::write::FileOptions;
 
 const MAX_STRUCTURE_DEPTH: usize = 12;
@@ -47,6 +48,7 @@ pub fn create_structure_on_disk(structure: Vec<FolderNode>, output_root: &str) -
 
 fn validate_structure(structure: &[FolderNode]) -> Result<(), String> {
     let mut node_count = 0usize;
+    validate_sibling_names(structure, "root")?;
     for node in structure {
         validate_node(node, 1, &mut node_count)?;
     }
@@ -59,14 +61,15 @@ fn add_node_to_zip<W: Write + std::io::Seek>(
     parent_path: &str,
     options: &FileOptions<()>,
 ) -> Result<(), String> {
+    let name = sanitize_node_name(&node.name)?;
     let current_path = if parent_path.is_empty() {
-        node.name.clone()
+        name.clone()
     } else {
-        format!("{}/{}", parent_path, node.name)
+        format!("{}/{}", parent_path, name)
     };
 
     if node.r#type == "folder" {
-        zip.add_directory(&current_path, *options)
+        zip.add_directory(format!("{}/", current_path), *options)
             .map_err(|e| e.to_string())?;
         if let Some(children) = &node.children {
             for child in children {
@@ -85,7 +88,7 @@ fn add_node_to_zip<W: Write + std::io::Seek>(
 
 fn add_node_to_disk(node: &FolderNode, parent_path: &Path) -> Result<(), String> {
     let name = sanitize_node_name(&node.name)?;
-    let current_path = parent_path.join(name);
+    let current_path = parent_path.join(&name);
 
     if node.r#type == "folder" {
         std::fs::create_dir_all(&current_path).map_err(|e| e.to_string())?;
@@ -123,6 +126,7 @@ fn validate_node(node: &FolderNode, depth: usize, node_count: &mut usize) -> Res
         return Err("Folder structure nodes must be either folder or file".to_string());
     }
     if let Some(children) = &node.children {
+        validate_sibling_names(children, &node.name)?;
         for child in children {
             validate_node(child, depth + 1, node_count)?;
         }
@@ -130,13 +134,16 @@ fn validate_node(node: &FolderNode, depth: usize, node_count: &mut usize) -> Res
     Ok(())
 }
 
-fn sanitize_node_name(name: &str) -> Result<PathBuf, String> {
+fn sanitize_node_name(name: &str) -> Result<String, String> {
     let trimmed = name.trim();
     if trimmed.is_empty() {
         return Err("Folder node names cannot be empty".to_string());
     }
+    if trimmed.contains('/') || trimmed.contains('\\') {
+        return Err("Folder node names must be a single name, not a nested path".to_string());
+    }
 
-    let candidate = PathBuf::from(trimmed);
+    let candidate = Path::new(trimmed);
     if candidate.is_absolute() {
         return Err("Absolute paths are not allowed in folder structure nodes".to_string());
     }
@@ -151,6 +158,24 @@ fn sanitize_node_name(name: &str) -> Result<PathBuf, String> {
     {
         return Err("Folder structure nodes cannot contain path traversal segments".to_string());
     }
+    let mut components = candidate.components();
+    match components.next() {
+        Some(Component::Normal(_)) if components.next().is_none() => Ok(trimmed.to_string()),
+        _ => Err("Folder node names must be a single filesystem segment".to_string()),
+    }
+}
 
-    Ok(candidate)
+fn validate_sibling_names(nodes: &[FolderNode], parent_name: &str) -> Result<(), String> {
+    let mut seen = HashSet::new();
+    for node in nodes {
+        let sanitized = sanitize_node_name(&node.name)?;
+        let key = sanitized.to_lowercase();
+        if !seen.insert(key) {
+            return Err(format!(
+                "Duplicate node name \"{}\" inside \"{}\"",
+                sanitized, parent_name
+            ));
+        }
+    }
+    Ok(())
 }

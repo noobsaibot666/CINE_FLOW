@@ -13,6 +13,77 @@ interface FolderNode {
 
 const MAX_STRUCTURE_DEPTH = 12;
 const MAX_STRUCTURE_NODES = 1000;
+const INVALID_NAME_CHARS = /[\/\\?%*:|"<>]/g;
+const CANONICAL_COUNT_LABELS = ["Main", "Primary", "Secondary"];
+
+function sanitizeNodeName(name: string) {
+  return name.replace(INVALID_NAME_CHARS, "_").trim();
+}
+
+function getHierarchyLabel(depth: number) {
+  return CANONICAL_COUNT_LABELS[depth] ?? null;
+}
+
+function makeSiblingKey(name: string) {
+  return sanitizeNodeName(name).toLocaleLowerCase();
+}
+
+function makeUniqueNodeName(baseName: string, siblings: FolderNode[]) {
+  const sanitizedBase = sanitizeNodeName(baseName) || "node";
+  const existing = new Set(siblings.map((node) => makeSiblingKey(node.name)));
+  if (!existing.has(makeSiblingKey(sanitizedBase))) {
+    return sanitizedBase;
+  }
+
+  let suffix = 2;
+  while (existing.has(makeSiblingKey(`${sanitizedBase}_${suffix}`))) {
+    suffix += 1;
+  }
+  return `${sanitizedBase}_${suffix}`;
+}
+
+function validateFolderNodes(
+  nodes: FolderNode[],
+  depth = 1,
+  parentLabel = "root",
+  counter = { value: 0 }
+): string | null {
+  if (depth > MAX_STRUCTURE_DEPTH) {
+    return `Folder structure exceeds the ${MAX_STRUCTURE_DEPTH}-level depth limit.`;
+  }
+
+  const seen = new Set<string>();
+  for (const node of nodes) {
+    counter.value += 1;
+    if (counter.value > MAX_STRUCTURE_NODES) {
+      return `Folder structure exceeds the ${MAX_STRUCTURE_NODES} node limit.`;
+    }
+
+    const sanitized = sanitizeNodeName(node.name);
+    if (!sanitized) {
+      return "Folder structure contains an empty node name.";
+    }
+
+    const duplicateKey = sanitized.toLocaleLowerCase();
+    if (seen.has(duplicateKey)) {
+      return `Duplicate node name "${sanitized}" inside "${parentLabel}".`;
+    }
+    seen.add(duplicateKey);
+
+    if (node.type !== "folder" && node.type !== "file") {
+      return "Folder structure nodes must be either folder or file.";
+    }
+
+    if (node.children?.length) {
+      const childError = validateFolderNodes(node.children, depth + 1, sanitized, counter);
+      if (childError) {
+        return childError;
+      }
+    }
+  }
+
+  return null;
+}
 
 export function FolderCreator() {
   const [structure, setStructure] = useState<FolderNode[]>([
@@ -31,17 +102,17 @@ export function FolderCreator() {
   }, []);
 
   const addNode = useCallback((parentId: string, type: "folder" | "file") => {
-    const newNode: FolderNode = {
-      id: Math.random().toString(36).substr(2, 9),
-      name: type === "folder" ? "new_folder" : "asset_file",
-      type,
-      children: type === "folder" ? [] : undefined
-    };
-
     const updateStructure = (nodes: FolderNode[]): FolderNode[] => {
       return nodes.map(node => {
         if (node.id === parentId) {
-          return { ...node, children: [...(node.children || []), newNode] };
+          const siblings = node.children || [];
+          const newNode: FolderNode = {
+            id: Math.random().toString(36).substr(2, 9),
+            name: makeUniqueNodeName(type === "folder" ? "new_folder" : "asset_file", siblings),
+            type,
+            children: type === "folder" ? [] : undefined
+          };
+          return { ...node, children: [...siblings, newNode] };
         }
         if (node.children) {
           return { ...node, children: updateStructure(node.children) };
@@ -67,8 +138,7 @@ export function FolderCreator() {
   }, []);
 
   const updateName = useCallback((id: string, name: string) => {
-    // Sanitize name for filesystem
-    const sanitized = name.replace(/[\/\\?%*:|"<>]/g, '_');
+    const sanitized = sanitizeNodeName(name);
     const updateStructure = (nodes: FolderNode[]): FolderNode[] => {
       return nodes.map(node => {
         if (node.id === id) {
@@ -99,6 +169,7 @@ export function FolderCreator() {
           if (depth > MAX_STRUCTURE_DEPTH) {
             throw new Error(`Folder structure exceeds the ${MAX_STRUCTURE_DEPTH}-level depth limit.`);
           }
+          const seen = new Set<string>();
           return nodes.map((node: any) => {
             nodeCount += 1;
             if (nodeCount > MAX_STRUCTURE_NODES) {
@@ -114,9 +185,15 @@ export function FolderCreator() {
             if (rawName.split(/[\\/]/).some((segment: string) => segment === "..")) {
               throw new Error("Path traversal segments are not allowed in imported folder schemas.");
             }
+            const sanitizedName = sanitizeNodeName(rawName);
+            const duplicateKey = sanitizedName.toLocaleLowerCase();
+            if (seen.has(duplicateKey)) {
+              throw new Error(`Duplicate node name "${sanitizedName}" found in imported folder schema.`);
+            }
+            seen.add(duplicateKey);
             const validNode: FolderNode = {
               id: typeof node.id === 'string' && node.id ? node.id : Math.random().toString(36).substr(2, 9),
-              name: rawName.replace(/[\/\\?%*:|"<>]/g, '_'),
+              name: sanitizedName,
               type: node.type === "file" ? "file" : "folder",
             };
 
@@ -177,6 +254,11 @@ export function FolderCreator() {
     setErrorMessage(null);
     setStatusMessage(null);
     try {
+      const validationError = validateFolderNodes(structure);
+      if (validationError) {
+        setErrorMessage(validationError);
+        return;
+      }
       const dest = await save({
         filters: [{ name: "ZIP Archive", extensions: ["zip"] }],
         defaultPath: "ProjectStructure.zip"
@@ -198,6 +280,11 @@ export function FolderCreator() {
     setErrorMessage(null);
     setStatusMessage(null);
     try {
+      const validationError = validateFolderNodes(structure);
+      if (validationError) {
+        setErrorMessage(validationError);
+        return;
+      }
       const dest = await open({
         directory: true,
         multiple: false,
@@ -221,22 +308,32 @@ export function FolderCreator() {
     }
   };
 
-  const renderNode = (node: FolderNode, depth: number = 0) => (
-    <div key={node.id} className="folder-node-wrapper" style={{ marginLeft: depth > 0 ? 24 : 0 }}>
-      <div className={`folder-node-item ${node.id === "root" || depth === 0 ? "root-node" : ""}`}>
+  const renderNode = (node: FolderNode, depth: number = 0) => {
+    const hierarchyLabel = node.type === "folder" ? getHierarchyLabel(depth) : null;
+    const depthClass =
+      depth === 0 ? "depth-main" : depth === 1 ? "depth-primary" : depth === 2 ? "depth-secondary" : "depth-detail";
+
+    return (
+    <div key={node.id} className={`folder-node-wrapper ${depthClass}`} style={{ marginLeft: depth > 0 ? 24 : 0 }}>
+      <div className={`folder-node-item ${node.id === "root" || depth === 0 ? "root-node" : ""} ${depthClass}`}>
         <div className="folder-node-drag-handle">
           <Hash size={12} opacity={0.3} />
         </div>
-        <div className="folder-node-icon">
+        <div className={`folder-node-icon ${node.type === "folder" ? "folder-kind" : "file-kind"}`}>
           {node.type === "folder" ? <Folder size={18} fill="currentColor" fillOpacity={0.1} /> : <FileType size={18} />}
         </div>
-        <input
-          className="folder-node-input"
-          value={node.name}
-          onChange={(e) => updateName(node.id, e.target.value)}
-          placeholder="Name..."
-          spellCheck={false}
-        />
+        <div className="folder-node-content">
+          <div className="folder-node-title-row">
+            <input
+              className="folder-node-input"
+              value={node.name}
+              onChange={(e) => updateName(node.id, e.target.value)}
+              placeholder="Name..."
+              spellCheck={false}
+            />
+            {hierarchyLabel && <span className={`folder-node-tier ${depthClass}`}>{hierarchyLabel}</span>}
+          </div>
+        </div>
         <div className="folder-node-actions">
           {node.type === "folder" && (
             <button className="btn-icon-sm" onClick={() => addNode(node.id, "folder")} title="Add Child Folder">
@@ -257,6 +354,7 @@ export function FolderCreator() {
       )}
     </div>
   );
+  };
 
   return (
     <div className="folder-creator-container">
@@ -333,16 +431,16 @@ export function FolderCreator() {
           border-radius: 16px;
           border: 1px solid rgba(255,255,255,0.05);
           color: var(--color-text);
-          animation: slideInUp 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+          animation: fadeInFolderCreator 0.36s ease;
           box-shadow: 0 20px 50px rgba(0,0,0,0.3);
           height: calc(100vh - 180px);
           display: flex;
           flex-direction: column;
         }
 
-        @keyframes slideInUp {
-          from { opacity: 0; transform: translateY(30px); }
-          to { opacity: 1; transform: translateY(0); }
+        @keyframes fadeInFolderCreator {
+          from { opacity: 0; }
+          to { opacity: 1; }
         }
 
         .folder-creator-header {
@@ -439,35 +537,56 @@ export function FolderCreator() {
           display: flex;
           align-items: center;
           gap: 12px;
-          padding: 10px 14px;
+          padding: 12px 14px;
           background: rgba(255,255,255,0.02);
-          border-radius: 8px;
+          border-radius: 10px;
           margin-bottom: 8px;
           border: 1px solid rgba(255,255,255,0.03);
-          transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-          animation: nodePop 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+          transition: border-color 0.18s ease, background 0.18s ease, transform 0.18s ease;
+          animation: nodeFade 0.24s ease;
         }
 
         .root-node {
-            background: rgba(var(--color-accent-rgb), 0.1);
-            border-color: rgba(var(--color-accent-rgb), 0.2);
+            background: rgba(80, 146, 92, 0.12);
+            border-color: rgba(110, 188, 126, 0.22);
         }
 
-        @keyframes nodePop {
-          from { transform: scale(0.95); opacity: 0; }
-          to { transform: scale(1); opacity: 1; }
+        @keyframes nodeFade {
+          from { opacity: 0; }
+          to { opacity: 1; }
         }
 
         .folder-node-item:hover {
-          background: rgba(255,255,255,0.05);
-          border-color: rgba(255,255,255,0.1);
-          transform: translateX(4px);
+          background: rgba(255,255,255,0.04);
+          border-color: rgba(126, 208, 143, 0.16);
+          transform: translateY(-1px);
         }
 
         .folder-node-icon {
-          color: var(--color-accent);
           display: flex;
           align-items: center;
+          justify-content: center;
+          width: 18px;
+          flex: 0 0 18px;
+        }
+
+        .folder-node-icon.folder-kind {
+          color: #79ca86;
+        }
+
+        .folder-node-icon.file-kind {
+          color: rgba(255,255,255,0.48);
+        }
+
+        .folder-node-content {
+          flex: 1;
+          min-width: 0;
+        }
+
+        .folder-node-title-row {
+          display: flex;
+          align-items: center;
+          gap: 10px;
         }
 
         .folder-node-input {
@@ -478,6 +597,34 @@ export function FolderCreator() {
           font-weight: 500;
           flex: 1;
           outline: none;
+          min-width: 0;
+        }
+
+        .folder-node-tier {
+          padding: 2px 8px;
+          border-radius: 999px;
+          border: 1px solid rgba(126, 208, 143, 0.14);
+          background: rgba(67, 112, 76, 0.14);
+          color: rgba(205, 245, 213, 0.8);
+          font-size: 10px;
+          font-weight: 700;
+          letter-spacing: 0.08em;
+          text-transform: uppercase;
+          white-space: nowrap;
+        }
+
+        .folder-node-tier.depth-primary {
+          background: rgba(56, 98, 65, 0.12);
+          color: rgba(190, 232, 198, 0.76);
+        }
+
+        .folder-node-tier.depth-secondary {
+          background: rgba(44, 83, 52, 0.1);
+          color: rgba(176, 219, 184, 0.72);
+        }
+
+        .folder-node-tier.depth-detail {
+          display: none;
         }
 
         .folder-node-actions {
@@ -495,8 +642,9 @@ export function FolderCreator() {
 
         .folder-node-children {
           position: relative;
-          border-left: 1px solid rgba(255,255,255,0.05);
+          border-left: 1px solid rgba(120, 196, 134, 0.1);
           margin-left: 10px;
+          padding-left: 12px;
         }
 
         .btn-glow:hover {
