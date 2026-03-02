@@ -1,5 +1,5 @@
-import { memo, useMemo, useState, useEffect, useRef } from "react";
-import { Virtuoso, GroupedVirtuoso } from 'react-virtuoso';
+import { memo, useMemo, useState, useEffect, useRef, forwardRef } from "react";
+import { GroupedVirtuoso } from 'react-virtuoso';
 import { Clip, ClipWithThumbnails } from "../types";
 import { FilmStrip } from "./FilmStrip";
 import { Film, Star, CheckCircle2, XCircle, FileDown, Image, ChevronUp, ChevronDown } from "lucide-react";
@@ -8,8 +8,32 @@ import { LookbookSortMode } from "../lookbook";
 import { getAudioBadge, buildClipMetadataTags } from "../utils/clipMetadata";
 import { getDisplayedThumbsForClip } from "../utils/shotPlannerThumbnails";
 
+const VirtuosoScroller = forwardRef<HTMLDivElement, any>(({ style, ...props }, ref) => (
+    <div
+        ref={ref}
+        className="clip-list-viewport custom-scrollbar"
+        style={{ ...style, overflowX: "hidden" }}
+        {...props}
+    />
+));
 
+VirtuosoScroller.displayName = "VirtuosoScroller";
 
+const VirtuosoList = forwardRef<HTMLDivElement, any>(({ style, ...props }, ref) => (
+    <div
+        ref={ref}
+        className="clip-list-virtuoso"
+        style={{ ...style, paddingBottom: "var(--space-2xl)" }}
+        {...props}
+    />
+));
+
+VirtuosoList.displayName = "VirtuosoList";
+
+const virtuosoComponents = {
+    Scroller: VirtuosoScroller,
+    List: VirtuosoList,
+};
 
 interface ClipListProps {
     clips: ClipWithThumbnails[];
@@ -19,7 +43,7 @@ interface ClipListProps {
     thumbCount: number;
     onUpdateMetadata: (clipId: string, updates: Partial<Pick<Clip, 'rating' | 'flag' | 'notes' | 'shot_size' | 'movement' | 'manual_order' | 'lut_enabled'>>) => Promise<boolean>;
     onHoverClip: (id: string | null) => void;
-    onFocusClip: (id: string) => void;
+    onFocusClip: (id: string, options?: { scrollIntoView?: boolean }) => void;
     onPromoteClip: (id: string) => void;
     onPlayClip: (id: string | null) => void;
     playingClipId: string | null;
@@ -33,6 +57,7 @@ interface ClipListProps {
     manualOrderConflict?: { clipId: string; nonce: number } | null;
     groupByShotSize: boolean;
     focusedClipId: string | null;
+    focusedClipScrollToken?: number;
     projectLutHash: string | null;
     lutRenderNonce: number;
     hideLutControls?: boolean;
@@ -65,6 +90,7 @@ export const ClipList = memo(function ClipList({
     manualOrderConflict,
     groupByShotSize,
     focusedClipId,
+    focusedClipScrollToken = 0,
     projectLutHash,
     lutRenderNonce,
     hideLutControls = false,
@@ -109,44 +135,36 @@ export const ClipList = memo(function ClipList({
 
         return { groups: labels, groupCounts: counts };
     }, [clips, groupByShotSize, lookbookSortMode]);
-
-    // Custom Scroll Container Component to match existing styles
-    const Scroller = ({ style, ...props }: any) => (
-        <div
-            className="clip-list-viewport custom-scrollbar"
-            style={{ ...style, overflowX: 'hidden' }}
-            {...props}
-        />
-    );
-
-    const List = ({ style, ...props }: any) => (
-        <div className="clip-list-virtuoso" style={{ ...style, paddingBottom: 'var(--space-2xl)' }} {...props} />
-    );
-
-
     const virtuosoRef = useRef<any>(null);
+    const lastFocusedId = useRef<string | null>(null);
 
     // Scroll to focused item when it changes
     useEffect(() => {
-        if (focusedClipId && virtuosoRef.current) {
-            const index = clips.findIndex(c => c.clip.id === focusedClipId);
-            if (index !== -1) {
-                virtuosoRef.current.scrollIntoView({
-                    index,
-                    behavior: 'smooth',
-                    done: () => {
-                        // Optional: extra check if we need to refine position
-                    }
-                });
-            }
+        if (!focusedClipId) {
+            lastFocusedId.current = null;
+            return;
         }
-    }, [focusedClipId, clips]);
+        if (focusedClipId === lastFocusedId.current || !virtuosoRef.current || focusedClipScrollToken === 0) {
+            lastFocusedId.current = focusedClipId;
+            return;
+        }
+        lastFocusedId.current = focusedClipId;
+        const index = clips.findIndex(c => c.clip.id === focusedClipId);
+        if (index !== -1) {
+            virtuosoRef.current.scrollIntoView({
+                index,
+                behavior: 'auto',
+                align: 'center'
+            });
+        }
+    }, [focusedClipId, focusedClipScrollToken, clips]);
 
-    const isManual = lookbookSortMode === "custom" || lookbookSortMode === "hook_first";
-    const useGroups = isManual || !groupByShotSize ? false : groups.length > 0;
+
+    // We always use GroupedVirtuoso now to prevent unmounting when switching modes.
+    // If grouping is disabled, we just have one large group.
 
     return (
-        <div className="clip-list-container" style={{ height: 'calc(100vh - 280px)', minHeight: 400 }}>
+        <div className="clip-list-container" style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
             {variant !== "shot-planner" && (
                 <div className="section-header">
                     <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-sm)' }}>
@@ -174,97 +192,55 @@ export const ClipList = memo(function ClipList({
                 </div>
             )}
 
-            {useGroups ? (
-                <GroupedVirtuoso
-                    ref={virtuosoRef}
-                    groupCounts={groupCounts}
-                    groupContent={(index) => (
+            <GroupedVirtuoso
+                ref={virtuosoRef}
+                groupCounts={groupCounts}
+                groupContent={(index) => {
+                    if (groups.length === 0) return null;
+                    return (
                         <div className="clip-shot-group-header" style={{ background: 'var(--color-bg-page)', zIndex: 10 }}>
                             {groups[index]}
                         </div>
-                    )}
-                    itemContent={(index) => {
-                        const item = clips[index];
-                        return (
-                            <div key={item.clip.id} style={{ paddingBottom: 'var(--space-md)' }}>
-                                <ClipCard
-                                    item={item}
-                                    thumbnailCache={thumbnailCache}
-                                    isSelected={selectedIds.has(item.clip.id)}
-                                    // Use stable wrappers or pass ID-aware handlers
-                                    onToggle={onToggleSelection}
-                                    thumbCount={thumbCount}
-                                    onUpdateMetadata={onUpdateMetadata}
-                                    onMouseEnter={onHoverClip}
-                                    onMouseLeave={onHoverClip}
-                                    onFocus={onFocusClip}
-                                    shotSizeOptions={shotSizeOptions}
-                                    movementOptions={movementOptions}
-                                    lookbookSortMode={lookbookSortMode}
-                                    onResetClip={onResetClip}
-                                    onManualOrderInputChange={onManualOrderInputChange}
-                                    manualOrderConflict={manualOrderConflict}
-                                    onPromoteClip={onPromoteClip}
-                                    onPlayClip={onPlayClip}
-                                    isPlaying={playingClipId === item.clip.id}
-                                    progress={playingClipId === item.clip.id ? playingProgress : 0}
-                                    cacheKeyContext={cacheKeyContext}
-                                    isFocused={focusedClipId === item.clip.id}
-                                    projectLutHash={projectLutHash}
-                                    lutRenderNonce={lutRenderNonce}
-                                    hideLutControls={hideLutControls}
-                                    variant={variant}
-                                />
-                            </div>
-                        );
-                    }}
-                    components={{ Scroller, List }}
-                    useWindowScroll={false}
-                    increaseViewportBy={300}
-                />
-            ) : (
-                <Virtuoso
-                    ref={virtuosoRef}
-                    totalCount={clips.length}
-                    itemContent={(index) => {
-                        const item = clips[index];
-                        return (
-                            <div key={item.clip.id} style={{ paddingBottom: 'var(--space-md)' }}>
-                                <ClipCard
-                                    item={item}
-                                    thumbnailCache={thumbnailCache}
-                                    isSelected={selectedIds.has(item.clip.id)}
-                                    onToggle={onToggleSelection}
-                                    thumbCount={thumbCount}
-                                    onUpdateMetadata={onUpdateMetadata}
-                                    onMouseEnter={onHoverClip}
-                                    onMouseLeave={onHoverClip}
-                                    onFocus={onFocusClip}
-                                    shotSizeOptions={shotSizeOptions}
-                                    movementOptions={movementOptions}
-                                    lookbookSortMode={lookbookSortMode}
-                                    onResetClip={onResetClip}
-                                    onManualOrderInputChange={onManualOrderInputChange}
-                                    manualOrderConflict={manualOrderConflict}
-                                    onPromoteClip={onPromoteClip}
-                                    onPlayClip={onPlayClip}
-                                    isPlaying={playingClipId === item.clip.id}
-                                    progress={playingClipId === item.clip.id ? playingProgress : 0}
-                                    cacheKeyContext={cacheKeyContext}
-                                    isFocused={focusedClipId === item.clip.id}
-                                    projectLutHash={projectLutHash}
-                                    lutRenderNonce={lutRenderNonce}
-                                    hideLutControls={hideLutControls}
-                                    variant={variant}
-                                />
-                            </div>
-                        );
-                    }}
-                    components={{ Scroller, List }}
-                    useWindowScroll={false}
-                    increaseViewportBy={300}
-                />
-            )}
+                    );
+                }}
+                itemContent={(index) => {
+                    const item = clips[index];
+                    return (
+                        <div key={item.clip.id} style={{ paddingBottom: 'var(--space-md)' }}>
+                            <ClipCard
+                                item={item}
+                                thumbnailCache={thumbnailCache}
+                                isSelected={selectedIds.has(item.clip.id)}
+                                onToggle={onToggleSelection}
+                                thumbCount={thumbCount}
+                                onUpdateMetadata={onUpdateMetadata}
+                                onMouseEnter={onHoverClip}
+                                onMouseLeave={onHoverClip}
+                                onFocus={onFocusClip}
+                                shotSizeOptions={shotSizeOptions}
+                                movementOptions={movementOptions}
+                                lookbookSortMode={lookbookSortMode}
+                                onResetClip={onResetClip}
+                                onManualOrderInputChange={onManualOrderInputChange}
+                                manualOrderConflict={manualOrderConflict}
+                                onPromoteClip={onPromoteClip}
+                                onPlayClip={onPlayClip}
+                                isPlaying={playingClipId === item.clip.id}
+                                progress={playingClipId === item.clip.id ? playingProgress : 0}
+                                cacheKeyContext={cacheKeyContext}
+                                isFocused={focusedClipId === item.clip.id}
+                                projectLutHash={projectLutHash}
+                                lutRenderNonce={lutRenderNonce}
+                                hideLutControls={hideLutControls}
+                                variant={variant}
+                            />
+                        </div>
+                    );
+                }}
+                components={virtuosoComponents}
+                useWindowScroll={false}
+                increaseViewportBy={500}
+            />
             {variant !== "shot-planner" && (
                 <div className="clip-list-footer" style={{ marginTop: 'var(--space-xl)', display: 'flex', gap: 'var(--space-md)', justifyContent: 'center', padding: 'var(--space-lg) 0' }}>
                     <button
@@ -683,4 +659,3 @@ const ClipCard = memo(function ClipCard({
         </div>
     );
 });
-

@@ -2156,8 +2156,26 @@ body {
 
 .app-content {
   flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: var(--space-lg);
+  min-height: 0;
+}
+
+.media-workspace {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.scrollable-view {
+  flex: 1;
   overflow-y: auto;
   padding: var(--space-lg);
+  min-height: 0;
 }
 
 /* ─── Buttons ─── */

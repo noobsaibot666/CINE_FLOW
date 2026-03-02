@@ -1,4 +1,4 @@
-import { Component, ReactNode, useState, useEffect, useCallback, useRef } from "react";
+import { Component, ReactNode, useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
@@ -22,6 +22,7 @@ import {
   AlertTriangle,
   Film,
   Image,
+  XCircle,
 } from "lucide-react";
 import { ClipList } from "./components/ClipList";
 import { PrintLayout } from "./components/PrintLayout";
@@ -59,11 +60,11 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boole
   render() {
     if (this.state.hasError) {
       return (
-        <div style={{ padding: 40, textAlign: 'center', background: '#0f172a', color: 'white', height: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+        <main className="main-content" style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', padding: 40, textAlign: 'center', background: '#0f172a', color: 'white', height: '100vh', alignItems: 'center', justifyContent: 'center' }}>
           <h2 style={{ fontSize: '1.5rem', fontWeight: 700, marginBottom: 16 }}>Something went wrong</h2>
           <p style={{ color: '#94a3b8', maxWidth: 400, marginBottom: 24 }}>{this.state.error?.message || "An unexpected error occurred in the application UI."}</p>
           <button style={{ padding: '10px 20px', background: 'var(--color-accent)', border: 'none', borderRadius: 8, color: '#000', fontWeight: 600, cursor: 'pointer' }} onClick={() => window.location.reload()}>Reload App</button>
-        </div>
+        </main>
       );
     }
     return this.props.children;
@@ -459,12 +460,13 @@ function AppContent() {
     }
   }, []);
 
-  const [hoveredClipId, setHoveredClipId] = useState<string | null>(null);
   const [focusedClipId, setFocusedClipId] = useState<string | null>(null);
+  const [focusedClipScrollToken, setFocusedClipScrollToken] = useState(0);
+  const hoveredClipIdRef = useRef<string | null>(null);
 
 
   const focusClipField = useCallback((clipId: string, field: "manual_order" | "shot_size" | "movement") => {
-    setHoveredClipId(clipId);
+    hoveredClipIdRef.current = clipId;
     requestAnimationFrame(() => {
       const selector = `[data-clip-id="${clipId}"][data-clip-field="${field}"]`;
       const input = document.querySelector<HTMLInputElement>(selector);
@@ -615,27 +617,24 @@ function AppContent() {
     });
   }, [handleUpdateMetadata]);
 
-  const focusShotPlannerClip = useCallback((clipId: string) => {
+  const focusShotPlannerClip = useCallback((clipId: string, options?: { scrollIntoView?: boolean }) => {
     setFocusedClipId(prev => {
       if (prev === clipId) return prev;
       return clipId;
     });
+    if (options?.scrollIntoView) {
+      setFocusedClipScrollToken((prev) => prev + 1);
+    }
     if (manualOrderBufferRef.current) {
       clearManualOrderBuffer();
     }
   }, [clearManualOrderBuffer]);
 
   const onHoverClip = useCallback((id: string | null) => {
-    setHoveredClipId(prev => {
-      if (prev === id) return prev;
-      return id;
-    });
+    hoveredClipIdRef.current = id;
   }, []);
 
-  useEffect(() => {
-    if (!isShotPlannerActive || clips.length === 0 || hoveredClipId) return;
-    setHoveredClipId(clips[0].clip.id);
-  }, [clips, hoveredClipId, isShotPlannerActive]);
+
 
   const handlePlayClip = useCallback(async (id: string | null) => {
     if (!id || (playingClipId === id)) {
@@ -1006,6 +1005,12 @@ function AppContent() {
     }
   ];
 
+  const handleResetAppData = useCallback(() => {
+    localStorage.clear();
+    sessionStorage.clear();
+    window.location.reload();
+  }, []);
+
   const completeTour = useCallback(() => {
     localStorage.setItem(TOUR_SEEN_KEY, "true");
     localStorage.setItem(TOUR_VERSION_KEY, TOUR_VERSION);
@@ -1025,7 +1030,7 @@ function AppContent() {
     setActivePreproductionApp(null);
     setActiveMediaWorkspaceApp(null);
     setTourRun(true);
-  }, []);
+  }, [handleResetAppData]);
   const effectiveLookbookSortMode: LookbookSortMode = lookbookSortMode === "hook_first" ? "canonical" : lookbookSortMode;
   const thumbnailsByClipId = clips.reduce<Record<string, ClipWithThumbnails["thumbnails"]>>((acc, row) => {
     acc[row.clip.id] = row.thumbnails;
@@ -1184,12 +1189,16 @@ function AppContent() {
     return true;
   }).length;
 
-  const visibleClips = clips.filter(({ clip }) => {
-    const shotSizeMatch = shotSizeFilter === "all" ? true : clip.shot_size === shotSizeFilter;
-    return shotSizeMatch;
-  });
-  const lookbookSorted = sortLookbookClips(visibleClips, effectiveLookbookSortMode);
-  const sortedClips = lookbookSorted;
+  const visibleClips = useMemo(() => {
+    return clips.filter(({ clip }) => {
+      const shotSizeMatch = shotSizeFilter === "all" ? true : clip.shot_size === shotSizeFilter;
+      return shotSizeMatch;
+    });
+  }, [clips, shotSizeFilter]);
+
+  const sortedClips = useMemo(() => {
+    return sortLookbookClips(visibleClips, effectiveLookbookSortMode);
+  }, [visibleClips, effectiveLookbookSortMode]);
   const selectableClipIds = sortedClips
     .filter((c) => c.clip.flag !== "reject")
     .map((c) => c.clip.id);
@@ -1207,7 +1216,7 @@ function AppContent() {
     shotPlannerStateRef.current = {
       active: isShotPlannerActive,
       tourRun,
-      hoveredClipId,
+      hoveredClipId: hoveredClipIdRef.current,
       sortedClips,
       clips,
       effectiveLookbookSortMode,
@@ -1227,7 +1236,6 @@ function AppContent() {
     effectiveLookbookSortMode,
     handleUpdateMetadata,
     handleResetShotPlannerClip,
-    hoveredClipId,
     focusShotPlannerClip,
     isShotPlannerActive,
     requestExport,
@@ -1303,7 +1311,7 @@ function AppContent() {
 
         if (state.sortedClips[nextIndex] && state.sortedClips[nextIndex].clip.id !== targetId) {
           e.preventDefault();
-          state.focusShotPlannerClip(state.sortedClips[nextIndex].clip.id);
+          state.focusShotPlannerClip(state.sortedClips[nextIndex].clip.id, { scrollIntoView: true });
           state.onHoverClip(state.sortedClips[nextIndex].clip.id);
         }
         return;
@@ -1509,6 +1517,15 @@ function AppContent() {
                           <span className="menu-item-icon"><Compass size={16} /></span>
                           <span className="menu-item-label">{tourRun ? "Hide Tour" : "Show Tour"}</span>
                         </button>
+                        <div className="dropdown-divider menu-divider" />
+                        <button className="dropdown-item menu-item text-danger" onClick={() => {
+                          if (window.confirm("This will clear all local settings and reload the app. Continue?")) {
+                            handleResetAppData();
+                          }
+                        }}>
+                          <span className="menu-item-icon"><XCircle size={16} /></span>
+                          <span className="menu-item-label">Reset App Data</span>
+                        </button>
                       </div>
                     </>
                   )}
@@ -1652,6 +1669,7 @@ function AppContent() {
                       onHoverClip={onHoverClip}
                       onFocusClip={focusShotPlannerClip}
                       focusedClipId={focusedClipId}
+                      focusedClipScrollToken={focusedClipScrollToken}
                       cacheKeyContext={thumbCacheContext}
                       shotSizeOptions={[...SHOT_SIZE_CANONICAL, ...(enableOptionalShotTags ? SHOT_SIZE_OPTIONAL : []), ...customShotSizes]}
                       movementOptions={[...MOVEMENT_CANONICAL, ...customMovements]}
@@ -1702,41 +1720,42 @@ function AppContent() {
                   </div>
                 )
               ) : activePreproductionApp === 'folder-creator' ? (
-                <div className="media-workspace">
-
+                <div className="scrollable-view">
                   <FolderCreator />
                 </div>
               ) : (
-                <div className="onboarding-container">
-                  <div className="onboarding-header">
-                    <span className="onboarding-eyebrow">Module</span>
-                    <h1>Pre-production</h1>
-                    <p>Plan your shoot and organize your project structure.</p>
-                  </div>
-                  <div className="onboarding-grid onboarding-grid-root">
-                    <div
-                      className="module-card premium-card"
-                      onClick={() => {
-                        if (projectStates.pre.projectId) setActivePreproductionApp('shot-planner');
-                        else handleSelectFolder('shot-planner');
-                      }}
-                    >
-                      <div className="module-icon"><Camera size={20} strokeWidth={1.5} /></div>
-                      <div className="module-info">
-                        <h3>Shot Planner</h3>
-                        <p>Analyze reference footage and export selected on-set reference sheets.</p>
-                        <span className="module-action">Open App <ArrowRight size={14} /></span>
-                      </div>
+                <div className="scrollable-view">
+                  <div className="onboarding-container">
+                    <div className="onboarding-header">
+                      <span className="onboarding-eyebrow">Module</span>
+                      <h1>Pre-production</h1>
+                      <p>Plan your shoot and organize your project structure.</p>
                     </div>
-                    <div
-                      className="module-card premium-card"
-                      onClick={() => setActivePreproductionApp('folder-creator')}
-                    >
-                      <div className="module-icon"><FolderTree size={20} strokeWidth={1.5} /></div>
-                      <div className="module-info">
-                        <h3>Folder Creator</h3>
-                        <p>Generate sophisticated folder structures for multi-platform use.</p>
-                        <span className="module-action">Open App <ArrowRight size={14} /></span>
+                    <div className="onboarding-grid onboarding-grid-root">
+                      <div
+                        className="module-card premium-card"
+                        onClick={() => {
+                          if (projectStates.pre.projectId) setActivePreproductionApp('shot-planner');
+                          else handleSelectFolder('shot-planner');
+                        }}
+                      >
+                        <div className="module-icon"><Camera size={20} strokeWidth={1.5} /></div>
+                        <div className="module-info">
+                          <h3>Shot Planner</h3>
+                          <p>Analyze reference footage and export selected on-set reference sheets.</p>
+                          <span className="module-action">Open App <ArrowRight size={14} /></span>
+                        </div>
+                      </div>
+                      <div
+                        className="module-card premium-card"
+                        onClick={() => setActivePreproductionApp('folder-creator')}
+                      >
+                        <div className="module-icon"><FolderTree size={20} strokeWidth={1.5} /></div>
+                        <div className="module-info">
+                          <h3>Folder Creator</h3>
+                          <p>Generate sophisticated folder structures for multi-platform use.</p>
+                          <span className="module-action">Open App <ArrowRight size={14} /></span>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -1762,6 +1781,7 @@ function AppContent() {
                       onHoverClip={onHoverClip}
                       onFocusClip={focusShotPlannerClip}
                       focusedClipId={focusedClipId}
+                      focusedClipScrollToken={focusedClipScrollToken}
                       cacheKeyContext={thumbCacheContext}
                       shotSizeOptions={[...SHOT_SIZE_CANONICAL, ...customShotSizes]}
                       movementOptions={[...MOVEMENT_CANONICAL, ...customMovements]}
@@ -1801,120 +1821,124 @@ function AppContent() {
                   />
                 </div>
               ) : (
-                <div className="onboarding-container">
-                  <div className="onboarding-header">
-                    <h1>Media Workspace</h1>
-                    <p>Post-production suite for media verification and organization.</p>
+                <div className="scrollable-view">
+                  <div className="onboarding-container">
+                    <div className="onboarding-header">
+                      <h1>Media Workspace</h1>
+                      <p>Post-production suite for media verification and organization.</p>
+                    </div>
+                    <div className="onboarding-grid workspace-apps-grid">
+                      <div
+                        className="module-card premium-card"
+                        onClick={() => setActiveMediaWorkspaceApp('safe-copy')}
+                      >
+                        <div className="module-icon"><ShieldCheck size={20} strokeWidth={1.5} /></div>
+                        <div className="module-info">
+                          <h3>Safe Copy</h3>
+                          <p>Verify source and destination pairs before editorial work begins.</p>
+                          <span className="module-action">Open App <ArrowRight size={14} /></span>
+                        </div>
+                      </div>
+                      <div
+                        className="module-card premium-card"
+                        onClick={() => {
+                          if (projectId) setActiveMediaWorkspaceApp('clip-review');
+                          else handleSelectFolder("clip-review");
+                        }}
+                      >
+                        <div className="module-icon"><Camera size={20} strokeWidth={1.5} /></div>
+                        <div className="module-info">
+                          <h3>Open Workspace / Review</h3>
+                          <p>{projectId ? "Continue reviewing thumbnails, metadata, and audio." : "Load a footage folder to unlock Review, Scene Blocks, and Delivery."}</p>
+                          <span className="module-action">{projectId ? "Open App" : "Load Workspace"} <ArrowRight size={14} /></span>
+                        </div>
+                      </div>
+                      <div
+                        className="module-card premium-card"
+                        onClick={() => {
+                          setActiveMediaWorkspaceApp('review-core');
+                        }}
+                      >
+                        <div className="module-icon"><Film size={20} strokeWidth={1.5} /></div>
+                        <div className="module-info">
+                          <h3>Review Core</h3>
+                          <p>{projectId ? "Play app-managed HLS proxies, inspect versions, and confirm metadata." : "Create or reopen a Review Core project to import and review media independently."}</p>
+                          <span className="module-action">Open App <ArrowRight size={14} /></span>
+                        </div>
+                      </div>
+                      <div
+                        className={`module-card premium-card ${!projectId ? "disabled" : ""}`}
+                        onClick={() => {
+                          if (projectId) setActiveMediaWorkspaceApp('scene-blocks');
+                        }}
+                      >
+                        <div className="module-icon"><Boxes size={20} strokeWidth={1.5} /></div>
+                        <div className="module-info">
+                          <h3>Scene Blocks</h3>
+                          <p>{projectId ? "Organize reviewed clips into deterministic editorial groups." : "Available after a workspace is opened in Review."}</p>
+                          <span className="module-action">{projectId ? "Open App" : "Workspace required"}</span>
+                        </div>
+                      </div>
+                      <div
+                        className={`module-card premium-card ${!projectId ? "disabled" : ""}`}
+                        onClick={() => { if (projectId) setShowExportPanel(true); }}
+                      >
+                        <div className="module-icon"><FileDown size={20} strokeWidth={1.5} /></div>
+                        <div className="module-info">
+                          <h3>Delivery</h3>
+                          <p>{projectId ? "Export Resolve timelines and Director Packs from the current scope." : "Available after clips are loaded into the workspace."}</p>
+                          <span className="module-action">{projectId ? "Open App" : "Workspace required"}</span>
+                        </div>
+                      </div>
+                    </div>
+                    {inWorkspaceLauncher && !projectId && (
+                      <div className="workspace-launcher-hint">
+                        <strong>Review Core</strong> can now run independently. <strong>Scene Blocks</strong> and <strong>Delivery</strong> still require an opened workspace.
+                      </div>
+                    )}
                   </div>
-                  <div className="onboarding-grid workspace-apps-grid">
-                    <div
-                      className="module-card premium-card"
-                      onClick={() => setActiveMediaWorkspaceApp('safe-copy')}
-                    >
-                      <div className="module-icon"><ShieldCheck size={20} strokeWidth={1.5} /></div>
-                      <div className="module-info">
-                        <h3>Safe Copy</h3>
-                        <p>Verify source and destination pairs before editorial work begins.</p>
-                        <span className="module-action">Open App <ArrowRight size={14} /></span>
-                      </div>
-                    </div>
-                    <div
-                      className="module-card premium-card"
-                      onClick={() => {
-                        if (projectId) setActiveMediaWorkspaceApp('clip-review');
-                        else handleSelectFolder("clip-review");
-                      }}
-                    >
-                      <div className="module-icon"><Camera size={20} strokeWidth={1.5} /></div>
-                      <div className="module-info">
-                        <h3>Open Workspace / Review</h3>
-                        <p>{projectId ? "Continue reviewing thumbnails, metadata, and audio." : "Load a footage folder to unlock Review, Scene Blocks, and Delivery."}</p>
-                        <span className="module-action">{projectId ? "Open App" : "Load Workspace"} <ArrowRight size={14} /></span>
-                      </div>
-                    </div>
-                    <div
-                      className="module-card premium-card"
-                      onClick={() => {
-                        setActiveMediaWorkspaceApp('review-core');
-                      }}
-                    >
-                      <div className="module-icon"><Film size={20} strokeWidth={1.5} /></div>
-                      <div className="module-info">
-                        <h3>Review Core</h3>
-                        <p>{projectId ? "Play app-managed HLS proxies, inspect versions, and confirm metadata." : "Create or reopen a Review Core project to import and review media independently."}</p>
-                        <span className="module-action">Open App <ArrowRight size={14} /></span>
-                      </div>
-                    </div>
-                    <div
-                      className={`module-card premium-card ${!projectId ? "disabled" : ""}`}
-                      onClick={() => {
-                        if (projectId) setActiveMediaWorkspaceApp('scene-blocks');
-                      }}
-                    >
-                      <div className="module-icon"><Boxes size={20} strokeWidth={1.5} /></div>
-                      <div className="module-info">
-                        <h3>Scene Blocks</h3>
-                        <p>{projectId ? "Organize reviewed clips into deterministic editorial groups." : "Available after a workspace is opened in Review."}</p>
-                        <span className="module-action">{projectId ? "Open App" : "Workspace required"}</span>
-                      </div>
-                    </div>
-                    <div
-                      className={`module-card premium-card ${!projectId ? "disabled" : ""}`}
-                      onClick={() => { if (projectId) setShowExportPanel(true); }}
-                    >
-                      <div className="module-icon"><FileDown size={20} strokeWidth={1.5} /></div>
-                      <div className="module-info">
-                        <h3>Delivery</h3>
-                        <p>{projectId ? "Export Resolve timelines and Director Packs from the current scope." : "Available after clips are loaded into the workspace."}</p>
-                        <span className="module-action">{projectId ? "Open App" : "Workspace required"}</span>
-                      </div>
-                    </div>
-                  </div>
-                  {inWorkspaceLauncher && !projectId && (
-                    <div className="workspace-launcher-hint">
-                      <strong>Review Core</strong> can now run independently. <strong>Scene Blocks</strong> and <strong>Delivery</strong> still require an opened workspace.
-                    </div>
-                  )}
                 </div>
               )
             ) : (
-              <div className="onboarding-container">
-                <div className="onboarding-header">
-                  <span className="onboarding-eyebrow">Modules</span>
-                  <h1>Wrap Preview Suite</h1>
-                  <p>Offline media control for shoots and post.</p>
-                </div>
-                <div className="onboarding-grid onboarding-grid-root">
-                  <div
-                    className="module-card premium-card tour-home-preproduction"
-                    onClick={() => {
-                      setActiveTab("preproduction");
-                      setActivePreproductionApp(null);
-                      setActiveMediaWorkspaceApp(null);
-                    }}
-                  >
-                    <div className="module-icon"><Boxes size={22} strokeWidth={1.35} /></div>
-                    <div className="module-info">
-                      <span className="module-label">Pre-Production</span>
-                      <h2>Pre-Production</h2>
-                      <p>Plan shots, build references, generate folder structure.</p>
-                      <span className="module-action">Enter Module <ArrowRight size={16} /></span>
-                    </div>
+              <div className="scrollable-view">
+                <div className="onboarding-container">
+                  <div className="onboarding-header">
+                    <span className="onboarding-eyebrow">Modules</span>
+                    <h1>Wrap Preview Suite</h1>
+                    <p>Offline media control for shoots and post.</p>
                   </div>
-                  <div
-                    className="module-card premium-card tour-home-postproduction"
-                    onClick={() => {
-                      setActiveTab("media-workspace");
-                      setActivePreproductionApp(null);
-                      setActiveMediaWorkspaceApp(null);
-                    }}
-                  >
-                    <div className="module-icon"><BriefcaseBusiness size={22} strokeWidth={1.35} /></div>
-                    <div className="module-info">
-                      <span className="module-label">Post-Production</span>
-                      <h2>Post-Production</h2>
-                      <p>Review footage, verify copies, build selects, export handoff.</p>
-                      <span className="module-action">Enter Module <ArrowRight size={16} /></span>
+                  <div className="onboarding-grid onboarding-grid-root">
+                    <div
+                      className="module-card premium-card tour-home-preproduction"
+                      onClick={() => {
+                        setActiveTab("preproduction");
+                        setActivePreproductionApp(null);
+                        setActiveMediaWorkspaceApp(null);
+                      }}
+                    >
+                      <div className="module-icon"><Boxes size={22} strokeWidth={1.35} /></div>
+                      <div className="module-info">
+                        <span className="module-label">Pre-Production</span>
+                        <h2>Pre-Production</h2>
+                        <p>Plan shots, build references, generate folder structure.</p>
+                        <span className="module-action">Enter Module <ArrowRight size={16} /></span>
+                      </div>
+                    </div>
+                    <div
+                      className="module-card premium-card tour-home-postproduction"
+                      onClick={() => {
+                        setActiveTab("media-workspace");
+                        setActivePreproductionApp(null);
+                        setActiveMediaWorkspaceApp(null);
+                      }}
+                    >
+                      <div className="module-icon"><BriefcaseBusiness size={22} strokeWidth={1.35} /></div>
+                      <div className="module-info">
+                        <span className="module-label">Post-Production</span>
+                        <h2>Post-Production</h2>
+                        <p>Review footage, verify copies, build selects, export handoff.</p>
+                        <span className="module-action">Enter Module <ArrowRight size={16} /></span>
+                      </div>
                     </div>
                   </div>
                 </div>
