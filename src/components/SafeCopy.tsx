@@ -33,6 +33,7 @@ interface AppInfo {
 interface ProjectInfo {
   id: string;
   name: string;
+  root_path: string;
 }
 
 interface QueueCheck {
@@ -61,24 +62,56 @@ interface SafeCopyProps {
 }
 
 const MAX_QUEUE = 5;
+const PREVIEW_VIDEO_EXTENSIONS = new Set([
+  "mp4", "mov", "mxf", "avi", "mkv", "r3d", "braw", "mts", "m4v", "webm", "wmv", "flv",
+  "ts", "m2ts", "mpg", "mpeg", "3gp", "ogv"
+]);
+
+function shouldShowVerificationPreviewItem(relPath: string) {
+  const ext = relPath.split(".").pop()?.toLowerCase() ?? "";
+  return PREVIEW_VIDEO_EXTENSIONS.has(ext);
+}
 
 export function SafeCopy({ projectId, onJobCreated, onError }: SafeCopyProps) {
   const [mode, setMode] = useState<"FAST" | "SOLID">("SOLID");
   const [queue, setQueue] = useState<QueueCheck[]>([]);
+  const [defaultSourcePath, setDefaultSourcePath] = useState("");
   const [queueRunId, setQueueRunId] = useState<string | null>(null);
   const [isRunningQueue, setIsRunningQueue] = useState(false);
   const [progress, setProgress] = useState<VerificationProgress | null>(null);
   const [results, setResults] = useState<VerificationItem[]>([]);
   const [filter, setFilter] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("ALL");
-  const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const persistTimers = useRef<Record<number, number>>({});
   const queueRef = useRef<QueueCheck[]>([]);
+
+  const createInitialRow = async (sourcePath = "") => {
+    const row = await invoke<QueueCheck>("set_verification_queue_item", {
+      projectId,
+      idx: 1,
+      sourcePath,
+      destPath: "",
+      label: "Check 01"
+    });
+    setQueue([row]);
+    return row;
+  };
 
   const loadQueue = async (initial = false) => {
     try {
       const rows = await invoke<QueueCheck[]>("list_verification_queue", { projectId });
-      setQueue(rows.sort((a, b) => a.idx - b.idx));
+      const sortedRows = rows.sort((a, b) => a.idx - b.idx);
+      if (sortedRows.length === 0) {
+        if (projectId !== "__global__") {
+          const project = await invoke<ProjectInfo | null>("get_project", { projectId });
+          setDefaultSourcePath(project?.root_path ?? "");
+          await createInitialRow(project?.root_path ?? "");
+        } else {
+          await createInitialRow("");
+        }
+      } else {
+        setQueue(sortedRows);
+      }
 
       if (initial) {
         // Try to find an existing running job for verification queue
@@ -100,7 +133,20 @@ export function SafeCopy({ projectId, onJobCreated, onError }: SafeCopyProps) {
     setResults([]);
     setQueueRunId(null);
     setIsRunningQueue(false);
-    setActiveJobId(null);
+  }, [projectId]);
+
+  useEffect(() => {
+    if (projectId === "__global__") {
+      setDefaultSourcePath("");
+      return;
+    }
+
+    invoke<ProjectInfo | null>("get_project", { projectId })
+      .then((project) => setDefaultSourcePath(project?.root_path ?? ""))
+      .catch((error) => {
+        console.error(error);
+        setDefaultSourcePath("");
+      });
   }, [projectId]);
 
   useEffect(() => {
@@ -145,7 +191,6 @@ export function SafeCopy({ projectId, onJobCreated, onError }: SafeCopyProps) {
     try {
       const items = await invoke<VerificationItem[]>("get_verification_items", { jobId });
       setResults(items);
-      setActiveJobId(jobId);
     } catch (e) {
       console.error("Failed to fetch results:", e);
     }
@@ -174,7 +219,7 @@ export function SafeCopy({ projectId, onJobCreated, onError }: SafeCopyProps) {
     const row = await invoke<QueueCheck>("set_verification_queue_item", {
       projectId,
       idx,
-      sourcePath: "",
+      sourcePath: idx === 1 ? defaultSourcePath : "",
       destPath: "",
       label: `Check ${String(idx).padStart(2, "0")}`
     });
@@ -268,12 +313,6 @@ export function SafeCopy({ projectId, onJobCreated, onError }: SafeCopyProps) {
     setIsRunningQueue(false);
   };
 
-  const exportJobMarkdown = async (jobId: string) => {
-    const outDir = await choosePath("Export Verification Markdown");
-    if (!outDir) return;
-    await invoke("export_verification_report_markdown", { jobId, outDir });
-  };
-
   const exportJobPdf = async (jobId: string) => {
     const filePath = await save({
       filters: [{ name: "PDF Document", extensions: ["pdf"] }],
@@ -296,12 +335,6 @@ export function SafeCopy({ projectId, onJobCreated, onError }: SafeCopyProps) {
       projectName: project?.name,
       onWarning: (message) => onError?.({ title: "Export branding fallback", hint: message }),
     }, job, items);
-  };
-
-  const exportQueueMarkdown = async () => {
-    const outDir = await choosePath("Export Combined Queue Markdown");
-    if (!outDir) return;
-    await invoke("export_verification_queue_report_markdown", { projectId, outDir });
   };
 
   const exportQueuePdf = async () => {
@@ -346,6 +379,7 @@ export function SafeCopy({ projectId, onJobCreated, onError }: SafeCopyProps) {
       item.status === categoryFilter;
     return matchesSearch && matchesCategory;
   });
+  const previewResults = filteredResults.filter((item) => shouldShowVerificationPreviewItem(item.rel_path));
 
   const percent = progress?.bytes_total ? (progress.bytes_processed / progress.bytes_total) * 100 : 0;
 
@@ -367,23 +401,74 @@ export function SafeCopy({ projectId, onJobCreated, onError }: SafeCopyProps) {
   return (
     <div className="safe-copy-view">
       <div className="safecopy-featured-wrapper">
+        {(progress || queue.length > 0) && (
+          <div className="verification-dashboard card premium-card safe-copy-summary-card">
+            <div className="dashboard-header safe-copy-summary-header">
+              <div>
+                <span className="summary-kicker">Verification</span>
+                <h3>{isRunningQueue ? "Queue Running" : "Queue Summary"}</h3>
+              </div>
+              <span className="job-id">{queueRunId ? `Queue: ${queueRunId.slice(0, 12)}` : "Idle"}</span>
+            </div>
+
+            <div className="dashboard-stats safe-copy-dashboard-stats">
+              <div className="dash-stat done">
+                <span className="label">Done</span>
+                <span className="value ok">{queueSummary.done}</span>
+              </div>
+              <div className="dash-stat failed">
+                <span className="label">Failed</span>
+                <span className="value fail">{queueSummary.failed}</span>
+              </div>
+              <div className="dash-stat cancelled">
+                <span className="label">Cancelled</span>
+                <span className="value">{queueSummary.cancelled}</span>
+              </div>
+              <div className="dash-stat total">
+                <span className="label">Total</span>
+                <span className="value">{queueSummary.total}</span>
+              </div>
+            </div>
+
+            <div className="verification-queue-summary-list">
+              {queue.map((row) => (
+                <div key={row.id} className={`verification-queue-summary-item status-${row.status?.toLowerCase() || "queued"}`}>
+                  <span className="summary-item-name">{row.source_path ? row.source_path.split(/[\\/]/).pop() : `Check ${String(row.idx).padStart(2, "0")}`}</span>
+                  <span className="summary-item-status">{(row.status || "queued").toUpperCase()}</span>
+                </div>
+              ))}
+            </div>
+
+            {progress && (
+              <div className="progress-section">
+                <div className="progress-info">
+                  <span className="current-file">{progress.current_file || "Identifying files..."}</span>
+                  <span>{Math.round(percent)}%</span>
+                </div>
+                <div className="progress-bar-wrapper">
+                  <div className="progress-bar-fill" style={{ width: `${percent}%`, background: "var(--status-blue)" }} />
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         <div className="safe-copy-config card premium-card">
-          <div className="dashboard-header" style={{ marginBottom: 24 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <div className="module-icon" style={{ background: 'var(--color-accent-soft)', color: 'var(--color-accent)' }}>
+            <div className="dashboard-header safe-copy-header" style={{ marginBottom: 24 }}>
+            <div className="safe-copy-title-block">
+              <div className="safe-copy-title-icon">
                 <ShieldCheck size={20} />
               </div>
-              <div>
-                <h3 style={{ margin: 0 }}>Safe Copy</h3>
-                <p style={{ margin: 0, fontSize: 12, opacity: 0.6 }}>Bit-accurate verification & checksums</p>
+              <div className="safe-copy-title-text">
+                <h3>Safe Copy</h3>
+                <p className="safe-copy-title-subtitle">Bit-accurate verification & checksums</p>
               </div>
             </div>
             <div className="toolbar-right">
               <button
-                className="btn btn-secondary btn-sm"
+                className="btn btn-secondary btn-sm safe-copy-add-source"
                 onClick={ensureRow}
                 disabled={queue.length >= MAX_QUEUE || isRunningQueue}
-                style={{ height: 32, padding: '0 12px', gap: 6 }}
                 data-tooltip="Add another verification pair"
               >
                 <Plus size={14} /> Add Source
@@ -395,6 +480,9 @@ export function SafeCopy({ projectId, onJobCreated, onError }: SafeCopyProps) {
             {queue.map((row, idx) => {
               const status = row.status?.toLowerCase() || "queued";
               const counts = row.counts_json ? JSON.parse(row.counts_json) : null;
+              const hasReportActions = Boolean(row.last_job_id);
+              const hasStats = Boolean(counts);
+              const isSoloRemoveAction = !hasReportActions && !hasStats;
 
               return (
                 <div key={row.id} className="verification-row-container">
@@ -403,19 +491,8 @@ export function SafeCopy({ projectId, onJobCreated, onError }: SafeCopyProps) {
                   </div>
 
                   <div className="verification-row-inputs">
-                    <div className="input-field-group input-field-group-compact">
-                      <label>LABEL</label>
-                      <input
-                        type="text"
-                        value={row.label ?? ""}
-                        placeholder={`Check ${String(row.idx).padStart(2, "0")}`}
-                        className="premium-input-dark"
-                        onChange={(e) => updateRow(row.idx, { label: e.target.value })}
-                        disabled={isRunningQueue}
-                      />
-                    </div>
                     <div className="input-field-group">
-                      <label>SOURCE {queue.length > 1 ? `(${idx + 1})` : ''}</label>
+                      <label>Source</label>
                       <div className="path-entry">
                         <input
                           type="text"
@@ -434,7 +511,7 @@ export function SafeCopy({ projectId, onJobCreated, onError }: SafeCopyProps) {
                     </div>
 
                     <div className="input-field-group">
-                      <label>DESTINATION {queue.length > 1 ? `(${idx + 1})` : ''}</label>
+                      <label>Destination</label>
                       <div className="path-entry">
                         <input
                           type="text"
@@ -453,10 +530,10 @@ export function SafeCopy({ projectId, onJobCreated, onError }: SafeCopyProps) {
                     </div>
                   </div>
 
-                  <div className="row-actions-area">
+                  <div className={`row-actions-area ${isSoloRemoveAction ? "solo-action" : ""}`}>
                     <div className="row-status-info">
                       <span className={`status-pill ${status}`}>{status.toUpperCase()}</span>
-                      {counts && (
+                      {hasStats && (
                         <div className="row-stats-summary">
                           <CheckCircle size={10} className="ok" /> {counts.verified ?? 0}
                           <XCircle size={10} className="fail" style={{ marginLeft: 6 }} /> {counts.missing ?? 0}
@@ -464,16 +541,11 @@ export function SafeCopy({ projectId, onJobCreated, onError }: SafeCopyProps) {
                       )}
                     </div>
 
-                    <div style={{ display: 'flex', gap: 6 }}>
-                      {row.last_job_id && (
-                        <>
-                          <button className="btn-mini-action" onClick={() => exportJobMarkdown(row.last_job_id!)} title="Markdown Report">
-                            <FileText size={12} />
-                          </button>
-                          <button className="btn-mini-action" onClick={() => exportJobPdf(row.last_job_id!)} title="PDF Report">
-                            <FileText size={12} />
-                          </button>
-                        </>
+                    <div className="row-action-buttons">
+                      {hasReportActions && (
+                        <button className="btn-mini-action btn-mini-report" onClick={() => exportJobPdf(row.last_job_id!)} title="Export report">
+                          <FileText size={14} />
+                        </button>
                       )}
                       <button
                         className="btn-mini-action btn-mini-danger"
@@ -491,126 +563,70 @@ export function SafeCopy({ projectId, onJobCreated, onError }: SafeCopyProps) {
           </div>
 
           <div className="safecopy-bottom-controls">
-            <div className="mode-selection-group">
-              <label>MODE</label>
-              <div className="mode-toggle-pill">
-                <button
-                  className={`mode-toggle-btn ${mode === "SOLID" ? "active" : ""}`}
-                  onClick={() => setMode("SOLID")}
-                  disabled={isRunningQueue}
-                >
-                  SOLID (Bit-Accurate)
-                </button>
-                <button
-                  className={`mode-toggle-btn ${mode === "FAST" ? "active" : ""}`}
-                  onClick={() => setMode("FAST")}
-                  disabled={isRunningQueue}
-                >
-                  FAST (Metadata)
-                </button>
+            <div className="safecopy-action-row">
+              <div className="mode-selection-group">
+                <label>Mode</label>
+                <div className="mode-toggle-pill">
+                  <button
+                    className={`mode-toggle-btn ${mode === "SOLID" ? "active" : ""}`}
+                    onClick={() => setMode("SOLID")}
+                    disabled={isRunningQueue}
+                  >
+                    SOLID
+                  </button>
+                  <button
+                    className={`mode-toggle-btn ${mode === "FAST" ? "active" : ""}`}
+                    onClick={() => setMode("FAST")}
+                    disabled={isRunningQueue}
+                  >
+                    FAST
+                  </button>
+                </div>
               </div>
-            </div>
 
-            <div className="verification-primary-actions">
-              <button
-                className="btn btn-primary btn-verification-start"
-                onClick={runQueue}
-                disabled={isRunningQueue || queue.length === 0 || queue.some((q) => !q.source_path || !q.dest_path)}
-              >
-                {isRunningQueue ? <div className="spinner" style={{ width: 16, height: 16 }} /> : <Play size={18} fill="currentColor" />}
-                <span>{isRunningQueue ? "Verifying..." : "Start Verification"}</span>
-              </button>
-
-              {isRunningQueue && (
-                <button className="btn btn-danger btn-lg-circle" onClick={cancelQueue}>
-                  <XCircle size={20} />
+              <div className="verification-primary-actions">
+                <button
+                  className={`btn btn-primary btn-verification-start ${isRunningQueue ? "is-running" : ""}`}
+                  onClick={runQueue}
+                  disabled={isRunningQueue || queue.length === 0 || queue.some((q) => !q.source_path || !q.dest_path)}
+                >
+                  {isRunningQueue ? <div className="spinner" style={{ width: 16, height: 16 }} /> : <Play size={14} fill="currentColor" />}
+                  <span>{isRunningQueue ? "Verifying..." : "Start Verification"}</span>
                 </button>
-              )}
-            </div>
 
-            {queue.length > 0 && (
+                {isRunningQueue && (
+                  <button className="btn btn-danger btn-lg-circle" onClick={cancelQueue}>
+                    <XCircle size={18} />
+                  </button>
+                )}
+              </div>
+
               <div className="batch-export-row">
-                <button className="btn-text-action" onClick={exportQueueMarkdown} disabled={queue.length === 0}>
-                  <ListChecks size={14} /> Export Combined MD
-                </button>
-                <button className="btn-text-action" onClick={exportQueuePdf} disabled={queue.length === 0}>
-                  <ListChecks size={14} /> Export Combined PDF
+                <button className="btn btn-secondary btn-sm btn-queue-export" onClick={exportQueuePdf} disabled={queue.length === 0}>
+                  <ListChecks size={14} /> Export Combined Report
                 </button>
               </div>
-            )}
+            </div>
           </div>
         </div>
-
-        {(progress || queue.length > 0) && (
-          <div className="verification-dashboard card premium-card">
-            <div className="dashboard-header">
-              <h3>{isRunningQueue ? "Queue Running" : "Queue Summary"}</h3>
-              <span className="job-id">{queueRunId ? `Queue: ${queueRunId.slice(0, 12)}` : "Idle"}</span>
-            </div>
-
-            <div className="dashboard-stats">
-              <div className="dash-stat">
-                <span className="label">Done</span>
-                <span className="value ok">{queueSummary.done}</span>
-              </div>
-              <div className="dash-stat">
-                <span className="label">Failed</span>
-                <span className="value fail">{queueSummary.failed}</span>
-              </div>
-              <div className="dash-stat">
-                <span className="label">Cancelled</span>
-                <span className="value">{queueSummary.cancelled}</span>
-              </div>
-              <div className="dash-stat">
-                <span className="label">Total</span>
-                <span className="value">{queueSummary.total}</span>
-              </div>
-            </div>
-
-            <div className="verification-queue-summary-list">
-              {queue.map((row) => (
-                <div key={row.id} className={`verification-queue-summary-item status-${row.status?.toLowerCase() || "queued"}`}>
-                  <span>{row.label || `Check ${String(row.idx).padStart(2, "0")}`}</span>
-                  <span>{(row.status || "queued").toUpperCase()}</span>
-                </div>
-              ))}
-            </div>
-
-            {progress && (
-              <div className="progress-section">
-                <div className="progress-info">
-                  <span className="current-file">{progress.current_file || "Identifying files..."}</span>
-                  <span>{Math.round(percent)}%</span>
-                </div>
-                <div className="progress-bar-wrapper">
-                  <div className="progress-bar-fill" style={{ width: `${percent}%`, background: "var(--color-accent-indigo)" }} />
-                </div>
-              </div>
-            )}
-          </div>
-        )}
 
         {results.length > 0 && (
           <div className="results-container card premium-card">
             <div className="results-toolbar">
               <div className="toolbar-left">
+                <div className="results-heading">
+                  <span className="summary-kicker">Processed Files</span>
+                  <h3>Files Overview</h3>
+                </div>
                 <div className="search-box">
                   <Search size={14} />
-                  <input type="text" placeholder="Search files..." value={filter} onChange={(e) => setFilter(e.target.value)} />
+                  <input type="text" placeholder="Search video files..." value={filter} onChange={(e) => setFilter(e.target.value)} />
                 </div>
                 <div className="filter-tabs">
                   <button className={`tab ${categoryFilter === "ALL" ? "active" : ""}`} onClick={() => setCategoryFilter("ALL")}>All</button>
                   <button className={`tab tab-problems ${categoryFilter === "PROBLEMS" ? "active" : ""}`} onClick={() => setCategoryFilter("PROBLEMS")}>Problems</button>
                   <button className={`tab tab-verified ${categoryFilter === "OK" ? "active" : ""}`} onClick={() => setCategoryFilter("OK")}>Verified</button>
                 </div>
-              </div>
-              <div className="toolbar-right">
-                {activeJobId && (
-                  <>
-                    <button className="btn btn-secondary btn-sm" onClick={() => exportJobMarkdown(activeJobId)}><FileText size={14} /> Export MD</button>
-                    <button className="btn btn-secondary btn-sm" onClick={() => exportJobPdf(activeJobId)}><FileText size={14} /> Export PDF</button>
-                  </>
-                )}
               </div>
             </div>
 
@@ -625,7 +641,7 @@ export function SafeCopy({ projectId, onJobCreated, onError }: SafeCopyProps) {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredResults.slice(0, 100).map((item, i) => (
+                  {previewResults.slice(0, 100).map((item, i) => (
                     <tr key={i} className={item.status === "OK" ? "row-ok" : "row-fail"}>
                       <td className="status-cell">
                         {item.status === "OK" ? <CheckCircle size={14} className="ok" /> :
@@ -640,7 +656,12 @@ export function SafeCopy({ projectId, onJobCreated, onError }: SafeCopyProps) {
                   ))}
                 </tbody>
               </table>
-              {filteredResults.length > 100 && <div className="table-footer">Showing first 100 results...</div>}
+              {previewResults.length === 0 && (
+                <div className="results-empty-state">
+                  Verification checked every file in the source, but this preview only shows video files.
+                </div>
+              )}
+              {previewResults.length > 100 && <div className="table-footer">Showing first 100 video results...</div>}
             </div>
           </div>
         )}
