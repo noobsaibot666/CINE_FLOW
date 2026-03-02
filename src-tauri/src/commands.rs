@@ -1506,36 +1506,43 @@ pub async fn extract_audio_waveform(
         .mark_running(&job_id, "Waveform extraction started");
     emit_job_state(&app, &state.job_manager, &job_id);
 
-    let db = &state.db;
-    let clip = db
-        .get_clips_by_ids(&[clip_id.clone()])
-        .map_err(|e| e.to_string())?
-        .into_iter()
-        .next()
-        .ok_or("Clip not found")?;
+    let result: Result<Vec<u8>, String> = (|| {
+        let db = &state.db;
+        let clip = db
+            .get_clips_by_ids(&[clip_id.clone()])
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .next()
+            .ok_or("Clip not found")?;
 
-    // Check if we already have it
-    if let Some(env) = clip.audio_envelope {
-        state
-            .job_manager
-            .mark_done(&job_id, "Waveform loaded from cache");
-        emit_job_state(&app, &state.job_manager, &job_id);
-        return Ok(env);
+        if let Some(env) = clip.audio_envelope {
+            return Ok(env);
+        }
+
+        let result = audio::extract_envelope(&clip.file_path, 150)?;
+
+        db.update_audio_envelope(&clip_id, &result.envelope)
+            .map_err(|e| format!("Failed to save audio envelope: {}", e))?;
+
+        Ok(result.envelope)
+    })();
+
+    match result {
+        Ok(envelope) => {
+            state
+                .job_manager
+                .mark_done(&job_id, "Waveform extraction complete");
+            emit_job_state(&app, &state.job_manager, &job_id);
+            state.perf_log.end(&perf_id, "ok", None);
+            Ok(envelope)
+        }
+        Err(error) => {
+            state.job_manager.mark_failed(&job_id, &error);
+            emit_job_state(&app, &state.job_manager, &job_id);
+            state.perf_log.end(&perf_id, "err", Some(error.clone()));
+            Err(error)
+        }
     }
-
-    // Otherwise extract
-    let result = audio::extract_envelope(&clip.file_path, 150)?;
-
-    // Save to DB
-    db.update_audio_envelope(&clip_id, &result.envelope)
-        .map_err(|e| format!("Failed to save audio envelope: {}", e))?;
-
-    state
-        .job_manager
-        .mark_done(&job_id, "Waveform extraction complete");
-    emit_job_state(&app, &state.job_manager, &job_id);
-    state.perf_log.end(&perf_id, "ok", None);
-    Ok(result.envelope)
 }
 
 #[tauri::command]
@@ -1612,11 +1619,6 @@ pub async fn generate_lut_thumbnails(
             .acquire_owned()
             .await
             .map_err(|e| e.to_string())?;
-        let clip_cache_dir = format!("{}/{}", cache_dir, clip.id);
-        if let Err(e) = std::fs::create_dir_all(&clip_cache_dir) {
-            eprintln!("Failed to create clip cache dir: {}", e);
-            continue;
-        }
 
         let mut processed_thumbs = Vec::new();
 
@@ -1625,7 +1627,18 @@ pub async fn generate_lut_thumbnails(
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("thumb.jpg");
-            let output_path = format!("{}/lut_{}_{}", clip_cache_dir, lut_hash, original_name);
+            let output_dir = Path::new(&thumb.file_path)
+                .parent()
+                .map(|parent| parent.to_path_buf())
+                .unwrap_or_else(|| Path::new(&cache_dir).join(&clip.id));
+            if let Err(e) = std::fs::create_dir_all(&output_dir) {
+                eprintln!("Failed to create LUT output dir: {}", e);
+                continue;
+            }
+            let output_path = output_dir
+                .join(format!("lut_{}_{}", lut_hash, original_name))
+                .to_string_lossy()
+                .to_string();
 
             if std::path::Path::new(&output_path).exists() {
                 // already applied
@@ -1693,10 +1706,6 @@ pub async fn update_clip_metadata(
         lut_enabled,
     )
     .map_err(|e| format!("Failed to update clip metadata: {}", e))?;
-    // Invalidate cache for this clip to trigger re-extraction
-    let cache_dir = format!("{}/{}", state.cache_dir, clip_id);
-    let _ = std::fs::remove_dir_all(&cache_dir);
-    let _ = std::fs::create_dir_all(&cache_dir);
 
     Ok(())
 }

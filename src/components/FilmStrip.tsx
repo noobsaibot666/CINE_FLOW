@@ -1,4 +1,5 @@
-import { memo } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { Thumbnail } from "../types";
 import { DisplayedThumbnail, getThumbnailCacheValue } from "../utils/shotPlannerThumbnails";
 
@@ -35,9 +36,12 @@ export const FilmStrip = memo(function FilmStrip({
 }: FilmStripProps) {
 
     const effectivePlaceholderCount = count ?? placeholderCount;
-    const indices = Array.from({ length: effectivePlaceholderCount }, (_, i) => i);
+    const indices = useMemo(
+        () => Array.from({ length: effectivePlaceholderCount }, (_, i) => i),
+        [effectivePlaceholderCount]
+    );
     const orientationClass = aspectRatio > 0 && aspectRatio < 1 ? "is-vertical" : "is-horizontal";
-    const resolvedThumbnails: DisplayedThumbnail[] = thumbnails.map((thumb) => {
+    const resolvedThumbnails: DisplayedThumbnail[] = useMemo(() => thumbnails.map((thumb) => {
         if ("src" in thumb) {
             return thumb;
         }
@@ -45,8 +49,42 @@ export const FilmStrip = memo(function FilmStrip({
             index: thumb.index,
             timestamp_ms: thumb.timestamp_ms,
             src: clipId ? (getThumbnailCacheValue(thumbnailCache, clipId, thumb.index, cacheKeyContext) ?? "") : "",
+            file_path: thumb.file_path,
         };
-    }).filter((thumb) => Boolean(thumb.src));
+    }).filter((thumb) => Boolean(thumb.src)), [cacheKeyContext, clipId, thumbnailCache, thumbnails]);
+    const [renderSources, setRenderSources] = useState<string[]>([]);
+    const renderTokenRef = useRef(0);
+
+    useEffect(() => {
+        const visibleThumbs = resolvedThumbnails.slice(0, effectivePlaceholderCount);
+        const shouldApplyLut = Boolean(projectLutHash && clipLutEnabled === 1);
+        if (!shouldApplyLut) {
+            setRenderSources(visibleThumbs.map((thumb) => thumb.src));
+            return;
+        }
+        const token = renderTokenRef.current + 1;
+        renderTokenRef.current = token;
+        let cancelled = false;
+        void Promise.all(visibleThumbs.map(async (thumb) => {
+            const thumbPath = thumb.file_path;
+            if (!thumbPath || thumbPath.startsWith("data:")) return thumb.src;
+            const parts = thumbPath.split("/");
+            const filename = parts.pop();
+            if (!filename) return thumb.src;
+            const lutPath = [...parts, `lut_${projectLutHash}_${filename}`].join("/");
+            try {
+                return await invoke<string>("read_thumbnail", { path: lutPath });
+            } catch {
+                return thumb.src;
+            }
+        })).then((nextSources) => {
+            if (cancelled || renderTokenRef.current !== token) return;
+            setRenderSources(nextSources);
+        });
+        return () => {
+            cancelled = true;
+        };
+    }, [clipLutEnabled, effectivePlaceholderCount, lutRenderNonce, projectLutHash, resolvedThumbnails]);
 
     if (status === "fail") {
         return (
@@ -92,15 +130,7 @@ export const FilmStrip = memo(function FilmStrip({
         >
             {indices.map((idx) => {
                 const thumb = resolvedThumbnails[idx];
-                let src = thumb?.src;
-
-                if (src && !src.startsWith("data:") && projectLutHash && clipLutEnabled === 1) {
-                    const [baseSrc] = src.split("?");
-                    const parts = baseSrc.split('/');
-                    const filename = parts.pop();
-                    const newFilename = `lut_${projectLutHash}_${filename}`;
-                    src = `${[...parts, newFilename].join('/')}?lutv=${lutRenderNonce}`;
-                }
+                const src = renderSources[idx] ?? thumb?.src;
 
                 if (src) {
                     return (
@@ -110,7 +140,7 @@ export const FilmStrip = memo(function FilmStrip({
                                 if (thumb && projectLutHash && clipLutEnabled === 1) {
                                     (e.target as HTMLImageElement).src = fallbackThumbnailSrc ?? thumb.src;
                                 }
-                            }} />
+                            }} loading="lazy" decoding="async" />
                             <span className="thumb-time">
                                 {formatTimestamp(thumb?.timestamp_ms || 0)}
                             </span>

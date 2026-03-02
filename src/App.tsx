@@ -251,6 +251,7 @@ function AppContent() {
   const [brandProfile, setBrandProfile] = useState<any>(null);
   const [helpMenuOpen, setHelpMenuOpen] = useState(false);
   const [shotPlannerExportMenuOpen, setShotPlannerExportMenuOpen] = useState(false);
+  const [reviewExportMenuOpen, setReviewExportMenuOpen] = useState(false);
   const [openExportAfterScan, setOpenExportAfterScan] = useState(false);
   const [uiNotice, setUiNotice] = useState<{ title: string; hint: string } | null>(null);
   const [manualOrderConflict, setManualOrderConflict] = useState<{ clipId: string; nonce: number } | null>(null);
@@ -275,12 +276,14 @@ function AppContent() {
   const [playingClipId, setPlayingClipId] = useState<string | null>(null);
   const [playingProgress, setPlayingProgress] = useState(0);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const audioPreviewClipIdRef = useRef<string | null>(null);
   const exportMenuRef = useRef<HTMLDivElement | null>(null);
   const manualOrderBufferRef = useRef("");
   const manualOrderTimerRef = useRef<number | null>(null);
   const rejectKeyTimeoutRef = useRef<number | null>(null);
   const lastRejectKeyAtRef = useRef(0);
   const shotPlannerStateRef = useRef<any>(null);
+  const reviewStateRef = useRef<any>(null);
   const isUnloadingRef = useRef(false);
   const projectPhaseMapRef = useRef(new Map<string, Phase>());
 
@@ -460,6 +463,39 @@ function AppContent() {
     }
   }, []);
 
+  const handleLoadProjectLut = useCallback(async () => {
+    if (!projectId) return;
+    const selected = await open({
+      multiple: false,
+      directory: false,
+      filters: [{ name: "LUT Files", extensions: ["cube"] }],
+      title: "Select LUT (.cube)",
+    });
+    if (!selected || typeof selected !== "string") return;
+    try {
+      await invoke("set_project_lut", { projectId, lutPath: selected });
+      await fetchProjectSettings(projectId);
+      await invoke("generate_lut_thumbnails", { projectId });
+      setLutRenderNonce((n) => n + 1);
+      setUiNotice({ title: "LUT loaded", hint: "Review thumbnails can now use the selected project LUT." });
+    } catch (error) {
+      console.error("Failed to load project LUT", error);
+      setUiError({ title: "Could not load LUT", hint: String(error) });
+    }
+  }, [fetchProjectSettings, projectId]);
+
+  const handleRemoveProjectLut = useCallback(async () => {
+    if (!projectId) return;
+    try {
+      await invoke("remove_project_lut", { projectId });
+      await fetchProjectSettings(projectId);
+      setLutRenderNonce((n) => n + 1);
+    } catch (error) {
+      console.error("Failed to clear project LUT", error);
+      setUiError({ title: "Could not clear LUT", hint: String(error) });
+    }
+  }, [fetchProjectSettings, projectId]);
+
   const [focusedClipId, setFocusedClipId] = useState<string | null>(null);
   const [focusedClipScrollToken, setFocusedClipScrollToken] = useState(0);
   const hoveredClipIdRef = useRef<string | null>(null);
@@ -637,31 +673,52 @@ function AppContent() {
 
 
   const handlePlayClip = useCallback(async (id: string | null) => {
-    if (!id || (playingClipId === id)) {
+    const clearAudioPreview = () => {
       if (audioRef.current) {
         audioRef.current.pause();
         audioRef.current.removeAttribute("src");
         audioRef.current.load();
         audioRef.current = null;
       }
+      audioPreviewClipIdRef.current = null;
+    };
+
+    if (!id) {
+      clearAudioPreview();
       setPlayingClipId(null);
       setPlayingProgress(0);
+      return;
+    }
+
+    if (playingClipId === id && audioRef.current && audioPreviewClipIdRef.current === id) {
+      audioRef.current.pause();
+      setPlayingClipId(null);
+      return;
+    }
+
+    if (!playingClipId && audioRef.current && audioPreviewClipIdRef.current === id) {
+      try {
+        setPlayingClipId(id);
+        await audioRef.current.play();
+      } catch (err) {
+        console.error("Failed to resume audio:", err);
+        clearAudioPreview();
+        setPlayingClipId(null);
+        setPlayingProgress(0);
+      }
       return;
     }
 
     const clip = clips.find(c => c.clip.id === id)?.clip;
     if (!clip) return;
 
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current.removeAttribute("src");
-      audioRef.current.load();
-    }
+    clearAudioPreview();
 
     try {
       const src = await invoke<string>("read_audio_preview", { path: clip.file_path });
       const audio = new Audio();
       audio.onended = () => {
+        clearAudioPreview();
         setPlayingClipId(null);
         setPlayingProgress(0);
       };
@@ -672,22 +729,19 @@ function AppContent() {
       };
       audio.onerror = (e) => {
         console.error("Audio playback error", e);
+        clearAudioPreview();
         setPlayingClipId(null);
         setPlayingProgress(0);
       };
       audio.src = src;
       audio.load();
       audioRef.current = audio;
+      audioPreviewClipIdRef.current = id;
       setPlayingClipId(id);
       await audio.play();
     } catch (err) {
       console.error("Failed to play audio:", err);
-      if (audioRef.current) {
-        audioRef.current.pause();
-        audioRef.current.removeAttribute("src");
-        audioRef.current.load();
-        audioRef.current = null;
-      }
+      clearAudioPreview();
       setPlayingClipId(null);
       setPlayingProgress(0);
     }
@@ -1241,7 +1295,32 @@ function AppContent() {
     requestExport,
     sortedClips,
     toggleClipSelection,
-    tourRun,
+      tourRun,
+  ]);
+
+  useEffect(() => {
+    reviewStateRef.current = {
+      active: activeTab === "media-workspace" && activeMediaWorkspaceApp === "clip-review" && Boolean(projectId),
+      hoveredClipId: hoveredClipIdRef.current,
+      sortedClips,
+      clips,
+      requestExport,
+      toggleClipSelection,
+      handleUpdateMetadata,
+      focusClip: focusShotPlannerClip,
+      projectLutHash: projectLut?.hash || null,
+    };
+  }, [
+    activeMediaWorkspaceApp,
+    activeTab,
+    clips,
+    focusShotPlannerClip,
+    handleUpdateMetadata,
+    projectId,
+    projectLut,
+    requestExport,
+    sortedClips,
+    toggleClipSelection,
   ]);
 
   useEffect(() => {
@@ -1261,62 +1340,78 @@ function AppContent() {
 
     const handleKeyDown = (e: KeyboardEvent) => {
       const state = shotPlannerStateRef.current;
-      if (!state?.active || state.tourRun) return;
+      const reviewState = reviewStateRef.current;
+      if (!state?.active && !reviewState?.active) return;
+      if (state?.active && state.tourRun) return;
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement) return;
       if (e.target instanceof HTMLElement && e.target.closest("[data-tour-tooltip]")) return;
 
-      const targetId = state.hoveredClipId;
+      const activeState = state?.active ? state : reviewState;
+      const targetId = activeState?.hoveredClipId;
       const key = e.key.toLowerCase();
       const isCtrl = e.ctrlKey || e.metaKey;
 
-      if (isCtrl && (key === "3" || key === "5" || key === "7")) {
+      if (state?.active && isCtrl && (key === "3" || key === "5" || key === "7")) {
         e.preventDefault();
         state.setThumbCount(Number(key));
         return;
       }
-      if (key === "e" && !isCtrl) {
+      if (state?.active && key === "e" && !isCtrl) {
         e.preventDefault();
         state.setShotPlannerExportMenuOpen((prev: boolean) => !prev);
         return;
       }
-      if (key === "p" && !isCtrl) {
+      if (activeState?.active && key === "p" && !isCtrl) {
         e.preventDefault();
-        state.requestExport("pdf");
+        activeState.requestExport("pdf");
         return;
       }
-      if (key === "i" && !isCtrl) {
+      if (activeState?.active && key === "i" && !isCtrl) {
         e.preventDefault();
-        state.requestExport("image");
+        activeState.requestExport("image");
         return;
       }
-      if (key === "m" && !isCtrl) {
+      if (state?.active && key === "m" && !isCtrl) {
         e.preventDefault();
         state.setLookbookSortMode("custom");
         return;
       }
-      if (key === "c" && !isCtrl) {
+      if (state?.active && key === "c" && !isCtrl) {
         e.preventDefault();
         state.clearManualOrderBuffer();
         state.setLookbookSortMode("canonical");
         return;
       }
-      if ((key === "arrowdown" || key === "arrowup") && state.sortedClips.length > 0) {
-        if (manualOrderBufferRef.current) {
+      if ((key === "arrowdown" || key === "arrowup") && activeState?.sortedClips.length > 0) {
+        if (state?.active && manualOrderBufferRef.current) {
           void commitBufferedManualOrder();
         }
-        const currentIndex = targetId ? state.sortedClips.findIndex((c: ClipWithThumbnails) => c.clip.id === targetId) : -1;
+        const currentIndex = targetId ? activeState.sortedClips.findIndex((c: ClipWithThumbnails) => c.clip.id === targetId) : -1;
         const nextIndex = key === "arrowdown"
-          ? Math.min(currentIndex + 1, state.sortedClips.length - 1)
+          ? Math.min(currentIndex + 1, activeState.sortedClips.length - 1)
           : Math.max(currentIndex - 1, 0);
 
-        if (state.sortedClips[nextIndex] && state.sortedClips[nextIndex].clip.id !== targetId) {
+        if (activeState.sortedClips[nextIndex] && activeState.sortedClips[nextIndex].clip.id !== targetId) {
           e.preventDefault();
-          state.focusShotPlannerClip(state.sortedClips[nextIndex].clip.id, { scrollIntoView: true });
-          state.onHoverClip(state.sortedClips[nextIndex].clip.id);
+          activeState.focusClip(activeState.sortedClips[nextIndex].clip.id, { scrollIntoView: true });
+          hoveredClipIdRef.current = activeState.sortedClips[nextIndex].clip.id;
         }
         return;
       }
       if (!targetId) return;
+      if (reviewState?.active && key >= "0" && key <= "5" && !isCtrl) {
+        e.preventDefault();
+        void reviewState.handleUpdateMetadata(targetId, { rating: Number(key) });
+        return;
+      }
+      if (reviewState?.active && key === "l" && !isCtrl && reviewState.projectLutHash) {
+        e.preventDefault();
+        const clip = reviewState.clips.find((entry: ClipWithThumbnails) => entry.clip.id === targetId)?.clip;
+        if (clip) {
+          void reviewState.handleUpdateMetadata(targetId, { lut_enabled: clip.lut_enabled === 1 ? 0 : 1 });
+        }
+        return;
+      }
       if (key === "r") {
         e.preventDefault();
         const now = Date.now();
@@ -1331,7 +1426,7 @@ function AppContent() {
         }
         lastRejectKeyAtRef.current = now;
         rejectKeyTimeoutRef.current = window.setTimeout(() => {
-          const latestState = shotPlannerStateRef.current;
+          const latestState = shotPlannerStateRef.current?.active ? shotPlannerStateRef.current : reviewStateRef.current;
           const clip = latestState?.clips.find((entry: ClipWithThumbnails) => entry.clip.id === targetId)?.clip;
           if (clip) {
             void latestState.handleUpdateMetadata(targetId, { flag: clip.flag === "reject" ? "none" : "reject" });
@@ -1342,10 +1437,10 @@ function AppContent() {
       }
       if (key === "s" && !isCtrl) {
         e.preventDefault();
-        state.toggleClipSelection(targetId);
+        activeState.toggleClipSelection(targetId);
         return;
       }
-      if (state.effectiveLookbookSortMode === "custom" && key >= "0" && key <= "9" && !isCtrl) {
+      if (state?.active && state.effectiveLookbookSortMode === "custom" && key >= "0" && key <= "9" && !isCtrl) {
         e.preventDefault();
         manualOrderBufferRef.current = `${manualOrderBufferRef.current}${key}`.replace(/^0+/, "");
         if (manualOrderTimerRef.current !== null) {
@@ -1356,7 +1451,7 @@ function AppContent() {
         }, 200);
         return;
       }
-      if (key === "enter" && manualOrderBufferRef.current) {
+      if (state?.active && key === "enter" && manualOrderBufferRef.current) {
         e.preventDefault();
         void commitBufferedManualOrder();
       }
@@ -1725,7 +1820,7 @@ function AppContent() {
                 </div>
               ) : (
                 <div className="scrollable-view">
-                  <div className="onboarding-container">
+                  <div className="onboarding-container postproduction-launcher">
                     <div className="onboarding-header">
                       <span className="onboarding-eyebrow">Module</span>
                       <h1>Pre-production</h1>
@@ -1770,7 +1865,98 @@ function AppContent() {
               ) : activeMediaWorkspaceApp === 'clip-review' ? (
                 projectId ? (
                   <div className="media-workspace">
-                    {/* Statistics and Toolbar as before, but maybe streamlined */}
+                    <div className="stats-bar">
+                      <div className="stat-card">
+                        <div className="stat-header">
+                          <span className="stat-label">Clips</span>
+                        </div>
+                        <span className="stat-value">{totalClips}</span>
+                        <span className="stat-sub">Workspace review items</span>
+                      </div>
+                      <div className={`stat-card ${selectedClipIds.size > 0 ? 'stat-card-highlight' : ''}`}>
+                        <div className="stat-header">
+                          <span className="stat-label">Selected</span>
+                        </div>
+                        <span className="stat-value">{selectedClipIds.size}<span className="stat-value-total"> / {totalClips}</span></span>
+                        <span className="stat-sub">Included in export scope</span>
+                      </div>
+                      <div className={`stat-card ${projectLut ? 'stat-card-lut-loaded' : ''}`}>
+                        <div className="stat-header">
+                          <span className="stat-label">Project LUT</span>
+                        </div>
+                        <span className="stat-value">{projectLut ? projectLut.name : "None"}</span>
+                        <span className="stat-sub">{projectLut ? "LUT preview available in Review" : "Load a .cube LUT for review previews"}</span>
+                      </div>
+                    </div>
+
+                    <div className="toolbar premium-toolbar review-toolbar">
+                      <div className="toolbar-left-group">
+                        <div style={{ display: "flex", alignItems: "center", gap: "var(--space-sm)", flexShrink: 0 }}>
+                          <span className="toolbar-label">Clips</span>
+                          <span className="section-count highlight">{sortedClips.length}</span>
+                        </div>
+                        <div className="thumb-range-selector">
+                          <span className="toolbar-label">Thumbs</span>
+                          {[3, 5, 7].map((n) => (
+                            <button
+                              key={n}
+                              className={`btn btn-ghost btn-xs ${thumbCount === n ? 'active' : ''}`}
+                              onClick={() => { setThumbCount(n); localStorage.setItem('wp_thumbCount', n.toString()); }}
+                            >
+                              <span className="thumb-choice-value">{n}</span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="toolbar-right-group">
+                        <button className="btn btn-ghost btn-sm" onClick={toggleSelectAll}>
+                          {selectedSelectableCount === selectableClipIds.length ? "Deselect all" : "Select all"}
+                        </button>
+                        <div className="shot-planner-export">
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-sm"
+                            onClick={() => setReviewExportMenuOpen((prev) => !prev)}
+                            aria-haspopup="menu"
+                            aria-expanded={reviewExportMenuOpen}
+                          >
+                            <FileDown size={14} />
+                            <span>Export</span>
+                            <ChevronDown size={14} />
+                          </button>
+                          {reviewExportMenuOpen && (
+                            <div className="shot-planner-export-menu" role="menu">
+                              <button type="button" className="shot-planner-export-item" onClick={() => { setReviewExportMenuOpen(false); handleExport(); }}>
+                                <FileDown size={14} />
+                                <span>PDF</span>
+                              </button>
+                              <button type="button" className="shot-planner-export-item" onClick={() => { setReviewExportMenuOpen(false); handleExportImage(); }}>
+                                <Image size={14} />
+                                <span>Image</span>
+                              </button>
+                              <button type="button" className="shot-planner-export-item" onClick={() => { setReviewExportMenuOpen(false); handleExportMosaicPdf(); }}>
+                                <FileDown size={14} />
+                                <span>Mosaic (PDF)</span>
+                              </button>
+                              <button type="button" className="shot-planner-export-item" onClick={() => { setReviewExportMenuOpen(false); handleExportMosaicImage(); }}>
+                                <Image size={14} />
+                                <span>Mosaic (Image)</span>
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                        <button className="btn btn-secondary btn-sm" onClick={handleLoadProjectLut}>
+                          <FolderOpen size={14} />
+                          <span>{projectLut ? "Replace LUT" : "Load LUT"}</span>
+                        </button>
+                        {projectLut && (
+                          <button className="btn btn-ghost btn-sm" onClick={handleRemoveProjectLut}>
+                            <XCircle size={14} />
+                            <span>Clear LUT</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
                     <ClipList
                       clips={sortedClips}
                       thumbnailCache={thumbnailCache}
@@ -1792,10 +1978,12 @@ function AppContent() {
                       playingClipId={playingClipId}
                       playingProgress={playingProgress}
                       projectLutHash={projectLut?.hash || null}
-
                       lutRenderNonce={lutRenderNonce}
                       onExportPDF={handleExport}
                       onExportImage={handleExportImage}
+                      onExportMosaicPdf={handleExportMosaicPdf}
+                      onExportMosaicImage={handleExportMosaicImage}
+                      hideSectionHeader={true}
                     />
                   </div>
                 ) : null
@@ -1827,7 +2015,7 @@ function AppContent() {
                       <h1>Media Workspace</h1>
                       <p>Post-production suite for media verification and organization.</p>
                     </div>
-                    <div className="onboarding-grid workspace-apps-grid">
+                    <div className="onboarding-grid workspace-apps-grid postproduction-apps-grid">
                       <div
                         className="module-card premium-card"
                         onClick={() => setActiveMediaWorkspaceApp('safe-copy')}

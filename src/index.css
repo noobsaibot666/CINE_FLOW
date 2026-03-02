@@ -2597,6 +2597,11 @@ body {
   display: block;
 }
 
+.clip-list-loading-shell {
+  flex: 1;
+  min-height: 240px;
+}
+
 
 .clip-card {
   background: var(--bg-card);
@@ -2804,6 +2809,10 @@ body {
   row-gap: 6px;
 }
 
+.metadata-pill {
+  position: relative;
+}
+
 .metadata-tag {
   font-size: 10px;
   font-weight: 600;
@@ -2813,6 +2822,30 @@ body {
   border-radius: 4px;
   text-transform: uppercase;
   letter-spacing: 0.05em;
+}
+
+.metadata-tooltip-pill {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  transform: translateX(-50%);
+  min-width: max-content;
+  max-width: 180px;
+  padding: 6px 9px;
+  border-radius: 999px;
+  background: rgba(20, 20, 24, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  color: rgba(255, 255, 255, 0.84);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: 0.01em;
+  text-transform: none;
+  white-space: normal;
+  text-align: center;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.28);
+  pointer-events: none;
+  z-index: 8;
 }
 
 .clip-status-dot {

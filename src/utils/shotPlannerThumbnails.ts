@@ -4,6 +4,7 @@ export interface DisplayedThumbnail {
   index: number;
   timestamp_ms: number;
   src: string;
+  file_path?: string;
 }
 
 interface DisplayedThumbOptions {
@@ -34,7 +35,7 @@ export function getDisplayedThumbsForClip({
   thumbCount,
   cacheKeyContext,
 }: DisplayedThumbOptions): DisplayedThumbnail[] {
-  const resolved = [...thumbnails]
+  const resolved: DisplayedThumbnail[] = [...thumbnails]
     .sort((a, b) => a.index - b.index)
     .map((thumb) => {
       const src = getThumbnailCacheValue(thumbnailCache, clipId, thumb.index, cacheKeyContext);
@@ -43,9 +44,10 @@ export function getDisplayedThumbsForClip({
         index: thumb.index,
         timestamp_ms: thumb.timestamp_ms,
         src,
+        file_path: thumb.file_path,
       };
     })
-    .filter((thumb): thumb is DisplayedThumbnail => Boolean(thumb));
+    .filter((thumb): thumb is NonNullable<typeof thumb> => Boolean(thumb));
 
   if (resolved.length === 0) return [];
   return resolved.slice(0, Math.max(1, thumbCount));

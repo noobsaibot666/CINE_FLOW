@@ -197,7 +197,7 @@ export async function exportPdf(options: ExportOptions): Promise<boolean> {
       fpsValues.length === 1 ? `${fpsValues[0]}fps` : `${fpsValues.join("/")}fps`,
     ].join("  •  ");
 
-    pdf.setFontSize(6.2);
+    pdf.setFontSize(5.4);
     pdf.setTextColor(140);
     pdf.text(statsLine, pageW / 2, margin + 7, { align: "center" });
 
@@ -222,7 +222,7 @@ export async function exportPdf(options: ExportOptions): Promise<boolean> {
       pdf.rect(margin, rowY, usableW, thumbStripH, "F");
 
       for (let ti = 0; ti < displayedThumbs.length; ti++) {
-        let thumbPath = displayedThumbs[ti].src;
+        let thumbPath = displayedThumbs[ti].file_path || displayedThumbs[ti].src;
 
         if (!thumbPath.startsWith("data:") && projectLutHash && clip.lut_enabled === 1) {
           const parts = thumbPath.split("/");
@@ -254,7 +254,7 @@ export async function exportPdf(options: ExportOptions): Promise<boolean> {
       pdf.rect(margin, rowY, usableW, thumbStripH);
 
       const metaY = rowY + thumbStripH + 3.5;
-      pdf.setFontSize(8);
+      pdf.setFontSize(7);
       pdf.setTextColor(30);
       pdf.setFont("helvetica", "bold");
       pdf.text(clip.filename, margin, metaY);
@@ -274,8 +274,8 @@ export async function exportPdf(options: ExportOptions): Promise<boolean> {
       if (clip.movement) metaParts.push(clip.movement);
       if (audioBadge) metaParts.push(audioBadge);
 
-      pdf.setFontSize(6.5);
-      pdf.text(metaParts.join("  •  "), margin, metaY + 3.5);
+      pdf.setFontSize(5.8);
+      pdf.text(metaParts.join("  •  "), margin, metaY + 3.2);
 
       let rightX = margin + usableW;
       if (clip.flag !== "none") {
@@ -383,7 +383,7 @@ export async function exportImage(options: ExportOptions): Promise<boolean> {
     fpsValues.length === 1 ? `${fpsValues[0]}fps` : `${fpsValues.join("/")}fps`,
   ].join("   •   ");
   ctx.fillStyle = "#777";
-  ctx.font = "12px Inter, system-ui, sans-serif";
+  ctx.font = "11px Inter, system-ui, sans-serif";
   ctx.textAlign = "center";
   ctx.fillText(statsLine, canvasW / 2, 70);
 
@@ -401,7 +401,7 @@ export async function exportImage(options: ExportOptions): Promise<boolean> {
     const rowThumbW = stripW / displayedCount;
 
     for (let ti = 0; ti < displayedThumbs.length; ti++) {
-      let thumbPath = displayedThumbs[ti].src;
+      let thumbPath = displayedThumbs[ti].file_path || displayedThumbs[ti].src;
 
       if (!thumbPath.startsWith("data:") && projectLutHash && clip.lut_enabled === 1) {
         const parts = thumbPath.split("/");
@@ -431,17 +431,17 @@ export async function exportImage(options: ExportOptions): Promise<boolean> {
 
     const line1Y = rowY + thumbH + 18;
     ctx.fillStyle = "#000000";
-    ctx.font = "bold 16px Inter, system-ui, sans-serif";
+    ctx.font = "bold 14px Inter, system-ui, sans-serif";
     ctx.textAlign = "left";
     ctx.fillText(clip.filename, marginX, line1Y);
 
-    ctx.font = "14px Inter, system-ui, sans-serif";
+    ctx.font = "12px Inter, system-ui, sans-serif";
     ctx.fillStyle = "#444";
     const fnW = ctx.measureText(clip.filename).width;
     ctx.fillText(`   ${formatDuration(clip.duration_ms)}`, marginX + fnW, line1Y);
 
     const line2Y = line1Y + 18;
-    ctx.font = "13px Inter, system-ui, sans-serif";
+    ctx.font = "11px Inter, system-ui, sans-serif";
     ctx.fillStyle = "#555";
     const audioBadge = getAudioBadge(clip.audio_summary, clip.audio_envelope);
     const metaParts: string[] = [
@@ -458,14 +458,14 @@ export async function exportImage(options: ExportOptions): Promise<boolean> {
     const rightEdge = marginX + stripW;
     let rx = rightEdge;
     if (clip.flag !== "none") {
-      ctx.font = "bold 15px Inter, system-ui, sans-serif";
+      ctx.font = "bold 13px Inter, system-ui, sans-serif";
       ctx.fillStyle = clip.flag === "pick" ? "#00b464" : "#e04040";
       const flagText = clip.flag.toUpperCase();
       ctx.fillText(flagText, rx, line1Y);
       rx -= ctx.measureText(flagText).width + 10;
     }
     if (clip.rating > 0) {
-      ctx.font = "bold 16px Inter, system-ui, sans-serif";
+      ctx.font = "bold 14px Inter, system-ui, sans-serif";
       ctx.fillStyle = "#00a0cc";
       ctx.fillText("★".repeat(clip.rating), rx, line1Y);
     }

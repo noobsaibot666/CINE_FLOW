@@ -1,4 +1,5 @@
 import { memo, useMemo, useState, useEffect, useRef, forwardRef } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { GroupedVirtuoso } from 'react-virtuoso';
 import { Clip, ClipWithThumbnails } from "../types";
 import { FilmStrip } from "./FilmStrip";
@@ -7,6 +8,26 @@ import { Waveform } from "./Waveform";
 import { LookbookSortMode } from "../lookbook";
 import { getAudioBadge, buildClipMetadataTags } from "../utils/clipMetadata";
 import { getDisplayedThumbsForClip } from "../utils/shotPlannerThumbnails";
+
+const waveformWarningKeys = new Set<string>();
+const MAX_FILMSTRIP_PREVIEW_COUNT = 7;
+const metadataTooltipCopy: Record<string, string> = {
+    DUR: "Clip duration.",
+    FMT: "Container or file wrapper.",
+    CODEC: "Video compression format.",
+    ISO: "Recorded camera ISO.",
+    WB: "White balance in Kelvin.",
+    LENS: "Lens metadata from camera.",
+    APT: "Lens aperture or T-stop.",
+    ANG: "Shutter angle metadata.",
+    TC: "Embedded source timecode.",
+    BR: "Approximate video bitrate.",
+    AUDIO: "Audio health summary from scan.",
+    RES: "Frame resolution.",
+    FPS: "Recorded frame rate.",
+    SIZE: "Source file size.",
+    NO_TC: "This clip has no readable source timecode.",
+};
 
 const VirtuosoScroller = forwardRef<HTMLDivElement, any>(({ style, ...props }, ref) => (
     <div
@@ -66,6 +87,7 @@ interface ClipListProps {
     onExportMosaicPdf?: () => void;
     onExportMosaicImage?: () => void;
     variant?: "review" | "shot-planner";
+    hideSectionHeader?: boolean;
 }
 
 export const ClipList = memo(function ClipList({
@@ -99,9 +121,12 @@ export const ClipList = memo(function ClipList({
     onExportMosaicPdf,
     onExportMosaicImage,
     variant = "review",
+    hideSectionHeader = false,
 }: ClipListProps) {
     if (clips.length === 0) return null;
-    const [footerExportMenuOpen, setFooterExportMenuOpen] = useState(false);
+    const [exportMenuOpen, setExportMenuOpen] = useState(false);
+    const containerRef = useRef<HTMLDivElement | null>(null);
+    const [isViewportReady, setIsViewportReady] = useState(false);
 
 
     // Memoize the grouping logic to avoid heavy re-calculations on every render
@@ -159,130 +184,146 @@ export const ClipList = memo(function ClipList({
         }
     }, [focusedClipId, focusedClipScrollToken, clips]);
 
+    useEffect(() => {
+        const element = containerRef.current;
+        if (!element) return;
+        const updateReadyState = () => {
+            const rect = element.getBoundingClientRect();
+            setIsViewportReady(rect.width > 0 && rect.height > 0);
+        };
+        updateReadyState();
+        const observer = new ResizeObserver(updateReadyState);
+        observer.observe(element);
+        return () => observer.disconnect();
+    }, []);
+
 
     // We always use GroupedVirtuoso now to prevent unmounting when switching modes.
     // If grouping is disabled, we just have one large group.
 
     return (
-        <div className="clip-list-container" style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-            {variant !== "shot-planner" && (
+        <div ref={containerRef} className="clip-list-container" style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+            {variant !== "shot-planner" && !hideSectionHeader && (
                 <div className="section-header">
                     <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-sm)' }}>
                         <span className="section-title">Clips</span>
                         <span className="section-count highlight">{clips.length}</span>
                     </div>
-                    <div style={{ display: 'flex', gap: 'var(--space-sm)' }}>
+                    <div className="shot-planner-export">
                         <button
+                            type="button"
                             className="btn btn-secondary btn-sm"
-                            onClick={(e) => { e.stopPropagation(); onExportPDF(); }}
-                            title="Export Multi-page PDF"
+                            onClick={(e) => { e.stopPropagation(); setExportMenuOpen((prev) => !prev); }}
+                            aria-haspopup="menu"
+                            aria-expanded={exportMenuOpen}
                         >
                             <FileDown size={14} />
-                            <span>PDF</span>
+                            <span>Export</span>
+                            <ChevronDown size={14} />
                         </button>
-                        <button
-                            className="btn btn-secondary btn-sm"
-                            onClick={(e) => { e.stopPropagation(); onExportImage(); }}
-                            title="Export Single Image"
-                        >
-                            <Image size={14} />
-                            <span>Image</span>
-                        </button>
+                        {exportMenuOpen && (
+                            <div className="shot-planner-export-menu" role="menu">
+                                <button type="button" className="shot-planner-export-item" onClick={() => { setExportMenuOpen(false); onExportPDF(); }}>
+                                    <FileDown size={14} />
+                                    <span>PDF</span>
+                                </button>
+                                <button type="button" className="shot-planner-export-item" onClick={() => { setExportMenuOpen(false); onExportImage(); }}>
+                                    <Image size={14} />
+                                    <span>Image</span>
+                                </button>
+                                {onExportMosaicPdf && (
+                                    <button type="button" className="shot-planner-export-item" onClick={() => { setExportMenuOpen(false); onExportMosaicPdf(); }}>
+                                        <FileDown size={14} />
+                                        <span>Mosaic (PDF)</span>
+                                    </button>
+                                )}
+                                {onExportMosaicImage && (
+                                    <button type="button" className="shot-planner-export-item" onClick={() => { setExportMenuOpen(false); onExportMosaicImage(); }}>
+                                        <Image size={14} />
+                                        <span>Mosaic (Image)</span>
+                                    </button>
+                                )}
+                            </div>
+                        )}
                     </div>
                 </div>
             )}
 
-            <GroupedVirtuoso
-                ref={virtuosoRef}
-                groupCounts={groupCounts}
-                groupContent={(index) => {
-                    if (groups.length === 0) return null;
-                    return (
-                        <div className="clip-shot-group-header" style={{ background: 'var(--color-bg-page)', zIndex: 10 }}>
-                            {groups[index]}
-                        </div>
-                    );
-                }}
-                itemContent={(index) => {
-                    const item = clips[index];
-                    return (
-                        <div key={item.clip.id} style={{ paddingBottom: 'var(--space-md)' }}>
-                            <ClipCard
-                                item={item}
-                                thumbnailCache={thumbnailCache}
-                                isSelected={selectedIds.has(item.clip.id)}
-                                onToggle={onToggleSelection}
-                                thumbCount={thumbCount}
-                                onUpdateMetadata={onUpdateMetadata}
-                                onMouseEnter={onHoverClip}
-                                onMouseLeave={onHoverClip}
-                                onFocus={onFocusClip}
-                                shotSizeOptions={shotSizeOptions}
-                                movementOptions={movementOptions}
-                                lookbookSortMode={lookbookSortMode}
-                                onResetClip={onResetClip}
-                                onManualOrderInputChange={onManualOrderInputChange}
-                                manualOrderConflict={manualOrderConflict}
-                                onPromoteClip={onPromoteClip}
-                                onPlayClip={onPlayClip}
-                                isPlaying={playingClipId === item.clip.id}
-                                progress={playingClipId === item.clip.id ? playingProgress : 0}
-                                cacheKeyContext={cacheKeyContext}
-                                isFocused={focusedClipId === item.clip.id}
-                                projectLutHash={projectLutHash}
-                                lutRenderNonce={lutRenderNonce}
-                                hideLutControls={hideLutControls}
-                                variant={variant}
-                            />
-                        </div>
-                    );
-                }}
-                components={virtuosoComponents}
-                useWindowScroll={false}
-                increaseViewportBy={500}
-            />
-            {variant !== "shot-planner" && (
-                <div className="clip-list-footer" style={{ marginTop: 'var(--space-xl)', display: 'flex', gap: 'var(--space-md)', justifyContent: 'center', padding: 'var(--space-lg) 0' }}>
-                    <button
-                        className="btn btn-accent btn-lg"
-                        onClick={onExportPDF}
-                        style={{ minWidth: 200 }}
-                    >
-                        <FileDown size={18} />
-                        <span>Export PDF Contact Sheet</span>
-                    </button>
-                    <button
-                        className="btn btn-secondary btn-lg"
-                        onClick={onExportImage}
-                        style={{ minWidth: 200 }}
-                    >
-                        <Image size={18} />
-                        <span>Export Image</span>
-                    </button>
-                </div>
+            {isViewportReady ? (
+                <GroupedVirtuoso
+                    ref={virtuosoRef}
+                    groupCounts={groupCounts}
+                    groupContent={(index) => {
+                        if (groups.length === 0) return null;
+                        return (
+                            <div className="clip-shot-group-header" style={{ background: 'var(--color-bg-page)', zIndex: 10 }}>
+                                {groups[index]}
+                            </div>
+                        );
+                    }}
+                    itemContent={(index) => {
+                        const item = clips[index];
+                        return (
+                            <div key={item.clip.id} style={{ paddingBottom: 'var(--space-md)' }}>
+                                <ClipCard
+                                    item={item}
+                                    thumbnailCache={thumbnailCache}
+                                    isSelected={selectedIds.has(item.clip.id)}
+                                    onToggle={onToggleSelection}
+                                    thumbCount={thumbCount}
+                                    onUpdateMetadata={onUpdateMetadata}
+                                    onMouseEnter={onHoverClip}
+                                    onMouseLeave={onHoverClip}
+                                    onFocus={onFocusClip}
+                                    shotSizeOptions={shotSizeOptions}
+                                    movementOptions={movementOptions}
+                                    lookbookSortMode={lookbookSortMode}
+                                    onResetClip={onResetClip}
+                                    onManualOrderInputChange={onManualOrderInputChange}
+                                    manualOrderConflict={manualOrderConflict}
+                                    onPromoteClip={onPromoteClip}
+                                    onPlayClip={onPlayClip}
+                                    isPlaying={playingClipId === item.clip.id}
+                                    progress={playingClipId === item.clip.id ? playingProgress : 0}
+                                    cacheKeyContext={cacheKeyContext}
+                                    isFocused={focusedClipId === item.clip.id}
+                                    projectLutHash={projectLutHash}
+                                    lutRenderNonce={lutRenderNonce}
+                                    hideLutControls={hideLutControls}
+                                    variant={variant}
+                                />
+                            </div>
+                        );
+                    }}
+                    components={virtuosoComponents}
+                    useWindowScroll={false}
+                    increaseViewportBy={500}
+                />
+            ) : (
+                <div className="clip-list-loading-shell" aria-hidden="true" />
             )}
             {variant === "shot-planner" && (
                 <div className="clip-list-footer shot-planner-footer-export">
                     <div className="shot-planner-export">
-                        <button type="button" className="btn btn-secondary btn-sm shot-planner-floating-button" onClick={() => setFooterExportMenuOpen((prev) => !prev)} aria-haspopup="menu" aria-expanded={footerExportMenuOpen}>
+                        <button type="button" className="btn btn-secondary btn-sm shot-planner-floating-button" onClick={() => setExportMenuOpen((prev) => !prev)} aria-haspopup="menu" aria-expanded={exportMenuOpen}>
                             <FileDown size={14} />
                             <span>Export</span>
                         </button>
-                        {footerExportMenuOpen && (
+                        {exportMenuOpen && (
                             <div className="shot-planner-export-menu" role="menu">
-                                <button type="button" className="shot-planner-export-item" onClick={() => { setFooterExportMenuOpen(false); onExportPDF(); }}>
+                                <button type="button" className="shot-planner-export-item" onClick={() => { setExportMenuOpen(false); onExportPDF(); }}>
                                     <FileDown size={14} />
                                     <span>PDF</span>
                                 </button>
-                                <button type="button" className="shot-planner-export-item" onClick={() => { setFooterExportMenuOpen(false); onExportImage(); }}>
+                                <button type="button" className="shot-planner-export-item" onClick={() => { setExportMenuOpen(false); onExportImage(); }}>
                                     <Image size={14} />
                                     <span>Image</span>
                                 </button>
-                                <button type="button" className="shot-planner-export-item" onClick={() => { setFooterExportMenuOpen(false); onExportMosaicPdf?.(); }}>
+                                <button type="button" className="shot-planner-export-item" onClick={() => { setExportMenuOpen(false); onExportMosaicPdf?.(); }}>
                                     <FileDown size={14} />
                                     <span>Mosaic (PDF)</span>
                                 </button>
-                                <button type="button" className="shot-planner-export-item" onClick={() => { setFooterExportMenuOpen(false); onExportMosaicImage?.(); }}>
+                                <button type="button" className="shot-planner-export-item" onClick={() => { setExportMenuOpen(false); onExportMosaicImage?.(); }}>
                                     <Image size={14} />
                                     <span>Mosaic (Image)</span>
                                 </button>
@@ -358,16 +399,20 @@ const ClipCard = memo(function ClipCard({
 
     const { clip, thumbnails } = item;
     const shotPlannerVariant = variant === "shot-planner";
-    const audioHealth = getAudioBadge(clip.audio_summary, clip.audio_envelope);
-    const metadataTags = buildClipMetadataTags(clip, audioHealth);
     const cardRef = useRef<HTMLDivElement>(null);
-    const visualFlag = shotPlannerVariant && clip.flag === "pick" ? "none" : clip.flag;
+    const visualFlag = clip.flag === "pick" ? "none" : clip.flag;
 
     // Local state to prevent jumping during edits
     const [localShotSize, setLocalShotSize] = useState(clip.shot_size ?? "");
     const [localMovement, setLocalMovement] = useState(clip.movement ?? "");
     const [localManualOrder, setLocalManualOrder] = useState(clip.manual_order ?? 0);
     const [showOrderConflict, setShowOrderConflict] = useState(false);
+    const [waveformEnvelope, setWaveformEnvelope] = useState<number[] | null>(clip.audio_envelope ?? null);
+    const waveformRequestKeyRef = useRef<string | null>(null);
+    const metadataTooltipTimerRef = useRef<number | null>(null);
+    const [activeMetadataTooltip, setActiveMetadataTooltip] = useState<string | null>(null);
+    const audioHealth = getAudioBadge(clip.audio_summary, waveformEnvelope ?? clip.audio_envelope);
+    const metadataTags = buildClipMetadataTags(clip, audioHealth);
 
     // Keep local state in sync if prop changes from outside (e.g. reload)
     useEffect(() => {
@@ -380,11 +425,48 @@ const ClipCard = memo(function ClipCard({
         setLocalManualOrder(clip.manual_order ?? 0);
     }, [clip.manual_order]);
     useEffect(() => {
+        setWaveformEnvelope(clip.audio_envelope ?? null);
+        waveformRequestKeyRef.current = null;
+    }, [clip.audio_envelope, clip.id]);
+    useEffect(() => {
         if (manualOrderConflict?.clipId !== clip.id) return;
         setShowOrderConflict(true);
         const timer = window.setTimeout(() => setShowOrderConflict(false), 1200);
         return () => window.clearTimeout(timer);
     }, [clip.id, manualOrderConflict]);
+    useEffect(() => () => {
+        if (metadataTooltipTimerRef.current !== null) {
+            window.clearTimeout(metadataTooltipTimerRef.current);
+        }
+    }, []);
+    useEffect(() => {
+        if (shotPlannerVariant) return;
+        if (waveformEnvelope !== null) return;
+        if (!clip.audio_codec && clip.audio_channels <= 0) {
+            setWaveformEnvelope([]);
+            return;
+        }
+        const requestKey = `${clip.id}:waveform`;
+        if (waveformRequestKeyRef.current === requestKey) return;
+        waveformRequestKeyRef.current = requestKey;
+        let cancelled = false;
+        void invoke<number[]>("extract_audio_waveform", { clipId: clip.id })
+            .then((envelope) => {
+                if (cancelled) return;
+                setWaveformEnvelope(Array.isArray(envelope) ? envelope : []);
+            })
+            .catch((error) => {
+                if (cancelled) return;
+                setWaveformEnvelope([]);
+                if (import.meta.env.DEV && !waveformWarningKeys.has(clip.id)) {
+                    waveformWarningKeys.add(clip.id);
+                    console.warn("[Wrap Preview] Failed to extract review waveform", clip.filename, error);
+                }
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [clip.audio_channels, clip.audio_codec, clip.filename, clip.id, shotPlannerVariant, waveformEnvelope]);
 
     const handleShotSizeBlur = async () => {
         if (localShotSize.trim() === (clip.shot_size ?? "")) return;
@@ -411,15 +493,33 @@ const ClipCard = memo(function ClipCard({
         }
     };
 
+    const scheduleMetadataTooltip = (tooltipKey: string) => {
+        if (metadataTooltipTimerRef.current !== null) {
+            window.clearTimeout(metadataTooltipTimerRef.current);
+        }
+        metadataTooltipTimerRef.current = window.setTimeout(() => {
+            setActiveMetadataTooltip(tooltipKey);
+            metadataTooltipTimerRef.current = null;
+        }, 550);
+    };
+
+    const clearMetadataTooltip = () => {
+        if (metadataTooltipTimerRef.current !== null) {
+            window.clearTimeout(metadataTooltipTimerRef.current);
+            metadataTooltipTimerRef.current = null;
+        }
+        setActiveMetadataTooltip(null);
+    };
 
 
-    const displayedThumbnails = useMemo(() => getDisplayedThumbsForClip({
+
+    const previewThumbnails = useMemo(() => getDisplayedThumbsForClip({
         clipId: clip.id,
         thumbnails,
         thumbnailCache,
-        thumbCount,
+        thumbCount: MAX_FILMSTRIP_PREVIEW_COUNT,
         cacheKeyContext,
-    }), [clip.id, thumbnails, thumbnailCache, thumbCount, cacheKeyContext]);
+    }), [clip.id, thumbnails, thumbnailCache, cacheKeyContext]);
 
     return (
         <div
@@ -487,21 +587,6 @@ const ClipCard = memo(function ClipCard({
                                 <span>LUT</span>
                             </button>
                         )}
-                        {!shotPlannerVariant && (
-                            <button
-                                className={`btn-flag btn-pick ${clip.flag === 'pick' ? 'active' : ''}`}
-                                onClick={(e) => {
-                                    e.stopPropagation();
-                                    const nextFlag = clip.flag === 'pick' ? 'none' : 'pick';
-                                    void onUpdateMetadata(clip.id, { flag: nextFlag });
-                                }}
-                                title="Pick (P)"
-                                aria-label="Pick"
-                            >
-                                <CheckCircle2 size={14} />
-                                <span>Pick</span>
-                            </button>
-                        )}
                         <button
                             className={`btn-flag btn-reject ${clip.flag === 'reject' ? 'active' : ''}`}
                             onClick={(e) => {
@@ -533,15 +618,16 @@ const ClipCard = memo(function ClipCard({
             <div className="clip-card-media">
                 <FilmStrip
                     clipId={clip.id}
-                    thumbnails={displayedThumbnails}
+                    thumbnails={previewThumbnails}
                     status={clip.status}
                     placeholderCount={thumbCount}
+                    count={thumbCount}
                     aspectRatio={clip.width > 0 && clip.height > 0 ? clip.width / clip.height : 16 / 9}
                     onDoubleClick={() => onPlayClip(clip.id)}
                     projectLutHash={projectLutHash}
                     clipLutEnabled={clip.lut_enabled}
                     lutRenderNonce={lutRenderNonce}
-                    fallbackThumbnailSrc={displayedThumbnails[0]?.src}
+                    fallbackThumbnailSrc={previewThumbnails[0]?.src}
                     thumbnailCache={thumbnailCache}
                     cacheKeyContext={cacheKeyContext}
                 />
@@ -552,22 +638,51 @@ const ClipCard = memo(function ClipCard({
             <div className="clip-card-footer">
                 <div className="clip-metadata-compact">
                     {metadataTags.map((tag: { label: string; value: string; highlight?: boolean }) => {
+                        const tooltipKey = `${clip.id}-${tag.label}`;
+                        const tooltipCopy = metadataTooltipCopy[tag.label] ?? tag.label;
                         if (tag.label === "AUDIO") {
                             const healthClass = tag.value === "NO AUDIO" ? "silent" : (tag.value === "POSSIBLE CLIP" ? "clipping" : "");
                             return (
-                                <span key={`${clip.id}-${tag.label}`} className={`audio-health-badge ${healthClass}`}>
+                                <span
+                                    key={`${clip.id}-${tag.label}`}
+                                    className={`metadata-pill audio-health-badge ${healthClass}`}
+                                    onMouseEnter={() => scheduleMetadataTooltip(tooltipKey)}
+                                    onMouseLeave={clearMetadataTooltip}
+                                >
                                     {tag.value}
+                                    {activeMetadataTooltip === tooltipKey && (
+                                        <span className="metadata-tooltip-pill" role="tooltip">{tooltipCopy}</span>
+                                    )}
                                 </span>
                             );
                         }
                         return (
-                            <span key={`${clip.id}-${tag.label}-${tag.value}`} className={`metadata-tag ${tag.highlight ? "highlight-tag" : ""} ${tag.value === "POSSIBLE CLIP" ? "danger-tag" : tag.value === "VERY LOW" ? "warn-tag" : ""}`}>
+                            <span
+                                key={`${clip.id}-${tag.label}-${tag.value}`}
+                                className={`metadata-pill metadata-tag ${tag.highlight ? "highlight-tag" : ""} ${tag.value === "POSSIBLE CLIP" ? "danger-tag" : tag.value === "VERY LOW" ? "warn-tag" : ""}`}
+                                onMouseEnter={() => scheduleMetadataTooltip(tooltipKey)}
+                                onMouseLeave={clearMetadataTooltip}
+                            >
                                 {tag.value}
+                                {activeMetadataTooltip === tooltipKey && (
+                                    <span className="metadata-tooltip-pill" role="tooltip">{tooltipCopy}</span>
+                                )}
                             </span>
                         );
                     })}
 
-                    {!clip.timecode && <span className="metadata-tag danger-tag">NO TC</span>}
+                    {!clip.timecode && (
+                        <span
+                            className="metadata-pill metadata-tag danger-tag"
+                            onMouseEnter={() => scheduleMetadataTooltip(`${clip.id}-NO_TC`)}
+                            onMouseLeave={clearMetadataTooltip}
+                        >
+                            NO TC
+                            {activeMetadataTooltip === `${clip.id}-NO_TC` && (
+                                <span className="metadata-tooltip-pill" role="tooltip">{metadataTooltipCopy.NO_TC}</span>
+                            )}
+                        </span>
+                    )}
                     <div className="clip-card-status-wrapper">
                         <span className={`clip-status-dot ${clip.status}`} />
                     </div>
@@ -575,9 +690,9 @@ const ClipCard = memo(function ClipCard({
             </div>
 
             {/* Waveform Sparkline */}
-            {clip.audio_envelope && (
+            {waveformEnvelope && waveformEnvelope.length > 0 && (
                 <Waveform
-                    envelope={clip.audio_envelope}
+                    envelope={waveformEnvelope}
                     onPlayToggle={() => onPlayClip(clip.id)}
                     isPlaying={isPlaying}
                     progress={progress}
