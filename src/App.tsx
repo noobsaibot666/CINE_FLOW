@@ -1609,8 +1609,8 @@ function AppContent() {
                         <div className="shot-planner-order-mode">
                           <span className="toolbar-label">Order mode</span>
                           <div className="clip-mode-pill-row">
-                            <button type="button" className={`clip-mode-pill ${effectiveLookbookSortMode === "canonical" ? "active" : ""}`} onClick={() => setLookbookSortMode("canonical")}>Canonical</button>
                             <button type="button" className={`clip-mode-pill ${effectiveLookbookSortMode === "custom" ? "active" : ""}`} onClick={() => setLookbookSortMode("custom")}>Manual</button>
+                            <button type="button" className={`clip-mode-pill ${effectiveLookbookSortMode === "canonical" ? "active" : ""}`} onClick={() => setLookbookSortMode("canonical")}>Canonical</button>
                           </div>
                         </div>
                         <div className="toolbar-separator" />

@@ -121,12 +121,24 @@ export function JobsPanel({ open, jobs, onClose, onRefresh, extracting, extractP
       return;
     }
     setResettingDevData(true);
+    onClose();
+
+    const reload = () => {
+      window.setTimeout(() => {
+        window.location.reload();
+      }, 120);
+    };
+
     try {
-      await invoke<{ ok: boolean }>("dev_reset_all_data");
-      window.location.reload();
+      const resetPromise = invoke<{ ok: boolean }>("dev_reset_all_data");
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        window.setTimeout(() => reject(new Error("reset timeout")), 1500);
+      });
+      await Promise.race([resetPromise, timeoutPromise]);
+      reload();
     } catch (e) {
-      console.error("Reset dev data failed:", e);
-      setResettingDevData(false);
+      console.warn("Reset dev data did not confirm before reload:", e);
+      reload();
     }
   };
 

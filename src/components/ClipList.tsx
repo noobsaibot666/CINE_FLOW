@@ -264,7 +264,7 @@ export const ClipList = memo(function ClipList({
             {variant === "shot-planner" && (
                 <div className="clip-list-footer shot-planner-footer-export">
                     <div className="shot-planner-export">
-                        <button type="button" className="btn btn-secondary btn-sm" onClick={() => setFooterExportMenuOpen((prev) => !prev)} aria-haspopup="menu" aria-expanded={footerExportMenuOpen}>
+                        <button type="button" className="btn btn-secondary btn-sm shot-planner-floating-button" onClick={() => setFooterExportMenuOpen((prev) => !prev)} aria-haspopup="menu" aria-expanded={footerExportMenuOpen}>
                             <FileDown size={14} />
                             <span>Export</span>
                         </button>

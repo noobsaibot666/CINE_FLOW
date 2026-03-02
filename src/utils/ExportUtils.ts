@@ -58,6 +58,39 @@ async function loadImage(dataUrl: string): Promise<HTMLImageElement> {
   return img;
 }
 
+async function normalizePdfImageDataUrl(dataUrl: string): Promise<string> {
+  const img = await loadImage(dataUrl);
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, img.width);
+  canvas.height = Math.max(1, img.height);
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    throw new Error("pdf image normalization context unavailable");
+  }
+  ctx.fillStyle = "#000000";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL("image/jpeg", 0.92);
+}
+
+function getContainRect(
+  sourceWidth: number,
+  sourceHeight: number,
+  targetX: number,
+  targetY: number,
+  targetWidth: number,
+  targetHeight: number,
+) {
+  const safeSourceWidth = Math.max(1, sourceWidth);
+  const safeSourceHeight = Math.max(1, sourceHeight);
+  const scale = Math.min(targetWidth / safeSourceWidth, targetHeight / safeSourceHeight);
+  const width = safeSourceWidth * scale;
+  const height = safeSourceHeight * scale;
+  const x = targetX + (targetWidth - width) / 2;
+  const y = targetY + (targetHeight - height) / 2;
+  return { x, y, width, height };
+}
+
 async function collectMosaicAssets(
   clips: Clip[],
   thumbnailsByClipId: Record<string, Thumbnail[]>,
@@ -202,8 +235,15 @@ export async function exportPdf(options: ExportOptions): Promise<boolean> {
         if (!dataUrl) continue;
 
         try {
+          const image = await loadImage(dataUrl);
           const x = margin + ti * thumbW;
-          pdf.addImage(dataUrl, "JPEG", x + 0.3, rowY + 0.3, thumbW - 0.6, thumbStripH - 0.6);
+          const normalized = await normalizePdfImageDataUrl(dataUrl);
+          const frameX = x + 0.3;
+          const frameY = rowY + 0.3;
+          const frameW = thumbW - 0.6;
+          const frameH = thumbStripH - 0.6;
+          const fitted = getContainRect(image.width, image.height, frameX, frameY, frameW, frameH);
+          pdf.addImage(normalized, "JPEG", fitted.x, fitted.y, fitted.width, fitted.height, undefined, "FAST");
         } catch (e) {
           console.warn("Failed to add thumbnail to PDF:", e);
         }
@@ -372,14 +412,13 @@ export async function exportImage(options: ExportOptions): Promise<boolean> {
       const dataUrl = await readThumbAsDataUrl(thumbPath);
       if (!dataUrl) continue;
       try {
-        const img = new Image();
-        await new Promise<void>((resolve, reject) => {
-          img.onload = () => resolve();
-          img.onerror = () => reject(new Error("thumbnail draw failed"));
-          img.src = dataUrl;
-        });
+        const img = await loadImage(dataUrl);
         const x = marginX + ti * rowThumbW;
-        ctx.drawImage(img, x, rowY, rowThumbW - 2, thumbH);
+        const frameW = rowThumbW - 2;
+        const fitted = getContainRect(img.width, img.height, x, rowY, frameW, thumbH);
+        ctx.fillStyle = "#111215";
+        ctx.fillRect(x, rowY, frameW, thumbH);
+        ctx.drawImage(img, fitted.x, fitted.y, fitted.width, fitted.height);
       } catch {
         ctx.fillStyle = "#222";
         ctx.fillRect(marginX + ti * rowThumbW, rowY, rowThumbW - 2, thumbH);
@@ -533,7 +572,8 @@ export async function exportMosaicPdf(options: ExportOptions): Promise<boolean> 
       try {
         const img = await loadImage(dataUrl);
         const square = cropToSquare(img);
-        pdf.addImage(square.toDataURL("image/jpeg", 0.92), "JPEG", x, y, tileSize, tileSize, undefined, "FAST");
+        const normalized = await normalizePdfImageDataUrl(square.toDataURL("image/png"));
+        pdf.addImage(normalized, "JPEG", x, y, tileSize, tileSize, undefined, "FAST");
       } catch (error) {
         console.warn("Failed to add mosaic thumb to PDF", error);
       }
