@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
 use std::time::Duration;
+use crate::production_calibration::CalibrationChartDetection;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CameraMatchRgbMedians {
@@ -72,6 +73,7 @@ pub struct ProductionMatchLabRunResultInput {
     pub slot: String,
     pub proxy_path: Option<String>,
     pub analysis: CameraMatchAnalysisResult,
+    pub calibration: Option<CalibrationChartDetection>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,6 +91,7 @@ pub struct ProductionMatchLabRunResult {
     pub representative_frame_path: String,
     pub frame_paths: Vec<String>,
     pub analysis: CameraMatchAnalysisResult,
+    pub calibration: Option<CalibrationChartDetection>,
     pub created_at: String,
 }
 

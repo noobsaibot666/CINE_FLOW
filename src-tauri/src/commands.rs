@@ -21,6 +21,7 @@ use crate::production_match_lab::{
     ProductionMatchLabProxyResult, ProductionMatchLabRun, ProductionMatchLabRunResult,
     ProductionMatchLabRunResultInput, ProductionMatchLabRunSummary,
 };
+use crate::production_calibration::CalibrationChartDetection;
 use crate::review_core;
 use crate::scanner;
 use crate::thumbnail;
@@ -4779,6 +4780,170 @@ fn write_simple_contact_sheet_pdf(
     Ok(())
 }
 
+fn write_calibration_report_pdf(
+    output_path: &Path,
+    project_name: &str,
+    run: &ProductionMatchLabRun,
+    reference_frame_path: &Path,
+    overlay_frame_path: &Path,
+) -> Result<(), String> {
+    use printpdf::*;
+    use std::fs::File;
+    use std::io::BufWriter;
+
+    let (doc, page1, layer1) = PdfDocument::new(
+        &format!("{} Calibration Report", project_name),
+        Mm(297.0),
+        Mm(210.0),
+        "Calibration",
+    );
+    let layer = doc.get_page(page1).get_layer(layer1);
+    let font_bold = doc
+        .add_builtin_font(BuiltinFont::HelveticaBold)
+        .map_err(|e| e.to_string())?;
+    let font_regular = doc
+        .add_builtin_font(BuiltinFont::Helvetica)
+        .map_err(|e| e.to_string())?;
+
+    layer.use_text("Wrap Preview", 11.0, Mm(18.0), Mm(198.0), &font_bold);
+    layer.use_text("Calibration Report", 22.0, Mm(18.0), Mm(186.0), &font_bold);
+    layer.use_text(
+        format!("Project: {}", project_name),
+        11.0,
+        Mm(18.0),
+        Mm(176.0),
+        &font_regular,
+    );
+    layer.use_text(
+        format!("Date: {}", run.created_at),
+        11.0,
+        Mm(18.0),
+        Mm(169.0),
+        &font_regular,
+    );
+    layer.use_text(
+        format!("Hero: Camera {}", run.hero_slot),
+        11.0,
+        Mm(18.0),
+        Mm(162.0),
+        &font_regular,
+    );
+
+    let reference_image = load_pdf_image(reference_frame_path)?;
+    reference_image.add_to_layer(
+        layer.clone(),
+        ImageTransform {
+            translate_x: Some(Mm(18.0)),
+            translate_y: Some(Mm(102.0)),
+            scale_x: Some(0.42),
+            scale_y: Some(0.42),
+            ..Default::default()
+        },
+    );
+    let overlay_image = load_pdf_image(overlay_frame_path)?;
+    overlay_image.add_to_layer(
+        layer.clone(),
+        ImageTransform {
+            translate_x: Some(Mm(145.0)),
+            translate_y: Some(Mm(102.0)),
+            scale_x: Some(0.42),
+            scale_y: Some(0.42),
+            ..Default::default()
+        },
+    );
+
+    layer.use_text("Reference Frame", 10.0, Mm(18.0), Mm(97.0), &font_bold);
+    layer.use_text("Patch Overlay", 10.0, Mm(145.0), Mm(97.0), &font_bold);
+
+    let mut cursor_y = 82.0;
+    for result in &run.results {
+        let calibration = match result.calibration.as_ref() {
+            Some(calibration) if calibration.chart_detected => calibration,
+            _ => continue,
+        };
+        let lut_name = if result.slot == run.hero_slot {
+            "Hero baseline".to_string()
+        } else {
+            calibration
+                .lut_path
+                .as_ref()
+                .and_then(|path| Path::new(path).file_name().and_then(|name| name.to_str()))
+                .unwrap_or("Missing LUT")
+                .to_string()
+        };
+        layer.use_text(
+            format!(
+                "Camera {}  Quality {} {}  dE {:.1} → {}  Exposure {}  WB {}K  Tint {}  LUT {}",
+                result.slot,
+                calibration.calibration_quality_score,
+                calibration.calibration_quality_level,
+                calibration.mean_delta_e_before,
+                calibration
+                    .mean_delta_e_after
+                    .map(|value| format!("{:.1}", value))
+                    .unwrap_or_else(|| "—".to_string()),
+                if result.slot == run.hero_slot {
+                    "baseline".to_string()
+                } else {
+                    format!("{:.2}x", calibration.calibration_transform.as_ref().map(|transform| transform.exposure_scalar).unwrap_or(1.0))
+                },
+                calibration.wb_kelvin_shift,
+                calibration.tint_shift,
+                lut_name,
+            ),
+            9.0,
+            Mm(18.0),
+            Mm(cursor_y),
+            &font_regular,
+        );
+        cursor_y -= 7.0;
+        if !calibration.warnings.is_empty() {
+            layer.use_text(
+                format!(
+                    "Warnings: {}",
+                    calibration
+                        .warnings
+                        .iter()
+                        .take(3)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(" • ")
+                ),
+                8.0,
+                Mm(22.0),
+                Mm(cursor_y),
+                &font_regular,
+            );
+            cursor_y -= 6.0;
+        }
+    }
+
+    if let Some(parent) = output_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let mut writer = BufWriter::new(File::create(output_path).map_err(|e| e.to_string())?);
+    doc.save(&mut writer).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn load_pdf_image(path: &Path) -> Result<printpdf::Image, String> {
+    let file = std::fs::File::open(path)
+        .map_err(|error| format!("Failed opening calibration image {}: {}", path.display(), error))?;
+    let format = if path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.eq_ignore_ascii_case("png"))
+        .unwrap_or(false)
+    {
+        ::image::ImageFormat::Png
+    } else {
+        ::image::ImageFormat::Jpeg
+    };
+    let dynamic_image = ::image::load(std::io::BufReader::new(file), format)
+        .map_err(|error| format!("Failed reading calibration image {}: {}", path.display(), error))?;
+    Ok(printpdf::Image::from_dynamic_image(&dynamic_image))
+}
+
 fn emit_job_state(app: &AppHandle, manager: &crate::jobs::JobManager, job_id: &str) {
     if let Some(job) = manager.get_job(job_id) {
         if let Err(e) = app.emit("job-progress", job) {
@@ -5389,6 +5554,24 @@ fn collect_matchlab_references(
                 references
                     .proxy_dirs
                     .insert(parent.to_string_lossy().to_string());
+            }
+        }
+        if let Some(calibration_json) = result.calibration_json.as_ref() {
+            if let Ok(calibration) = serde_json::from_str::<CalibrationChartDetection>(calibration_json) {
+                if !calibration.corrected_preview_path.is_empty() {
+                    references.files.insert(calibration.corrected_preview_path);
+                }
+                if let Some(transform_preview_path) = calibration.transform_preview_path {
+                    references.files.insert(transform_preview_path);
+                }
+                if let Some(lut_path) = calibration.lut_path {
+                    references.files.insert(lut_path.clone());
+                    if let Some(parent) = Path::new(&lut_path).parent() {
+                        references
+                            .proxy_dirs
+                            .insert(parent.to_string_lossy().to_string());
+                    }
+                }
             }
         }
     }
@@ -6164,6 +6347,11 @@ pub async fn production_matchlab_save_run(
                 .map_err(|e| format!("Failed to serialize frame paths: {}", e))?,
             metrics_json: serde_json::to_string(&item.analysis)
                 .map_err(|e| format!("Failed to serialize match lab result: {}", e))?,
+            calibration_json: item
+                .calibration
+                .map(|calibration| serde_json::to_string(&calibration))
+                .transpose()
+                .map_err(|e| format!("Failed to serialize calibration payload: {}", e))?,
             created_at: now.clone(),
         });
     }
@@ -6217,12 +6405,19 @@ pub async fn production_matchlab_get_run(
             .map_err(|e| format!("Failed to parse saved match lab metrics: {}", e))?;
         let frame_paths: Vec<String> = serde_json::from_str(&result.frames_json)
             .map_err(|e| format!("Failed to parse saved match lab frame paths: {}", e))?;
+        let calibration = result
+            .calibration_json
+            .as_deref()
+            .map(serde_json::from_str::<CalibrationChartDetection>)
+            .transpose()
+            .map_err(|e| format!("Failed to parse saved calibration payload: {}", e))?;
         parsed_results.push(ProductionMatchLabRunResult {
             slot: result.slot,
             proxy_path: result.proxy_path,
             representative_frame_path: result.representative_frame_path,
             frame_paths,
             analysis,
+            calibration,
             created_at: result.created_at,
         });
     }
@@ -6306,4 +6501,214 @@ pub async fn production_matchlab_delete_run(
     } else {
         Ok(Some(warnings.join(" • ")))
     }
+}
+
+#[tauri::command]
+pub async fn production_matchlab_detect_calibration(
+    project_id: String,
+    slot: String,
+    frame_path: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<CalibrationChartDetection, String> {
+    crate::production_calibration::detect_spydercheckr(
+        Path::new(&state.cache_dir),
+        &project_id,
+        &slot,
+        Path::new(&frame_path),
+    )
+}
+
+#[tauri::command]
+pub async fn production_matchlab_generate_transform(
+    project_id: String,
+    slot: String,
+    hero_slot: String,
+    source_frame_path: String,
+    source_calibration: CalibrationChartDetection,
+    target_calibration: Option<CalibrationChartDetection>,
+    state: State<'_, Arc<AppState>>,
+) -> Result<CalibrationChartDetection, String> {
+    crate::production_calibration::generate_calibration_transform(
+        Path::new(&state.cache_dir),
+        &project_id,
+        &slot,
+        &hero_slot,
+        Path::new(&source_frame_path),
+        &source_calibration,
+        target_calibration.as_ref(),
+    )
+}
+
+#[tauri::command]
+pub async fn production_matchlab_export_lut(
+    lut_path: String,
+    destination_path: String,
+) -> Result<(), String> {
+    let source = Path::new(&lut_path);
+    if !source.exists() {
+        return Err("Calibration LUT is missing. Re-run calibration.".to_string());
+    }
+    let destination = Path::new(&destination_path);
+    if let Some(parent) = destination.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("Failed preparing LUT export folder: {}", error))?;
+    }
+    std::fs::copy(source, destination)
+        .map_err(|error| format!("Failed exporting LUT: {}", error))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn production_matchlab_export_calibration_package(
+    project_id: String,
+    run_id: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<String, String> {
+    let package_root = Path::new(&state.cache_dir)
+        .join("production")
+        .join("cache")
+        .join("match_lab")
+        .join(&project_id)
+        .join("calibration_package")
+        .join("CalibrationPackage");
+    if package_root.exists() {
+        std::fs::remove_dir_all(&package_root)
+            .map_err(|error| format!("Failed clearing calibration package: {}", error))?;
+    }
+    std::fs::create_dir_all(&package_root)
+        .map_err(|error| format!("Failed preparing calibration package: {}", error))?;
+
+    let record = state
+        .db
+        .get_production_matchlab_run(&run_id)
+        .map_err(|e| format!("Failed to load calibration run: {}", e))?;
+    let Some((run_record, result_records)) = record else {
+        return Err("Calibration run not found.".to_string());
+    };
+    if run_record.project_id != project_id {
+        return Err("Calibration run does not belong to this project.".to_string());
+    }
+    let mut run_results = Vec::with_capacity(result_records.len());
+    for result in result_records {
+        let analysis: CameraMatchAnalysisResult = serde_json::from_str(&result.metrics_json)
+            .map_err(|e| format!("Failed to parse saved match lab metrics: {}", e))?;
+        let frame_paths: Vec<String> = serde_json::from_str(&result.frames_json)
+            .map_err(|e| format!("Failed to parse saved match lab frame paths: {}", e))?;
+        let calibration = result
+            .calibration_json
+            .as_deref()
+            .map(serde_json::from_str::<CalibrationChartDetection>)
+            .transpose()
+            .map_err(|e| format!("Failed to parse saved calibration payload: {}", e))?;
+        run_results.push(ProductionMatchLabRunResult {
+            slot: result.slot,
+            proxy_path: result.proxy_path,
+            representative_frame_path: result.representative_frame_path,
+            frame_paths,
+            analysis,
+            calibration,
+            created_at: result.created_at,
+        });
+    }
+    let run = ProductionMatchLabRun {
+        run_id: run_record.id,
+        project_id: run_record.project_id,
+        hero_slot: run_record.hero_slot,
+        created_at: run_record.created_at,
+        results: run_results,
+    };
+
+    let project_name = state
+        .db
+        .list_production_projects()
+        .map_err(|error| format!("Failed loading production project: {}", error))?
+        .into_iter()
+        .find(|item| item.id == project_id)
+        .map(|item| item.name)
+        .unwrap_or_else(|| "Production Project".to_string());
+
+    let reference_result = run
+        .results
+        .iter()
+        .find(|result| result.slot == run.hero_slot && result.calibration.as_ref().map(|item| item.chart_detected).unwrap_or(false))
+        .or_else(|| run.results.iter().find(|result| result.calibration.as_ref().map(|item| item.chart_detected).unwrap_or(false)))
+        .ok_or("No calibrated camera found in this run.")?;
+    let reference_frame_path = Path::new(&reference_result.representative_frame_path);
+    let reference_frame_export = package_root.join("chart_reference_frame.jpg");
+    std::fs::copy(reference_frame_path, &reference_frame_export)
+        .map_err(|error| format!("Failed exporting chart reference frame: {}", error))?;
+    let overlay_frame_export = package_root.join("chart_overlay_frame.jpg");
+    crate::production_calibration::render_calibration_overlay_preview(
+        reference_frame_path,
+        reference_result.calibration.as_ref().ok_or("Missing hero calibration.")?,
+        &overlay_frame_export,
+    )?;
+
+    let mut manifest_slots = Vec::new();
+    let mut lut_files = Vec::new();
+    for result in &run.results {
+        let calibration = match result.calibration.as_ref() {
+            Some(calibration) if calibration.chart_detected => calibration,
+            _ => continue,
+        };
+        let lut_name = if result.slot != run.hero_slot {
+            if let Some(lut_path) = calibration.lut_path.as_ref() {
+                let source = Path::new(lut_path);
+                if source.exists() {
+                    let file_name = source
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("calibration.cube")
+                        .to_string();
+                    std::fs::copy(source, package_root.join(&file_name))
+                        .map_err(|error| format!("Failed copying LUT {}: {}", file_name, error))?;
+                    lut_files.push(file_name.clone());
+                    Some(file_name)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        manifest_slots.push(serde_json::json!({
+            "slot": result.slot,
+            "mean_delta_e_before": calibration.mean_delta_e_before,
+            "mean_delta_e_after": calibration.mean_delta_e_after,
+            "calibration_quality_score": calibration.calibration_quality_score,
+            "calibration_quality_level": calibration.calibration_quality_level,
+            "warnings": calibration.warnings,
+            "lut_file": lut_name,
+        }));
+    }
+
+    std::fs::write(package_root.join("hero_camera.txt"), format!("Hero Camera {}\n", run.hero_slot))
+        .map_err(|error| format!("Failed writing hero camera note: {}", error))?;
+
+    let manifest = serde_json::json!({
+        "project": project_name,
+        "project_id": project_id,
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+        "hero_camera": run.hero_slot,
+        "camera_slots": manifest_slots,
+        "lut_files": lut_files,
+    });
+    std::fs::write(
+        package_root.join("calibration_manifest.json"),
+        serde_json::to_string_pretty(&manifest)
+            .map_err(|error| format!("Failed serializing calibration manifest: {}", error))?,
+    )
+    .map_err(|error| format!("Failed writing calibration manifest: {}", error))?;
+
+    write_calibration_report_pdf(
+        &package_root.join("calibration_report.pdf"),
+        &project_name,
+        &run,
+        &reference_frame_export,
+        &overlay_frame_export,
+    )?;
+
+    Ok(package_root.to_string_lossy().to_string())
 }

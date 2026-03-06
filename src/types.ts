@@ -451,6 +451,67 @@ export interface CameraMatchAnalysisResult {
     warnings?: string[];
 }
 
+export interface CalibrationPatchSample {
+    patch_index: number;
+    measured_rgb_mean: [number, number, number];
+    measured_rgb_median: [number, number, number];
+    reference_rgb: [number, number, number];
+    reference_lab: [number, number, number];
+    delta_e: number;
+    center_x: number;
+    center_y: number;
+}
+
+export interface CalibrationPoint {
+    x: number;
+    y: number;
+}
+
+export interface CalibrationChartDetection {
+    chart_detected: boolean;
+    frame_width: number;
+    frame_height: number;
+    chart_corners: CalibrationPoint[];
+    patch_samples: CalibrationPatchSample[];
+    delta_e: number[];
+    mean_delta_e: number;
+    max_delta_e: number;
+    neutral_mean_delta_e: number;
+    skin_mean_delta_e: number;
+    exposure_offset_stops: number;
+    wb_kelvin_shift: number;
+    tint_shift: number;
+    corrected_preview_path: string;
+    calibration_transform?: CalibrationTransform | null;
+    lut_path?: string | null;
+    cube_size?: number | null;
+    transform_type?: string | null;
+    transform_target_slot?: string | null;
+    mean_delta_e_before: number;
+    mean_delta_e_after?: number | null;
+    transform_preview_path?: string | null;
+    chart_area_ratio: number;
+    chart_skew_score: number;
+    clipped_patch_count: number;
+    crushed_patch_count: number;
+    lighting_uniformity_score: number;
+    calibration_quality_score: number;
+    calibration_quality_level: "Good" | "Caution" | "Poor" | string;
+    transform_quality_flag?: string | null;
+    warnings: string[];
+    detection_score: number;
+}
+
+export interface CalibrationTransform {
+    exposure_scalar: number;
+    wb_gains_rgb: [number, number, number];
+    tint_gains_rgb: [number, number, number];
+    matrix_3x3?: [[number, number, number], [number, number, number], [number, number, number]] | null;
+    source_patch_count: number;
+    mean_delta_e_before: number;
+    mean_delta_e_after: number;
+}
+
 export interface ProductionMatchLabProxyResult {
     proxy_path: string;
     reused_proxy: boolean;
@@ -471,6 +532,7 @@ export interface ProductionMatchLabRunResult {
     representative_frame_path: string;
     frame_paths: string[];
     analysis: CameraMatchAnalysisResult;
+    calibration?: CalibrationChartDetection | null;
     created_at: string;
 }
 

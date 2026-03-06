@@ -376,6 +376,7 @@ pub struct ProductionMatchLabResultRecord {
     pub representative_frame_path: String,
     pub frames_json: String,
     pub metrics_json: String,
+    pub calibration_json: Option<String>,
     pub created_at: String,
 }
 
@@ -489,6 +490,17 @@ impl Database {
             }
             if !columns.contains(&"camera_angle".to_string()) {
                 conn.execute("ALTER TABLE clips ADD COLUMN camera_angle TEXT", [])?;
+            }
+            let mut matchlab_stmt = conn.prepare("PRAGMA table_info(production_matchlab_results)")?;
+            let matchlab_columns: Vec<String> = matchlab_stmt
+                .query_map([], |row| row.get(1))?
+                .filter_map(|r| r.ok())
+                .collect();
+            if !matchlab_columns.is_empty() && !matchlab_columns.contains(&"calibration_json".to_string()) {
+                conn.execute(
+                    "ALTER TABLE production_matchlab_results ADD COLUMN calibration_json TEXT",
+                    [],
+                )?;
             }
 
             conn.execute_batch(
@@ -1498,6 +1510,7 @@ impl Database {
                 representative_frame_path TEXT NOT NULL,
                 frames_json TEXT NOT NULL,
                 metrics_json TEXT NOT NULL,
+                calibration_json TEXT,
                 created_at TEXT NOT NULL,
                 FOREIGN KEY(run_id) REFERENCES production_matchlab_runs(id)
             );
@@ -1811,7 +1824,7 @@ impl Database {
         )?;
         for result in results {
             tx.execute(
-                "INSERT INTO production_matchlab_results (id, run_id, slot, proxy_path, representative_frame_path, frames_json, metrics_json, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                "INSERT INTO production_matchlab_results (id, run_id, slot, proxy_path, representative_frame_path, frames_json, metrics_json, calibration_json, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                 params![
                     result.id,
                     result.run_id,
@@ -1820,6 +1833,7 @@ impl Database {
                     result.representative_frame_path,
                     result.frames_json,
                     result.metrics_json,
+                    result.calibration_json,
                     result.created_at
                 ],
             )?;
@@ -1878,7 +1892,7 @@ impl Database {
         };
 
         let mut result_stmt = conn.prepare(
-            "SELECT id, run_id, slot, proxy_path, representative_frame_path, frames_json, metrics_json, created_at
+            "SELECT id, run_id, slot, proxy_path, representative_frame_path, frames_json, metrics_json, calibration_json, created_at
              FROM production_matchlab_results
              WHERE run_id = ?1
              ORDER BY slot ASC",
@@ -1892,7 +1906,8 @@ impl Database {
                 representative_frame_path: row.get(4)?,
                 frames_json: row.get(5)?,
                 metrics_json: row.get(6)?,
-                created_at: row.get(7)?,
+                calibration_json: row.get(7)?,
+                created_at: row.get(8)?,
             })
         })?;
         let mut results = Vec::new();
@@ -1908,7 +1923,7 @@ impl Database {
     ) -> SqlResult<Vec<ProductionMatchLabResultRecord>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, run_id, slot, proxy_path, representative_frame_path, frames_json, metrics_json, created_at
+            "SELECT id, run_id, slot, proxy_path, representative_frame_path, frames_json, metrics_json, calibration_json, created_at
              FROM production_matchlab_results
              WHERE run_id != ?1",
         )?;
@@ -1921,7 +1936,8 @@ impl Database {
                 representative_frame_path: row.get(4)?,
                 frames_json: row.get(5)?,
                 metrics_json: row.get(6)?,
-                created_at: row.get(7)?,
+                calibration_json: row.get(7)?,
+                created_at: row.get(8)?,
             })
         })?;
         let mut results = Vec::new();

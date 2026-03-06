@@ -37,3 +37,4 @@ zip = "2"
 image = { version = "0.24", features = ["png", "jpeg"] }
 bcrypt = "0.15"
 rand = "0.8"
+opencv = { version = "0.92", default-features = false, features = ["clang-runtime", "imgcodecs", "imgproc"] }

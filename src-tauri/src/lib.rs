@@ -9,6 +9,7 @@ mod jobs;
 mod lut;
 mod perf;
 mod production;
+mod production_calibration;
 mod production_match_lab;
 mod review_core;
 mod scanner;
@@ -114,6 +115,10 @@ pub fn run() {
                     "production_matchlab_list_runs",
                     "production_matchlab_get_run",
                     "production_matchlab_delete_run",
+                    "production_matchlab_detect_calibration",
+                    "production_matchlab_generate_transform",
+                    "production_matchlab_export_lut",
+                    "production_matchlab_export_calibration_package",
                 ];
                 eprintln!(
                     "[production][boot] command registry loaded: {}",
@@ -251,6 +256,10 @@ pub fn run() {
             commands::production_matchlab_list_runs,
             commands::production_matchlab_get_run,
             commands::production_matchlab_delete_run,
+            commands::production_matchlab_detect_calibration,
+            commands::production_matchlab_generate_transform,
+            commands::production_matchlab_export_lut,
+            commands::production_matchlab_export_calibration_package,
             commands::camera_match_analyze_clip,
             #[cfg(debug_assertions)]
             commands::dev_reset_all_data,

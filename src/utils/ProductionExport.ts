@@ -1,6 +1,6 @@
 import { save } from "@tauri-apps/plugin-dialog";
 import { jsPDF } from "jspdf";
-import { CameraMatchDelta, CameraMatchMetrics, CameraMatchSuggestionSet, ProductionDetailSection, ProductionQuickSetupRow } from "../types";
+import { CalibrationChartDetection, CameraMatchDelta, CameraMatchMetrics, CameraMatchSuggestionSet, ProductionDetailSection, ProductionQuickSetupRow } from "../types";
 import { invokeGuarded } from "./tauri";
 
 interface ExportSection {
@@ -47,6 +47,7 @@ interface ProductionMatchSheetOptions {
     metrics: CameraMatchMetrics;
     delta: CameraMatchDelta | null;
     suggestions: CameraMatchSuggestionSet | null;
+    calibration?: CalibrationChartDetection | null;
   }>;
 }
 
@@ -391,8 +392,10 @@ async function drawMatchSheetPage(options: ProductionMatchSheetOptions): Promise
 
     cursorY += 126;
     const suggestionLines = buildAdjustmentLines(camera.suggestions);
+    const calibrationLines = buildCalibrationLines(camera.calibration, camera.slot, options.heroSlot);
+    const adjustmentsHeight = calibrationLines.length > 0 ? 194 : 156;
     ctx.fillStyle = "#f4f6f9";
-    roundRect(ctx, x + 18, cursorY, columnWidth - 36, 156, 16, true, false);
+    roundRect(ctx, x + 18, cursorY, columnWidth - 36, adjustmentsHeight, 16, true, false);
     ctx.fillStyle = "#111827";
     ctx.font = "700 12px Helvetica";
     ctx.fillText("ADJUSTMENTS", x + 30, cursorY + 24);
@@ -401,6 +404,21 @@ async function drawMatchSheetPage(options: ProductionMatchSheetOptions): Promise
     suggestionLines.slice(0, 5).forEach((line, lineIndex) => {
       ctx.fillText(`• ${line}`, x + 30, cursorY + 56 + lineIndex * 24);
     });
+    if (calibrationLines.length > 0) {
+      const calibrationTop = cursorY + 56 + Math.min(suggestionLines.length, 5) * 24 + 8;
+      ctx.fillStyle = "#6b7280";
+      ctx.font = "700 10px Helvetica";
+      ctx.fillText("CALIBRATION", x + 30, calibrationTop);
+      ctx.fillStyle = "#374151";
+      ctx.font = "600 12px Helvetica";
+      calibrationLines.forEach((line, lineIndex) => {
+        ctx.fillText(
+          truncateText(ctx, line, columnWidth - 72, "600 12px Helvetica"),
+          x + 30,
+          calibrationTop + 18 + lineIndex * 16,
+        );
+      });
+    }
   }
 
   return canvas;
@@ -484,6 +502,25 @@ function buildAdjustmentLines(suggestions: CameraMatchSuggestionSet | null): str
   if (suggestions.warning) {
     lines.push(suggestions.warning);
   }
+  return lines;
+}
+
+function buildCalibrationLines(
+  calibration: CalibrationChartDetection | null | undefined,
+  slot: string,
+  heroSlot: string,
+): string[] {
+  if (!calibration?.chart_detected) {
+    return [];
+  }
+  const lines = [
+    `dE ${calibration.mean_delta_e_before.toFixed(1)} → ${calibration.mean_delta_e_after?.toFixed(1) ?? "—"}`,
+    slot === heroSlot
+      ? "Hero baseline"
+      : calibration.lut_path
+        ? `LUT ${calibration.lut_path.split("/").pop() ?? "available"}`
+        : "LUT pending",
+  ];
   return lines;
 }
 
