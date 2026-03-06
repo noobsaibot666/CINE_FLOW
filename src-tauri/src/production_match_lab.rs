@@ -48,6 +48,10 @@ pub struct CameraMatchAggregateMetrics {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CameraMatchAnalysisResult {
     pub source_path: String,
+    #[serde(default)]
+    pub source_kind: Option<String>,
+    #[serde(default)]
+    pub original_format_kind: Option<String>,
     pub clip_path: String,
     pub clip_name: String,
     pub representative_frame_path: String,
@@ -193,6 +197,42 @@ pub fn is_braw_path(clip_path: &str) -> bool {
         .unwrap_or(false)
 }
 
+pub fn is_nraw_path(clip_path: &str) -> bool {
+    Path::new(clip_path)
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.eq_ignore_ascii_case("nev"))
+        .unwrap_or(false)
+}
+
+pub fn is_r3d_path(clip_path: &str) -> bool {
+    Path::new(clip_path)
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.eq_ignore_ascii_case("r3d"))
+        .unwrap_or(false)
+}
+
+pub fn is_proxy_only_raw_path(clip_path: &str) -> bool {
+    is_nraw_path(clip_path) || is_r3d_path(clip_path)
+}
+
+pub fn classify_source_format(clip_path: &str) -> String {
+    let extension = Path::new(clip_path)
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase())
+        .unwrap_or_default();
+    match extension.as_str() {
+        "nev" => "NIKON_NRAW".to_string(),
+        "r3d" => "RED_R3D".to_string(),
+        "braw" => "BLACKMAGIC_RAW".to_string(),
+        "mov" => "MOV".to_string(),
+        "mp4" => "MP4".to_string(),
+        other => other.to_uppercase(),
+    }
+}
+
 pub fn hash_source_signature(clip_path: &str) -> String {
     let mut signature = clip_path.to_string();
     if let Ok(metadata) = std::fs::metadata(clip_path) {
@@ -318,6 +358,12 @@ pub fn choose_source_path_for_analysis(clip_path: &str) -> Result<String, String
 
     if extension == "braw" {
         return Err("BRAW analysis requires a proxy (MP4). Generate proxy first.".to_string());
+    }
+    if extension == "nev" {
+        return Err("N-RAW analysis requires a proxy (MP4 or MOV). Pick an operator proxy first.".to_string());
+    }
+    if extension == "r3d" {
+        return Err("R3D analysis requires a proxy (MP4 or MOV). Pick an operator proxy first.".to_string());
     }
 
     if is_ffmpeg_reliable_extension(&extension) {

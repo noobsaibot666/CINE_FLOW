@@ -1,5 +1,5 @@
 import React, { startTransition, useEffect, useMemo, useState } from "react";
-import { ChevronDown, Download, FolderOpen, Gauge, ImageIcon, Maximize2, Pipette, RefreshCw, Trash2 } from "lucide-react";
+import { ChevronDown, Download, FolderOpen, Gauge, HelpCircle, ImageIcon, Maximize2, Pipette, RefreshCw, Trash2 } from "lucide-react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import {
   CalibrationChartDetection,
@@ -23,6 +23,19 @@ interface CameraMatchLabAppProps {
 const SLOT_ORDER = ["A", "B", "C"] as const;
 const FRAME_COUNT = 5;
 type CameraSlot = (typeof SLOT_ORDER)[number];
+type MatchLabGuidanceItem = {
+  id: string;
+  priority: number;
+  tone: "critical" | "warning" | "info" | "good";
+  label: string;
+  reason: string;
+  slot?: string;
+};
+type MatchLabGuidanceAction =
+  | { kind: "proxy"; label: string; slot: string }
+  | { kind: "recalibrate"; label: string; slot: string }
+  | { kind: "export"; label: string }
+  | { kind: "analyze"; label: string };
 
 export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
   const [clipsBySlot, setClipsBySlot] = useState<Record<string, string>>({});
@@ -348,13 +361,24 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
     };
   }, [analysisBySlot, heroSlot]);
 
+  const guidance = useMemo(() => buildMatchLabGuidance({
+    clipsBySlot,
+    analysisBySlot,
+    calibrationBySlot,
+    slotErrors,
+    heroSlot,
+    analyses: matchResult.analyses,
+    analysisOverrideBySlot,
+    selectedSlots,
+  }), [analysisBySlot, analysisOverrideBySlot, calibrationBySlot, clipsBySlot, heroSlot, matchResult.analyses, selectedSlots, slotErrors]);
+
   const pickClip = async (slot: string) => {
     const selected = await open({
       multiple: false,
       title: `Select camera ${slot} test clip`,
       filters: [{
         name: "Video",
-        extensions: ["mov", "mp4", "mxf", "mkv", "avi", "braw", "r3d"],
+        extensions: ["mov", "mp4", "mxf", "mkv", "avi", "braw", "r3d", "nev"],
       }],
     });
     if (typeof selected !== "string") return;
@@ -395,6 +419,9 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
       delete next[slot];
       return next;
     });
+    if (isProxyOnlyRawClip(selected)) {
+      setSlotStatuses((prev) => ({ ...prev, [slot]: `${getProxyOnlyFormatBadge(selected)} detected · Proxy required` }));
+    }
   };
 
   const clearSlot = (slot: string) => {
@@ -494,6 +521,18 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
       for (const slot of selectedSlots) {
         const clipPath = clipsBySlot[slot];
         if (!clipPath) continue;
+        if (isProxyOnlyRawClip(clipPath) && !analysisOverrideBySlot[slot]) {
+          const formatLabel = getProxyOnlyFormatBadge(clipPath);
+          startTransition(() => {
+            setSlotStatuses((prev) => ({ ...prev, [slot]: "Proxy required" }));
+            setSlotErrors((prev) => ({ ...prev, [slot]: "Proxy required for analysis" }));
+            setSlotErrorDetails((prev) => ({
+              ...prev,
+              [slot]: `${formatLabel} source selected. This format is accepted in Match Lab, but analysis runs through an operator-selected MP4 or MOV proxy.`,
+            }));
+          });
+          continue;
+        }
         try {
           if (isBrawClip(clipPath)) {
             startTransition(() => {
@@ -659,12 +698,12 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
   const pickExistingProxy = async (slot: string) => {
     const selected = await open({
       multiple: false,
-      title: `Select existing MP4 proxy for camera ${slot}`,
-      filters: [{ name: "MP4 Proxy", extensions: ["mp4"] }],
+      title: `Select existing MP4 or MOV proxy for camera ${slot}`,
+      filters: [{ name: "Proxy", extensions: ["mp4", "mov"] }],
     });
     if (typeof selected !== "string") return;
     setAnalysisOverrideBySlot((prev) => ({ ...prev, [slot]: selected }));
-    setSlotStatuses((prev) => ({ ...prev, [slot]: "MP4 proxy selected" }));
+    setSlotStatuses((prev) => ({ ...prev, [slot]: "Proxy selected" }));
   };
 
   const confirmDeleteRun = async () => {
@@ -862,24 +901,52 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                       <span style={{ ...slotBadgeStyle, ...slotBadgeColor(slot) }}>Camera {slot}</span>
                       {heroSlot === slot && <span style={heroChipStyle}>Hero</span>}
                     </div>
-                    <div className="matchLabCameraActions" style={cameraActionsStyle}>
-                      <button type="button" className="btn btn-secondary btn-sm" onClick={() => void pickClip(slot)}>
-                        <FolderOpen size={14} /> {clipPath ? "Replace" : "Import Clip"}
-                      </button>
-                      {clipPath && <button type="button" className="btn btn-ghost btn-sm" onClick={() => clearSlot(slot)}>Clear</button>}
-                      {rawAnalysis?.representative_frame_path && (
-                        <button
-                          type="button"
-                          className="btn btn-ghost btn-sm"
-                          onClick={() => void calibrateSlot(slot, rawAnalysis.representative_frame_path)}
-                          disabled={Boolean(calibratingSlots[slot])}
-                        >
-                          <Pipette size={14} /> {calibratingSlots[slot] ? "Calibrating..." : "Calibrate"}
+                    <div className="matchLabCameraActions" style={cameraActionsWrapStyle}>
+                      <div style={cameraActionsTopRowStyle}>
+                        <button type="button" className="btn btn-secondary btn-sm" onClick={() => void pickClip(slot)}>
+                          <FolderOpen size={14} /> {clipPath ? "Replace" : "Import Clip"}
                         </button>
-                      )}
+                        {clipPath ? (
+                          <button type="button" className="btn btn-ghost btn-sm" onClick={() => clearSlot(slot)}>Clear</button>
+                        ) : (
+                          <span style={actionPlaceholderStyle} aria-hidden="true" />
+                        )}
+                        {rawAnalysis?.representative_frame_path ? (
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-sm"
+                            onClick={() => void calibrateSlot(slot, rawAnalysis.representative_frame_path)}
+                            disabled={Boolean(calibratingSlots[slot])}
+                          >
+                            <Pipette size={14} /> {calibratingSlots[slot] ? "Calibrating..." : "Calibrate"}
+                          </button>
+                        ) : (
+                          <span style={actionPlaceholderStyle} aria-hidden="true" />
+                        )}
+                      </div>
+                      <div style={cameraActionsSupportRowStyle}>
+                        {isProxyOnlyRawClip(clipPath || "") ? (
+                          <button type="button" className="btn btn-ghost btn-sm" onClick={() => void pickExistingProxy(slot)}>
+                            <FolderOpen size={14} /> Use existing MP4/MOV proxy…
+                          </button>
+                        ) : (
+                          <span style={supportRowPlaceholderStyle} aria-hidden="true" />
+                        )}
+                      </div>
                     </div>
                     <div className="matchLabPathPrimary" style={fileMetaStyle} title={clipPath ? getFileName(clipPath) : "No clip selected"}>{clipPath ? getFileName(clipPath) : "No clip selected"}</div>
                     <div className="matchLabPathSecondary" style={helperMetaStyle} title={clipPath || "One short test clip per camera."}>{clipPath || "One short test clip per camera."}</div>
+                    {isProxyOnlyRawClip(clipPath || "") ? (
+                      <div style={sourceMetaRowStyle}>
+                        <span style={sourceBadgeStyle}>{getProxyOnlyFormatBadge(clipPath || "")}</span>
+                        <span style={sourceMetaTextStyle}>{analysisOverrideBySlot[slot] ? "Proxy attached" : "Proxy required"}</span>
+                      </div>
+                    ) : null}
+                    {analysisOverrideBySlot[slot] ? (
+                      <div style={sourceMetaInlineStyle} title={analysisOverrideBySlot[slot]}>
+                        Using proxy · {getFileName(analysisOverrideBySlot[slot])}
+                      </div>
+                    ) : null}
                     {slotStatus ? <div style={statusMetaStyle}>{slotStatus}</div> : null}
                   </div>
 
@@ -887,10 +954,10 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                     {slotError && (
                       <div style={errorCardStyle}>
                         <div>{slotError}</div>
-                        {isBrawClip(clipPath || "") ? (
+                        {isBrawClip(clipPath || "") || isProxyOnlyRawClip(clipPath || "") ? (
                           <div style={errorActionsStyle}>
                             <button type="button" className="btn btn-ghost btn-sm" onClick={() => void pickExistingProxy(slot)} disabled={active}>
-                              <FolderOpen size={14} /> Use existing MP4 proxy…
+                              <FolderOpen size={14} /> Use existing MP4/MOV proxy…
                             </button>
                           </div>
                         ) : null}
@@ -1108,6 +1175,63 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
               );
             })}
           </section>
+          {guidance.items.length > 0 ? (
+            <section style={guidanceSectionStyle}>
+              <div style={guidanceHeaderStyle}>
+                <div style={guidanceTitleStyle}>How to use this result</div>
+              </div>
+              <div style={guidanceListStyle}>
+                {guidance.items.slice(0, 4).map((item) => (
+                  <div key={item.id} style={guidanceRowStyle}>
+                    <div style={guidanceRowMainStyle}>
+                      <div style={guidanceRowTopStyle}>
+                        {item.slot ? (
+                          <span style={{ ...slotBadgeStyle, ...slotBadgeColor(item.slot), minWidth: 26, height: 22, padding: "0 8px" }}>
+                            {item.slot}
+                          </span>
+                        ) : null}
+                        <span style={{ ...guidanceToneDotStyle, ...guidanceToneDotColor(item.tone) }} />
+                        <span style={guidanceLabelStyle}>{item.label}</span>
+                      </div>
+                    </div>
+                    <span title={item.reason} style={guidanceHelpStyle}>
+                      <HelpCircle size={13} />
+                    </span>
+                  </div>
+                ))}
+                {guidance.items.length > 4 ? (
+                  <div style={guidanceMoreStyle}>+{guidance.items.length - 4} more</div>
+                ) : null}
+              </div>
+              <div style={guidanceActionRowStyle}>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => {
+                    if (!guidance.action) return;
+                    if (guidance.action.kind === "proxy") {
+                      void pickExistingProxy(guidance.action.slot);
+                      return;
+                    }
+                    if (guidance.action.kind === "recalibrate") {
+                      const framePath = analysisBySlot[guidance.action.slot]?.representative_frame_path;
+                      if (framePath) {
+                        void calibrateSlot(guidance.action.slot, framePath);
+                      }
+                      return;
+                    }
+                    if (guidance.action.kind === "export") {
+                      setExportMenuOpen(true);
+                      return;
+                    }
+                    void analyzeClips();
+                  }}
+                >
+                  {guidance.action?.label ?? "Review results"}
+                </button>
+              </div>
+            </section>
+          ) : null}
         </main>
       </div>
       {pendingRun ? (
@@ -1210,6 +1334,281 @@ function buildAnalysisModel(
       midtone_density: heroResult.aggregate.midtone_density,
     }, result.aggregate, result.per_frame.length),
   };
+}
+
+function buildMatchLabGuidance({
+  clipsBySlot,
+  analysisBySlot,
+  calibrationBySlot,
+  slotErrors,
+  heroSlot,
+  analyses,
+  analysisOverrideBySlot,
+  selectedSlots,
+}: {
+  clipsBySlot: Record<string, string>;
+  analysisBySlot: Record<string, CameraMatchAnalysisResult>;
+  calibrationBySlot: Record<string, CalibrationChartDetection>;
+  slotErrors: Record<string, string>;
+  heroSlot: string;
+  analyses: CameraMatchAnalysis[];
+  analysisOverrideBySlot: Record<string, string>;
+  selectedSlots: string[];
+}): { items: MatchLabGuidanceItem[]; action: MatchLabGuidanceAction | null } {
+  const items: MatchLabGuidanceItem[] = [];
+
+  for (const slot of SLOT_ORDER) {
+    const clipPath = clipsBySlot[slot];
+    if (!clipPath) continue;
+    if (isProxyOnlyRawClip(clipPath) && !analysisOverrideBySlot[slot]) {
+      items.push({
+        id: `proxy-${slot}`,
+        priority: 1,
+        tone: "critical",
+        slot,
+        label: `Attach MP4/MOV proxy for Camera ${slot}`,
+        reason: `${getProxyOnlyFormatBadge(clipPath)} is accepted in Match Lab, but this source analyzes through an operator-selected proxy.`,
+      });
+    }
+  }
+
+  for (const slot of SLOT_ORDER) {
+    const slotError = slotErrors[slot] || "";
+    if (!slotError) continue;
+    if (slotError.toLowerCase().includes("chart not detected")) {
+      items.push({
+        id: `chart-missing-${slot}`,
+        priority: 1,
+        tone: "critical",
+        slot,
+        label: `Reframe chart larger for Camera ${slot}`,
+        reason: "The chart was not detected, so the patch geometry is not reliable enough for calibration.",
+      });
+      items.push({
+        id: `chart-angle-${slot}`,
+        priority: 1,
+        tone: "critical",
+        slot,
+        label: `Keep the chart flatter to Camera ${slot}`,
+        reason: "Reducing angle and perspective distortion gives the detector a cleaner rectangle and more stable patch mapping.",
+      });
+      items.push({
+        id: `chart-retry-${slot}`,
+        priority: 2,
+        tone: "warning",
+        slot,
+        label: `Retry calibration before trusting LUT on Camera ${slot}`,
+        reason: "Without a detected chart, Match Lab can still show analysis, but calibration and LUT output should not be trusted yet.",
+      });
+    }
+  }
+
+  for (const slot of SLOT_ORDER) {
+    const calibration = calibrationBySlot[slot];
+    if (!calibration?.chart_detected) continue;
+    for (const warning of calibration.warnings) {
+      const compact = compactWarningLabel(warning);
+      const mapped = mapCalibrationWarningToGuidance(slot, compact, warning);
+      if (mapped) {
+        items.push(mapped);
+      }
+    }
+    if (calibration.transform_quality_flag) {
+      items.push({
+        id: `transform-${slot}`,
+        priority: 2,
+        tone: "warning",
+        slot,
+        label: `Do not trust Camera ${slot} LUT yet`,
+        reason: calibration.transform_quality_flag,
+      });
+    }
+    if (calibration.calibration_quality_level === "Poor") {
+      items.push({
+        id: `quality-poor-${slot}`,
+        priority: 2,
+        tone: "critical",
+        slot,
+        label: `Re-capture the chart for Camera ${slot}`,
+        reason: `Calibration quality is ${calibration.calibration_quality_level.toLowerCase()}, so the current transform is weak for on-set use.`,
+      });
+    }
+  }
+
+  for (const analysis of analyses) {
+    if (analysis.slot === heroSlot) continue;
+    const delta = analysis.delta_vs_hero;
+    if (!delta) continue;
+    if (analysis.suggestions?.exposure && analysis.suggestions.exposure !== "Hold") {
+      items.push({
+        id: `exposure-${analysis.slot}`,
+        priority: 3,
+        tone: "info",
+        slot: analysis.slot,
+        label: `${analysis.suggestions.exposure} on Camera ${analysis.slot}`,
+        reason: `Camera ${analysis.slot} luma is offset from Hero ${heroSlot}, so the measured stop delta should be corrected first.`,
+      });
+    } else if (Math.abs(delta.luma_median) <= 0.015) {
+      items.push({
+        id: `close-${analysis.slot}`,
+        priority: 3,
+        tone: "good",
+        slot: analysis.slot,
+        label: `Camera ${analysis.slot} is already close to Hero ${heroSlot}`,
+        reason: "Measured luma and highlight deltas are already tight, so only small trims should be needed.",
+      });
+    }
+    if (analysis.suggestions?.white_balance && !analysis.suggestions.white_balance.includes("hold")) {
+      items.push({
+        id: `wb-${analysis.slot}`,
+        priority: 3,
+        tone: "info",
+        slot: analysis.slot,
+        label: `Match Camera ${analysis.slot} toward Hero ${heroSlot}`,
+        reason: `Measured RGB deltas suggest ${analysis.suggestions.white_balance} before trusting the visual monitor match.`,
+      });
+    }
+  }
+
+  for (const slot of SLOT_ORDER) {
+    const analysis = analysisBySlot[slot];
+    const calibration = calibrationBySlot[slot];
+    if (!analysis) continue;
+    if (analysis.original_format_kind === "NIKON_NRAW" && calibration?.lut_path) {
+      items.push({
+        id: `monitor-lut-${slot}`,
+        priority: 4,
+        tone: "info",
+        slot,
+        label: `Use the exported LUT on an external monitor for Camera ${slot}`,
+        reason: "This Nikon path is easier to judge with a technical monitor transform than with a plain log preview.",
+      });
+    }
+  }
+
+  const deduped = dedupeGuidanceItems(items).sort((a, b) => a.priority - b.priority);
+  const action = pickGuidanceAction(deduped, {
+    clipsBySlot,
+    selectedSlots,
+    analysesCount: analyses.length,
+  });
+  return { items: deduped, action };
+}
+
+function mapCalibrationWarningToGuidance(slot: string, compact: string, fullWarning: string): MatchLabGuidanceItem | null {
+  if (compact === "Chart too small") {
+    return {
+      id: `warn-small-${slot}`,
+      priority: 1,
+      tone: "critical",
+      slot,
+      label: `Move chart closer for Camera ${slot}`,
+      reason: fullWarning,
+    };
+  }
+  if (compact === "Too much skew") {
+    return {
+      id: `warn-skew-${slot}`,
+      priority: 1,
+      tone: "critical",
+      slot,
+      label: `Reduce chart angle for Camera ${slot}`,
+      reason: fullWarning,
+    };
+  }
+  if (compact === "Highlights clipped") {
+    return {
+      id: `warn-clip-${slot}`,
+      priority: 1,
+      tone: "critical",
+      slot,
+      label: `Lower chart exposure on Camera ${slot}`,
+      reason: fullWarning,
+    };
+  }
+  if (compact === "Shadows crushed") {
+    return {
+      id: `warn-crush-${slot}`,
+      priority: 1,
+      tone: "critical",
+      slot,
+      label: `Lift shadow exposure on Camera ${slot}`,
+      reason: fullWarning,
+    };
+  }
+  if (compact === "Uneven light") {
+    return {
+      id: `warn-light-${slot}`,
+      priority: 1,
+      tone: "warning",
+      slot,
+      label: `Even out chart lighting for Camera ${slot}`,
+      reason: fullWarning,
+    };
+  }
+  if (compact === "Weak improvement") {
+    return {
+      id: `warn-weak-${slot}`,
+      priority: 2,
+      tone: "warning",
+      slot,
+      label: `Use Match Lab analysis only for Camera ${slot}`,
+      reason: fullWarning,
+    };
+  }
+  if (compact === "Match worse") {
+    return {
+      id: `warn-worse-${slot}`,
+      priority: 2,
+      tone: "critical",
+      slot,
+      label: `Re-capture chart before using Camera ${slot} LUT`,
+      reason: fullWarning,
+    };
+  }
+  return null;
+}
+
+function dedupeGuidanceItems(items: MatchLabGuidanceItem[]) {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    if (seen.has(item.id)) return false;
+    seen.add(item.id);
+    return true;
+  });
+}
+
+function pickGuidanceAction(
+  items: MatchLabGuidanceItem[],
+  context: { clipsBySlot: Record<string, string>; selectedSlots: string[]; analysesCount: number },
+): MatchLabGuidanceAction | null {
+  const proxyItem = items.find((item) => item.id.startsWith("proxy-") && item.slot);
+  if (proxyItem?.slot) {
+    return { kind: "proxy", label: "Apply Proxy and Re-run", slot: proxyItem.slot };
+  }
+  const recalibrateItem = items.find((item) => (
+    item.slot
+    && (
+      item.id.startsWith("chart-")
+      || item.id.startsWith("warn-small-")
+      || item.id.startsWith("warn-skew-")
+      || item.id.startsWith("warn-clip-")
+      || item.id.startsWith("warn-crush-")
+      || item.id.startsWith("warn-light-")
+      || item.id.startsWith("warn-worse-")
+      || item.id.startsWith("quality-poor-")
+    )
+  ));
+  if (recalibrateItem?.slot) {
+    return { kind: "recalibrate", label: "Retry Calibration", slot: recalibrateItem.slot };
+  }
+  if (context.analysesCount > 0) {
+    return { kind: "export", label: "Export Current Results" };
+  }
+  if (context.selectedSlots.length > 0) {
+    return { kind: "analyze", label: "Analyze Current Clips" };
+  }
+  return null;
 }
 
 function computeDelta(current: CameraMatchMetrics, hero: CameraMatchMetrics): CameraMatchDelta {
@@ -1415,6 +1814,24 @@ function isBrawClip(path: string) {
   return path.toLowerCase().endsWith(".braw");
 }
 
+function isNrawClip(path: string) {
+  return path.toLowerCase().endsWith(".nev");
+}
+
+function isR3dClip(path: string) {
+  return path.toLowerCase().endsWith(".r3d");
+}
+
+function isProxyOnlyRawClip(path: string) {
+  return isNrawClip(path) || isR3dClip(path);
+}
+
+function getProxyOnlyFormatBadge(path: string) {
+  if (isNrawClip(path)) return "N-RAW";
+  if (isR3dClip(path)) return "R3D";
+  return "RAW";
+}
+
 function formatRunTimestamp(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
@@ -1511,6 +1928,13 @@ function qualityLevelFillStyle(level: string): React.CSSProperties {
   return { background: "linear-gradient(90deg, rgba(220,38,38,0.92), rgba(248,113,113,0.88))" };
 }
 
+function guidanceToneDotColor(tone: MatchLabGuidanceItem["tone"]): React.CSSProperties {
+  if (tone === "critical") return { background: "var(--status-orange)" };
+  if (tone === "warning") return { background: "var(--text-muted)" };
+  if (tone === "good") return { background: "var(--status-green)" };
+  return { background: "var(--color-accent)" };
+}
+
 function roundTo(value: number, step: number) {
   return Math.round(value / step) * step;
 }
@@ -1564,9 +1988,17 @@ const cameraCardStyle: React.CSSProperties = { padding: 16, borderRadius: 18, bo
 const slotHeaderRowStyle: React.CSSProperties = { display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", marginBottom: 12 };
 const slotBadgeStyle: React.CSSProperties = { display: "inline-flex", alignItems: "center", padding: "6px 10px", borderRadius: 999, fontSize: "0.72rem", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.12em" };
 const heroChipStyle: React.CSSProperties = { display: "inline-flex", alignItems: "center", padding: "5px 8px", borderRadius: 999, background: "rgba(255,255,255,0.08)", color: "var(--text-primary)", fontSize: "0.72rem", fontWeight: 700 };
-const cameraActionsStyle: React.CSSProperties = { display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12, minWidth: 0 };
+const cameraActionsWrapStyle: React.CSSProperties = { display: "grid", gap: 8, marginBottom: 12, minWidth: 0 };
+const cameraActionsTopRowStyle: React.CSSProperties = { display: "flex", gap: 10, alignItems: "center", flexWrap: "nowrap", minHeight: 34, minWidth: 0 };
+const cameraActionsSupportRowStyle: React.CSSProperties = { display: "flex", alignItems: "center", minHeight: 34, minWidth: 0 };
+const actionPlaceholderStyle: React.CSSProperties = { display: "inline-flex", minWidth: 92, height: 34, visibility: "hidden", flexShrink: 0 };
+const supportRowPlaceholderStyle: React.CSSProperties = { display: "block", width: 1, height: 34, visibility: "hidden" };
 const fileMetaStyle: React.CSSProperties = { fontSize: "0.94rem", fontWeight: 700, color: "var(--text-primary)", marginBottom: 6, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" };
 const helperMetaStyle: React.CSSProperties = { color: "var(--text-muted)", lineHeight: 1.45, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" };
+const sourceMetaRowStyle: React.CSSProperties = { marginTop: 8, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" };
+const sourceBadgeStyle: React.CSSProperties = { display: "inline-flex", alignItems: "center", padding: "4px 8px", borderRadius: 999, background: "rgba(255,255,255,0.08)", color: "var(--text-primary)", fontSize: "0.68rem", fontWeight: 800, letterSpacing: "0.08em" };
+const sourceMetaTextStyle: React.CSSProperties = { color: "var(--text-secondary)", fontSize: "0.74rem", fontWeight: 700 };
+const sourceMetaInlineStyle: React.CSSProperties = { marginTop: 8, color: "var(--text-secondary)", fontSize: "0.74rem", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" };
 const statusMetaStyle: React.CSSProperties = { marginTop: 10, fontSize: "0.78rem", color: "#93c5fd" };
 const analysisCardStyle: React.CSSProperties = { padding: 14, borderRadius: 18, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(9,10,13,0.78)", minHeight: 420, display: "flex", flexDirection: "column", minWidth: 0 };
 const frameWrapStyle: React.CSSProperties = { position: "relative", borderRadius: 14, overflow: "hidden", border: "1px solid rgba(255,255,255,0.08)", background: "#080a0c", aspectRatio: "16 / 9", marginBottom: 12 };
@@ -1616,5 +2048,17 @@ const rawMetricsLineStyle: React.CSSProperties = { display: "flex", alignItems: 
 const rawMetricsLabelStyle: React.CSSProperties = { color: "var(--text-muted)", fontWeight: 700, flexShrink: 0, fontSize: "0.6rem" };
 const rawMetricsValueStyle: React.CSSProperties = { color: "var(--text-primary)", fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", fontSize: "0.64rem" };
 const placeholderStyle: React.CSSProperties = { minHeight: 320, display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center", gap: 12, color: "var(--text-muted)", textAlign: "center", padding: 24 };
+const guidanceSectionStyle: React.CSSProperties = { marginTop: 16, display: "grid", gap: 10, padding: 14, borderRadius: 18, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.022)" };
+const guidanceHeaderStyle: React.CSSProperties = { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 };
+const guidanceTitleStyle: React.CSSProperties = { fontSize: "0.76rem", textTransform: "uppercase", letterSpacing: "0.12em", fontWeight: 800, color: "var(--text-muted)" };
+const guidanceListStyle: React.CSSProperties = { display: "grid", gap: 8 };
+const guidanceRowStyle: React.CSSProperties = { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "10px 12px", borderRadius: 12, border: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.02)" };
+const guidanceRowMainStyle: React.CSSProperties = { minWidth: 0, flex: 1, display: "grid", gap: 4 };
+const guidanceRowTopStyle: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8, minWidth: 0 };
+const guidanceToneDotStyle: React.CSSProperties = { width: 7, height: 7, borderRadius: 999, flexShrink: 0 };
+const guidanceLabelStyle: React.CSSProperties = { color: "var(--text-primary)", fontSize: "0.84rem", fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" };
+const guidanceHelpStyle: React.CSSProperties = { display: "inline-flex", alignItems: "center", color: "var(--text-muted)", cursor: "help", flexShrink: 0 };
+const guidanceMoreStyle: React.CSSProperties = { color: "var(--text-muted)", fontSize: "0.76rem", fontWeight: 700, padding: "2px 4px" };
+const guidanceActionRowStyle: React.CSSProperties = { display: "flex", justifyContent: "flex-end", marginTop: 2 };
 const exportMenuStyle: React.CSSProperties = { position: "absolute", top: "calc(100% + 8px)", right: 0, minWidth: 244, padding: 8, borderRadius: 12, background: "#0c0d0f", border: "1px solid rgba(255,255,255,0.08)", boxShadow: "0 18px 40px rgba(0,0,0,0.4)", zIndex: 30, display: "grid", gap: 6 };
 const exportItemStyle: React.CSSProperties = { padding: "10px 12px", borderRadius: 10, border: "1px solid rgba(255,255,255,0.05)", background: "rgba(255,255,255,0.03)", color: "var(--text-primary)", cursor: "pointer", textAlign: "left", whiteSpace: "nowrap" };

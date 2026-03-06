@@ -21,12 +21,14 @@ import {
   ProductionLookSetup,
   ProductionProject,
   ProductionQuickSetupRow,
+  ProductionUsageGuidance,
 } from "../../types";
 import { exportProductionCallSheetImage, exportProductionCallSheetPdf } from "../../utils/ProductionExport";
 import { invokeGuarded } from "../../utils/tauri";
 import {
   buildDefaultCameraConfig,
   buildDefaultLookSetup,
+  buildLookSetupGuidance,
   buildLookOutputs,
   findCameraProfile,
   getMissingCameraFields,
@@ -50,9 +52,10 @@ import { DIFFUSION_OPTIONS, LENS_CHARACTER_OPTIONS } from "./cameraProfiles";
 interface LookSetupAppProps {
   project: ProductionProject;
   onBack?: () => void;
+  onContinueToMatchLab?: () => void;
 }
 
-export function LookSetupApp({ project }: LookSetupAppProps) {
+export function LookSetupApp({ project, onContinueToMatchLab }: LookSetupAppProps) {
   const [lookPresets, setLookPresets] = useState<LookPreset[]>([]);
   const [cameraConfigs, setCameraConfigs] = useState<ProductionCameraConfig[]>([]);
   const [setup, setSetup] = useState<ProductionLookSetup>(buildDefaultLookSetup(project.id));
@@ -91,6 +94,24 @@ export function LookSetupApp({ project }: LookSetupAppProps) {
     }
     return map;
   }, [outputs]);
+  const usageGuidance = useMemo(
+    () => buildLookSetupGuidance(setup, cameraConfigs, outputs),
+    [cameraConfigs, outputs, setup],
+  );
+  const groupedUsageGuidance = useMemo(() => {
+    const order: ProductionUsageGuidance["group"][] = [
+      "Exposure order",
+      "Camera pairing",
+      "Monitoring",
+      "Per-camera targets",
+    ];
+    return order
+      .map((group) => ({
+        group,
+        items: usageGuidance.filter((item) => item.group === group),
+      }))
+      .filter((entry) => entry.items.length > 0);
+  }, [usageGuidance]);
 
   const saveAll = async (nextConfigs: ProductionCameraConfig[], nextSetup: ProductionLookSetup) => {
     setSaving(true);
@@ -287,6 +308,7 @@ export function LookSetupApp({ project }: LookSetupAppProps) {
             <div key={config.slot} style={cameraColumnStyle}>
               <article style={{
                 ...panelStyle,
+                ...cameraSetupPanelStyle,
                 border: complete ? "1px solid rgba(34,197,94,0.28)" : "1px solid rgba(245,158,11,0.24)",
                 boxShadow: complete ? "0 0 0 1px rgba(34,197,94,0.08) inset" : "none",
               }}>
@@ -395,6 +417,39 @@ export function LookSetupApp({ project }: LookSetupAppProps) {
           );
         })}
       </div>
+
+      {outputs ? (
+        <section style={guidanceSectionStyle}>
+          <div style={guidanceHeaderStyle}>
+            <div>
+              <div style={sectionEyebrowStyle}>How to use this setup</div>
+              <h3 style={{ margin: "4px 0 0" }}>Operate from the generated plan</h3>
+            </div>
+          </div>
+          <div style={guidanceGridStyle}>
+            {groupedUsageGuidance.map((group) => (
+              <div key={group.group} style={guidanceGroupStyle}>
+                <div style={guidanceGroupTitleStyle}>{group.group}</div>
+                <div style={guidanceGroupRowsStyle}>
+                  {group.items.map((item) => (
+                    <GuidanceRow key={item.id} item={item} />
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+          <div style={guidanceActionRowStyle}>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={onContinueToMatchLab}
+              disabled={!onContinueToMatchLab}
+            >
+              Continue to Match Lab
+            </button>
+          </div>
+        </section>
+      ) : null}
     </div>
   );
 }
@@ -475,6 +530,28 @@ function DetailSection({ section }: { section: ProductionDetailSection }) {
   );
 }
 
+function GuidanceRow({ item }: { item: ProductionUsageGuidance }) {
+  return (
+    <div style={guidanceRowStyle}>
+      <div style={guidanceRowMainStyle}>
+        <div style={guidanceLabelStyle}>{item.label}</div>
+        <div style={guidanceSupportStyle}>{item.support}</div>
+        <div style={guidanceCameraWrapStyle}>
+          {item.camera_labels.map((cameraLabel, index) => (
+            <div key={`${item.id}:${cameraLabel}`} style={guidanceCameraPillStyle}>
+              <span style={{ ...slotChipStyle, ...slotChipColor(item.slots[index] ?? item.slots[0] ?? "C"), minWidth: 24, height: 20, padding: "0 6px" }}>
+                {item.slots[index] ?? item.slots[0] ?? "—"}
+              </span>
+              <span style={guidanceCameraPillTextStyle}>{cameraLabel.replace(/^[A-C]\s·\s/, "")}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+      <span title={item.reason} style={helpIconStyle}><HelpCircle size={13} /></span>
+    </div>
+  );
+}
+
 const iconMap: Record<string, LucideIcon> = {
   capture: Camera,
   iso: Gauge,
@@ -491,14 +568,15 @@ const subtleStyle: React.CSSProperties = { margin: 0, color: "var(--text-muted)"
 const subtleHintStyle: React.CSSProperties = { margin: 0, color: "var(--text-muted)", fontSize: "0.82rem" };
 const headerActionsStyle: React.CSSProperties = { display: "flex", gap: 10, alignItems: "center", flexWrap: "nowrap", justifyContent: "flex-end" };
 const panelStyle: React.CSSProperties = { padding: 16, borderRadius: 18, background: "rgba(255,255,255,0.025)" };
-const outputPanelStyle: React.CSSProperties = { padding: 16, borderRadius: 18, background: "rgba(255,255,255,0.018)", minHeight: 0 };
+const cameraSetupPanelStyle: React.CSSProperties = { minHeight: 360, display: "flex", flexDirection: "column" };
+const outputPanelStyle: React.CSSProperties = { padding: 16, borderRadius: 18, background: "rgba(255,255,255,0.018)", minHeight: 0, display: "flex", flexDirection: "column" };
 const panelTitleStyle: React.CSSProperties = { marginBottom: 0, fontSize: "0.74rem", textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--text-muted)", fontWeight: 800 };
 const panelTitleRowStyle: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8 };
 const cameraHeaderStyle: React.CSSProperties = { display: "flex", justifyContent: "space-between", gap: 10, alignItems: "flex-start", marginBottom: 10 };
 const cameraStatusLineStyle: React.CSSProperties = { minHeight: 24, display: "flex", alignItems: "center" };
 const readyBadgeStyle: React.CSSProperties = { display: "inline-flex", alignItems: "center", gap: 6, padding: "5px 9px", borderRadius: 999, background: "rgba(34,197,94,0.12)", color: "#86efac", fontSize: "0.74rem", fontWeight: 700 };
 const missingLineStyle: React.CSSProperties = { color: "var(--text-secondary)", fontSize: "0.8rem", fontWeight: 600 };
-const cameraFootnoteStyle: React.CSSProperties = { marginTop: 10, color: "var(--text-muted)", fontSize: "0.78rem", lineHeight: 1.45 };
+const cameraFootnoteStyle: React.CSSProperties = { marginTop: "auto", paddingTop: 10, color: "var(--text-muted)", fontSize: "0.78rem", lineHeight: 1.45 };
 const inputGroupWrapStyle: React.CSSProperties = { display: "grid", gap: 10 };
 const inputGroupStyle: React.CSSProperties = { display: "grid", gap: 8, padding: 12, borderRadius: 14, border: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.018)" };
 const inputGroupTitleStyle: React.CSSProperties = { fontSize: "0.7rem", textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--text-muted)", fontWeight: 800 };
@@ -517,8 +595,22 @@ const segmentedActiveButtonStyle: React.CSSProperties = { minHeight: 34, borderR
 const notesDrawerStyle: React.CSSProperties = { minWidth: 0, alignSelf: "stretch", width: "100%", padding: "0 10px", minHeight: 34, borderRadius: 8, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.02)", display: "flex", alignItems: "center" };
 const notesSummaryStyle: React.CSSProperties = { cursor: "pointer", listStyle: "none", fontSize: "0.78rem", fontWeight: 700, color: "var(--text-primary)", lineHeight: "1" };
 const notesAreaStyle: React.CSSProperties = { marginTop: 10, width: "100%", minHeight: 86, resize: "vertical", padding: "10px 12px", borderRadius: 10, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(10,10,12,0.6)", color: "var(--text-primary)" };
-const columnLayoutStyle: React.CSSProperties = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 16, alignItems: "start" };
-const cameraColumnStyle: React.CSSProperties = { display: "grid", gap: 12, alignContent: "start", gridTemplateRows: "auto 1fr", minWidth: 0 };
+const columnLayoutStyle: React.CSSProperties = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 16, alignItems: "stretch" };
+const guidanceSectionStyle: React.CSSProperties = { marginTop: 18, display: "grid", gap: 12, padding: 16, borderRadius: 18, background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.08)" };
+const guidanceHeaderStyle: React.CSSProperties = { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 };
+const guidanceGridStyle: React.CSSProperties = { display: "grid", gap: 12 };
+const guidanceGroupStyle: React.CSSProperties = { display: "grid", gap: 8, padding: 12, borderRadius: 14, border: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.018)" };
+const guidanceGroupTitleStyle: React.CSSProperties = { fontSize: "0.72rem", textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--text-muted)", fontWeight: 800 };
+const guidanceGroupRowsStyle: React.CSSProperties = { display: "grid", gap: 8 };
+const guidanceRowStyle: React.CSSProperties = { display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, padding: "12px 14px", borderRadius: 12, border: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.018)" };
+const guidanceRowMainStyle: React.CSSProperties = { minWidth: 0, display: "grid", gap: 6, flex: 1 };
+const guidanceLabelStyle: React.CSSProperties = { color: "var(--text-primary)", fontSize: "0.88rem", fontWeight: 700, lineHeight: 1.35 };
+const guidanceSupportStyle: React.CSSProperties = { color: "var(--text-secondary)", fontSize: "0.8rem", lineHeight: 1.4 };
+const guidanceCameraWrapStyle: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" };
+const guidanceCameraPillStyle: React.CSSProperties = { display: "inline-flex", alignItems: "center", gap: 8, minWidth: 0, padding: "6px 10px 6px 6px", borderRadius: 999, border: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.03)" };
+const guidanceCameraPillTextStyle: React.CSSProperties = { color: "var(--text-secondary)", fontSize: "0.76rem", fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" };
+const guidanceActionRowStyle: React.CSSProperties = { display: "flex", justifyContent: "flex-end" };
+const cameraColumnStyle: React.CSSProperties = { display: "grid", gap: 12, alignContent: "start", gridTemplateRows: "auto 1fr", minWidth: 0, height: "100%" };
 const sectionEyebrowStyle: React.CSSProperties = { fontSize: "0.7rem", textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--text-muted)", fontWeight: 800, marginBottom: 0 };
 const sectionEyebrowRowStyle: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8 };
 const outputHeaderStyle: React.CSSProperties = { display: "flex", justifyContent: "space-between", gap: 10, alignItems: "flex-start", marginBottom: 10 };

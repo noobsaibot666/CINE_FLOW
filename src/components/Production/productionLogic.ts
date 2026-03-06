@@ -6,6 +6,7 @@ import {
   ProductionLookSetup,
   ProductionMatchPresetPayload,
   ProductionQuickSetupRow,
+  ProductionUsageGuidance,
 } from "../../types";
 import { findCameraProfile, listCameraBrands, listModelsByBrand, listModes, ModeProfile, SignalProfile } from "./cameraProfiles";
 
@@ -770,6 +771,115 @@ export function buildLookOutputs(setup: ProductionLookSetup, cameras: Production
     recommendations,
     generated_at: new Date().toISOString(),
   };
+}
+
+export function buildLookSetupGuidance(
+  setup: ProductionLookSetup,
+  cameras: ProductionCameraConfig[],
+  outputs: ProductionLookOutputs | null,
+): ProductionUsageGuidance[] {
+  const guidance: ProductionUsageGuidance[] = [];
+  const completed = cameras
+    .map((camera) => {
+      const mode = getSelectedMode(camera);
+      const rule = mode ? getSignalRule(mode) : null;
+      const recommendation = outputs?.recommendations.find((item) => item.slot === camera.slot) ?? null;
+      return { camera, mode, rule, recommendation };
+    })
+    .filter((item) => item.mode && item.recommendation?.complete);
+
+  const nikonEntries = completed.filter((item) => item.camera.brand === "Nikon");
+  const blackmagicEntries = completed.filter((item) => item.camera.brand === "Blackmagic");
+  const waveformDriven = completed.filter((item) => item.rule?.signalId && item.rule.signalId !== "REC709");
+  const formatCameraLabel = (entry: (typeof completed)[number]) => {
+    const brand = entry.camera.brand || "Camera";
+    const model = entry.camera.model || entry.camera.slot;
+    const modeLabel = entry.mode?.label || "Mode —";
+    return `${entry.camera.slot} · ${brand} ${model} · ${modeLabel}`;
+  };
+
+  if (nikonEntries.length > 0 && blackmagicEntries.length > 0) {
+    guidance.push({
+      id: "nikon-highlight-protection",
+      group: "Exposure order",
+      label: "Nikon needs the most highlight protection",
+      support: nikonEntries.map((item) => formatCameraLabel(item)).join("  |  "),
+      reason: "N-Log / N-RAW keeps the pipeline flexible, but the Nikon ceiling is tighter than BRAW. Protect that ceiling first so the rest of the package stays easier to match.",
+      slots: nikonEntries.map((item) => item.camera.slot),
+      camera_labels: nikonEntries.map((item) => formatCameraLabel(item)),
+    });
+    guidance.push({
+      id: "expose-nikon-first",
+      group: "Exposure order",
+      label: "Expose Nikon first, then match Blackmagic",
+      support: `Lead with ${nikonEntries.map((item) => item.camera.slot).join("/")} before matching ${blackmagicEntries.map((item) => item.camera.slot).join("/")}.`,
+      reason: "The camera with the tighter highlight ceiling should define the upper stop limit before the more forgiving BRAW bodies are matched underneath it.",
+      slots: [...nikonEntries, ...blackmagicEntries].map((item) => item.camera.slot),
+      camera_labels: [...nikonEntries, ...blackmagicEntries].map((item) => formatCameraLabel(item)),
+    });
+  }
+
+  if (blackmagicEntries.length >= 2) {
+    guidance.push({
+      id: "blackmagic-close-match",
+      group: "Camera pairing",
+      label: "Blackmagic bodies should stay close with Film Gen 5",
+      support: blackmagicEntries.map((item) => formatCameraLabel(item)).join("  |  "),
+      reason: "Matching Blackmagic bodies on the same Film Gen 5 path usually needs less correction later, so keep them disciplined and they should arrive in Match Lab already closer.",
+      slots: blackmagicEntries.map((item) => item.camera.slot),
+      camera_labels: blackmagicEntries.map((item) => formatCameraLabel(item)),
+    });
+  }
+
+  if (waveformDriven.length > 0) {
+    guidance.push({
+      id: "waveform-over-preview",
+      group: "Monitoring",
+      label: "Use waveform targets, not preview brightness",
+      support: waveformDriven.map((item) => `${item.camera.slot} · ${item.mode?.label || "Log/Raw"}`).join("  |  "),
+      reason: "These modes are profile-led log or raw pipelines. The quick setup rows are built around IRE targets, so monitor brightness alone is less reliable than scopes.",
+      slots: waveformDriven.map((item) => item.camera.slot),
+      camera_labels: waveformDriven.map((item) => formatCameraLabel(item)),
+    });
+  }
+
+  if (nikonEntries.length > 0) {
+    guidance.push({
+      id: "external-monitor-lut",
+      group: "Monitoring",
+      label: "Use external monitor LUT for Nikon if needed",
+      support: nikonEntries.map((item) => formatCameraLabel(item)).join("  |  "),
+      reason: "Nikon bodies in this setup are better treated as technical capture devices first. If the body cannot carry the same monitoring transform internally, use the monitor to keep the operator view aligned.",
+      slots: nikonEntries.map((item) => item.camera.slot),
+      camera_labels: nikonEntries.map((item) => formatCameraLabel(item)),
+    });
+  }
+
+  for (const entry of completed) {
+    const exposureRow = entry.recommendation?.quickSetup.find((row) => row.key === "exposure");
+    if (!exposureRow?.value || exposureRow.value === "—") continue;
+    const cameraName = `${entry.camera.brand} ${entry.camera.model}`;
+    guidance.push({
+      id: `exposure-${entry.camera.slot}`,
+      group: "Per-camera targets",
+      label: `Place ${cameraName} skin using its quick exposure row`,
+      support: `${formatCameraLabel(entry)} · ${exposureRow.value}`,
+      reason: `Use the generated exposure target for ${cameraName} as the on-set anchor. ${entry.camera.brand === "Nikon" && setup.skin_priority ? "Keep faces slightly conservative when protecting highlights." : "Lock skin first, then hold the rest of the frame around that baseline."}`,
+      slots: [entry.camera.slot],
+      camera_labels: [formatCameraLabel(entry)],
+    });
+  }
+
+  return dedupeGuidance(guidance).slice(0, 6);
+}
+
+function dedupeGuidance(items: ProductionUsageGuidance[]): ProductionUsageGuidance[] {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    if (seen.has(item.id)) return false;
+    seen.add(item.id);
+    return true;
+  });
 }
 
 export function buildMatchPresetPayload(

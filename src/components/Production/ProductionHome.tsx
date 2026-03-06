@@ -43,6 +43,13 @@ export function ProductionHome({
             onClick={onOpenLookSetup}
           />
           <ModuleCard
+            icon={<BarChart3 size={22} strokeWidth={1.35} />}
+            title="Camera Match Lab"
+            description="Import short test clips, inspect extracted reference frames, and compare deterministic signal metrics side-by-side."
+            enabled={Boolean(activeProject)}
+            onClick={onOpenCameraMatchLab}
+          />
+          <ModuleCard
             icon={<ShieldCheck size={22} strokeWidth={1.35} />}
             title="On-Set Coach"
             description="Carry forward the saved look plan into fast ready checks, warning toggles, and lighting discipline."
@@ -55,13 +62,6 @@ export function ProductionHome({
             description="Choose a hero camera and save repeatable alignment presets for the rest of the camera package."
             enabled={Boolean(activeProject)}
             onClick={onOpenMatchNormalize}
-          />
-          <ModuleCard
-            icon={<BarChart3 size={22} strokeWidth={1.35} />}
-            title="Camera Match Lab"
-            description="Import short test clips, inspect extracted reference frames, and compare deterministic signal metrics side-by-side."
-            enabled={Boolean(activeProject)}
-            onClick={onOpenCameraMatchLab}
           />
         </div>
       </div>

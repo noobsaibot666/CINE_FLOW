@@ -1858,6 +1858,7 @@ function AppContent() {
                 <LookSetup
                   project={activeProductionProject}
                   onBack={() => setActiveProductionApp(null)}
+                  onContinueToMatchLab={() => setActiveProductionApp("camera-match-lab")}
                 />
               ) : activeProductionApp === "onset-coach" && activeProductionProject ? (
                 <OnSetCoach

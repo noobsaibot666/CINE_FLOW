@@ -14,8 +14,8 @@ use crate::production::{self, CameraProfile, LookPreset};
 use crate::production_match_lab::{
     aggregate_frames, analysis_timeout, analyze_frame, build_cache_dir, build_frame_timestamps,
     build_proxy_decode_path, build_proxy_paths, choose_source_path_for_analysis,
-    clip_name_from_path, create_braw_proxy_via_file, create_braw_proxy_via_stdout,
-    hash_source_signature, is_braw_path, probe_braw_decoder, BrawDecoderCaps,
+    classify_source_format, clip_name_from_path, create_braw_proxy_via_file, create_braw_proxy_via_stdout,
+    hash_source_signature, is_braw_path, is_proxy_only_raw_path, probe_braw_decoder, BrawDecoderCaps,
     validate_proxy_output_path,
     CameraMatchAnalysisResult, MatchLabAnalysisTracker, MatchLabProxyAttempt, MatchLabProxyTracker,
     ProductionMatchLabProxyResult, ProductionMatchLabRun, ProductionMatchLabRunResult,
@@ -5077,7 +5077,7 @@ async fn camera_match_analyze_clip_internal(
         let mut proxy_info: Option<String> = None;
         let source_path = if let Some(override_path) = analysis_source_override_path {
             validate_analysis_override_path(override_path)?;
-            proxy_info = Some("Override source: operator-selected MP4".to_string());
+            proxy_info = Some("Override source: operator-selected proxy".to_string());
             override_path.to_string()
         } else if is_braw_path(clip_path) {
             let proxy_result =
@@ -5182,6 +5182,12 @@ async fn camera_match_analyze_clip_internal(
 
         Ok(CameraMatchAnalysisResult {
             source_path,
+            source_kind: Some(if analysis_source_override_path.is_some() || is_braw_path(clip_path) || is_proxy_only_raw_path(clip_path) {
+                "proxy".to_string()
+            } else {
+                "original".to_string()
+            }),
+            original_format_kind: Some(classify_source_format(clip_path)),
             clip_path: clip_path.to_string(),
             clip_name: clip_name.clone(),
             representative_frame_path,
@@ -5518,13 +5524,13 @@ fn validate_analysis_override_path(path: &str) -> Result<(), String> {
     if !resolved.is_file() {
         return Err("Selected MP4 proxy path is not a file.".to_string());
     }
-    let is_mp4 = resolved
+    let is_proxy_media = resolved
         .extension()
         .and_then(|value| value.to_str())
-        .map(|value| value.eq_ignore_ascii_case("mp4"))
+        .map(|value| value.eq_ignore_ascii_case("mp4") || value.eq_ignore_ascii_case("mov"))
         .unwrap_or(false);
-    if !is_mp4 {
-        return Err("Selected override must be an MP4 file.".to_string());
+    if !is_proxy_media {
+        return Err("Selected override must be an MP4 or MOV file.".to_string());
     }
     Ok(())
 }

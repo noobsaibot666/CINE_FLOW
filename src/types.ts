@@ -391,6 +391,16 @@ export interface ProductionLookOutputs {
     generated_at: string;
 }
 
+export interface ProductionUsageGuidance {
+    id: string;
+    group: "Exposure order" | "Monitoring" | "Camera pairing" | "Per-camera targets";
+    label: string;
+    support: string;
+    reason: string;
+    slots: string[];
+    camera_labels: string[];
+}
+
 export interface ProductionMatchPresetPayload {
     hero_slot: string;
     hero_summary: string;
@@ -441,6 +451,8 @@ export interface CameraMatchAggregateMetrics {
 
 export interface CameraMatchAnalysisResult {
     source_path: string;
+    source_kind?: "original" | "proxy" | string;
+    original_format_kind?: string | null;
     clip_path: string;
     clip_name: string;
     representative_frame_path: string;
