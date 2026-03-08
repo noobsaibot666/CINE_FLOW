@@ -1,5 +1,5 @@
 import React, { startTransition, useEffect, useMemo, useRef, useState } from "react";
-import { ChartColumn, ChevronDown, Download, FolderOpen, Gauge, HelpCircle, ImageIcon, Maximize2, Palette, Pipette, RefreshCw, Trash2, Waves } from "lucide-react";
+import { ChartColumn, ChevronDown, CircleHelp, Download, FolderOpen, Gauge, ImageIcon, Maximize2, Palette, Pipette, RefreshCw, Trash2, Waves } from "lucide-react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import {
   CalibrationChartDetection,
@@ -112,7 +112,6 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
   const [analyzing, setAnalyzing] = useState(false);
   const [activeSlots, setActiveSlots] = useState<string[]>([]);
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
-  const [framesOpenBySlot, setFramesOpenBySlot] = useState<Record<string, boolean>>({});
   const [runSummaries, setRunSummaries] = useState<ProductionMatchLabRunSummary[]>([]);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [hoveredRunId, setHoveredRunId] = useState<string | null>(null);
@@ -204,16 +203,22 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
 
   useEffect(() => {
     let cancelled = false;
-    const representativeFrames = SLOT_ORDER
-      .map((slot) => analysisBySlot[slot]?.representative_frame_path)
-      .filter((framePath): framePath is string => Boolean(framePath))
-      .filter((framePath) => Boolean(frameDataUrls[framePath]) && !signalPreviewByFramePath[framePath]);
+    const previewFramePaths = Array.from(new Set(
+      SLOT_ORDER.flatMap((slot) => {
+        const paths = [
+          analysisBySlot[slot]?.representative_frame_path,
+          calibrationBySlot[slot]?.corrected_preview_path,
+          calibrationBySlot[slot]?.transform_preview_path,
+        ];
+        return paths.filter((framePath): framePath is string => Boolean(framePath));
+      }),
+    )).filter((framePath) => Boolean(frameDataUrls[framePath]) && !signalPreviewByFramePath[framePath]);
 
-    if (representativeFrames.length === 0) return undefined;
+    if (previewFramePaths.length === 0) return undefined;
 
     const loadSignalPreviews = async () => {
       const nextPreviews: Record<string, SignalPreviewData> = {};
-      for (const framePath of representativeFrames) {
+      for (const framePath of previewFramePaths) {
         try {
           nextPreviews[framePath] = await buildSignalPreviewData(frameDataUrls[framePath]);
         } catch {
@@ -232,7 +237,7 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
     return () => {
       cancelled = true;
     };
-  }, [analysisBySlot, frameDataUrls, signalPreviewByFramePath]);
+  }, [analysisBySlot, calibrationBySlot, frameDataUrls, signalPreviewByFramePath]);
 
   const selectedSlots = useMemo(
     () => SLOT_ORDER.filter((slot) => Boolean(clipsBySlot[slot])),
@@ -287,7 +292,7 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
         startTransition(() => {
           setHeroSlot((run.hero_slot || "A") as CameraSlot);
           setAnalysisBySlot(nextAnalyses);
-          setClipsBySlot((prev) => ({ ...prev, ...nextClips }));
+          setClipsBySlot(nextClips);
           setAnalysisOverrideBySlot({});
           setFrameWarnings({});
           setSlotStatuses({});
@@ -322,6 +327,31 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
     }
     setHeroSlot(selectedSlots[0] ?? "A");
   }, [heroSlot, selectedSlots]);
+
+  const handleHeroSelection = (slot: CameraSlot) => {
+    if (!selectedSlots.includes(slot) || slot === heroSlot) return;
+    startTransition(() => {
+      setHeroSlot(slot);
+      setSelectedRunId(null);
+      setSavedRunMessage(`Hero ${slot} selected`);
+      setPreviewModeBySlot((prev) => {
+        const next = { ...prev };
+        SLOT_ORDER.forEach((cameraSlot) => {
+          if (!analysisBySlot[cameraSlot]) return;
+          next[cameraSlot] = cameraSlot === slot ? "original" : "corrected";
+        });
+        return next;
+      });
+      setSlotStatuses((prev) => {
+        const next = { ...prev };
+        SLOT_ORDER.forEach((cameraSlot) => {
+          if (!analysisBySlot[cameraSlot]) return;
+          next[cameraSlot] = cameraSlot === slot ? "Hero reference locked" : `Re-targeting to Hero ${slot}...`;
+        });
+        return next;
+      });
+    });
+  };
 
   const persistCurrentRun = async (message: string) => {
     const resultEntries = SLOT_ORDER
@@ -391,6 +421,9 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
           }
           continue;
         }
+        if (transformingSlots[slot]) {
+          continue;
+        }
         if (
           calibration.transform_target_slot === heroSlot &&
           calibration.transform_preview_path &&
@@ -416,7 +449,7 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
           didChange = true;
           startTransition(() => {
             setCalibrationBySlot((prev) => ({ ...prev, [slot]: transformed }));
-            setPreviewModeBySlot((prev) => ({ ...prev, [slot]: "corrected" }));
+            setPreviewModeBySlot((prev) => ({ ...prev, [slot]: prev[slot] === "corrected" ? "corrected" : "original" }));
             setSlotStatuses((prev) => ({ ...prev, [slot]: "Calibration ready" }));
           });
         } catch (error) {
@@ -452,7 +485,7 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
     return () => {
       cancelled = true;
     };
-  }, [analysisBySlot, calibrationBySlot, heroSlot, project.id]);
+  }, [analysisBySlot, calibrationBySlot, heroSlot, project.id, transformingSlots]);
 
   const matchResult = useMemo(() => {
     const analyses = SLOT_ORDER
@@ -533,12 +566,14 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
       delete next[slot];
       return next;
     });
-    if (isProxyOnlyRawClip(selected)) {
-      setSlotStatuses((prev) => ({ ...prev, [slot]: `${getProxyOnlyFormatBadge(selected)} detected · Proxy required` }));
+    if (isDecoderBackedRawClip(selected)) {
+      setSlotStatuses((prev) => ({ ...prev, [slot]: `${getProxyOnlyFormatBadge(selected)} detected · Proxy workflow ready` }));
     }
   };
 
   const clearSlot = (slot: string) => {
+    const analysis = analysisBySlot[slot];
+    const calibration = calibrationBySlot[slot];
     setSelectedRunId(null);
     setClipsBySlot((prev) => {
       const next = { ...prev };
@@ -600,6 +635,33 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
       delete next[slot];
       return next;
     });
+    setSignalPreviewModeBySlot((prev) => {
+      const next = { ...prev };
+      delete next[slot];
+      return next;
+    });
+    if (analysis || calibration) {
+      const ownedPaths = new Set<string>([
+        analysis?.representative_frame_path ?? "",
+        ...(analysis?.frame_paths ?? []),
+        calibration?.corrected_preview_path ?? "",
+        calibration?.transform_preview_path ?? "",
+      ].filter(Boolean));
+      setFrameDataUrls((prev) => {
+        const next = { ...prev };
+        ownedPaths.forEach((path) => {
+          delete next[path];
+        });
+        return next;
+      });
+      setSignalPreviewByFramePath((prev) => {
+        const next = { ...prev };
+        ownedPaths.forEach((path) => {
+          delete next[path];
+        });
+        return next;
+      });
+    }
   };
 
   const recalibrateSlot = async (slot: string, framePath?: string) => {
@@ -632,7 +694,7 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
       });
       startTransition(() => {
         setCalibrationBySlot((prev) => ({ ...prev, [slot]: result }));
-        setPreviewModeBySlot((prev) => ({ ...prev, [slot]: slot === heroSlot ? "original" : "corrected" }));
+        setPreviewModeBySlot((prev) => ({ ...prev, [slot]: prev[slot] === "corrected" && slot !== heroSlot ? "corrected" : "original" }));
         setSlotStatuses((prev) => ({ ...prev, [slot]: "Calibration ready" }));
         setSlotErrors((prev) => {
           const next = { ...prev };
@@ -664,20 +726,8 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
       for (const slot of selectedSlots) {
         const clipPath = clipsBySlot[slot];
         if (!clipPath) continue;
-        if (isProxyOnlyRawClip(clipPath) && !analysisOverrideBySlot[slot]) {
-          const formatLabel = getProxyOnlyFormatBadge(clipPath);
-          startTransition(() => {
-            setSlotStatuses((prev) => ({ ...prev, [slot]: "Proxy required" }));
-            setSlotErrors((prev) => ({ ...prev, [slot]: "Proxy required for analysis" }));
-            setSlotErrorDetails((prev) => ({
-              ...prev,
-              [slot]: `${formatLabel} source selected. This format is accepted in Match Lab, but analysis runs through an operator-selected MP4 or MOV proxy.`,
-            }));
-          });
-          continue;
-        }
         try {
-          if (isBrawClip(clipPath)) {
+          if (isDecoderBackedRawClip(clipPath)) {
             startTransition(() => {
               setSlotStatuses((prev) => ({ ...prev, [slot]: "Preparing proxy..." }));
             });
@@ -952,72 +1002,35 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
             <div className="production-matchlab-header-utility" style={headerUtilityRowStyle}>
               <div style={headerMetaClusterStyle}>
                 <div style={headerInfoBlockStyle}>
-                  <div style={headerProjectNameStyle}>Project {project.name}</div>
+                  <div style={headerProjectNameStyle}>Camera set {project.name}</div>
                 </div>
               <div className="production-matchlab-header-capsule" style={headerCapsuleStyle}>
                   <div style={headerControlGroupStyle}>
                     <span style={headerControlLabelStyle}>Hero</span>
                     <div style={heroInlineStyle}>
-                      <span style={{ ...slotBadgeStyle, ...slotBadgeColor("A"), minWidth: 32, justifyContent: "center" }}>A</span>
+                      {SLOT_ORDER.map((slot) => {
+                        const available = selectedSlots.includes(slot);
+                        const selected = heroSlot === slot;
+                        return (
+                          <button
+                            key={`hero-${slot}`}
+                            type="button"
+                            style={{
+                              ...heroSelectButtonStyle,
+                              ...(selected ? heroSelectButtonActiveStyle : null),
+                              opacity: available ? 1 : 0.35,
+                              cursor: available ? "pointer" : "not-allowed",
+                            }}
+                            onClick={() => handleHeroSelection(slot)}
+                            disabled={!available}
+                            aria-pressed={selected}
+                            title={available ? `Use Camera ${slot} as Hero` : `Import Camera ${slot} to use it as Hero`}
+                          >
+                            {slot}
+                          </button>
+                        );
+                      })}
                     </div>
-                  </div>
-                  <div style={capsuleDividerStyle} />
-                  <div style={{ position: "relative", minWidth: 0 }}>
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-sm production-matchlab-run-chip"
-                      style={runChipStyle}
-                      onClick={() => setRunsMenuOpen((prev) => !prev)}
-                    >
-                      <span style={runChipLabelStyle}>Run:</span>
-                      <span style={runChipValueStyle}>{selectedRunSummary ? formatRunTimestamp(selectedRunSummary.created_at) : "No saved runs"}</span>
-                      <ChevronDown size={14} />
-                    </button>
-                    {runsMenuOpen && (
-                      <div className="production-matchlab-runs-menu" style={runsPopoverStyle}>
-                        {runSummaries.length === 0 ? (
-                          <div style={runsEmptyStyle}>No saved runs</div>
-                        ) : (
-                          runSummaries.map((run) => (
-                            <div
-                              key={run.run_id}
-                              style={{
-                                ...runItemStyle,
-                                ...(selectedRunId === run.run_id ? runItemActiveStyle : null),
-                              }}
-                              onMouseEnter={() => setHoveredRunId(run.run_id)}
-                              onMouseLeave={() => setHoveredRunId((current) => (current === run.run_id ? null : current))}
-                            >
-                              <button
-                                type="button"
-                                style={runSelectButtonStyle}
-                                onClick={() => {
-                                  setSelectedRunId(run.run_id);
-                                  setRunsMenuOpen(false);
-                                }}
-                              >
-                                <div style={runItemTitleStyle}>{formatRunTimestamp(run.created_at)}</div>
-                                <div style={runItemMetaStyle}>Hero {run.hero_slot}</div>
-                              </button>
-                              <button
-                                type="button"
-                                aria-label={`Delete run ${formatRunTimestamp(run.created_at)}`}
-                                style={{
-                                  ...runDeleteButtonStyle,
-                                  opacity: hoveredRunId === run.run_id ? 1 : 0.18,
-                                }}
-                                onClick={() => {
-                                  setPendingDeleteRunId(run.run_id);
-                                  setRunsMenuOpen(false);
-                                }}
-                              >
-                                <Trash2 size={14} />
-                              </button>
-                            </div>
-                          ))
-                        )}
-                      </div>
-                    )}
                   </div>
                 </div>
               </div>
@@ -1030,6 +1043,65 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                 >
                   <RefreshCw size={14} /> {analyzing ? "Analyzing..." : "Analyze"}
                 </button>
+                <div style={{ position: "relative", minWidth: 0 }}>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm production-matchlab-run-chip"
+                    style={runChipStyle}
+                    onClick={() => setRunsMenuOpen((prev) => !prev)}
+                  >
+                    <span style={runChipLabelStyle}>Saved runs</span>
+                    <span style={runChipValueStyle}>
+                      {selectedRunSummary ? `Hero ${selectedRunSummary.hero_slot}` : runSummaries.length > 0 ? `${runSummaries.length} saved` : "None"}
+                    </span>
+                    <ChevronDown size={14} />
+                  </button>
+                  {runsMenuOpen && (
+                    <div className="production-matchlab-runs-menu" style={runsPopoverStyle}>
+                      {runSummaries.length === 0 ? (
+                        <div style={runsEmptyStyle}>No saved runs</div>
+                      ) : (
+                        runSummaries.map((run) => (
+                          <div
+                            key={run.run_id}
+                            style={{
+                              ...runItemStyle,
+                              ...(selectedRunId === run.run_id ? runItemActiveStyle : null),
+                            }}
+                            onMouseEnter={() => setHoveredRunId(run.run_id)}
+                            onMouseLeave={() => setHoveredRunId((current) => (current === run.run_id ? null : current))}
+                          >
+                            <button
+                              type="button"
+                              style={runSelectButtonStyle}
+                              onClick={() => {
+                                setSelectedRunId(run.run_id);
+                                setRunsMenuOpen(false);
+                              }}
+                            >
+                              <div style={runItemTitleStyle}>Saved run</div>
+                              <div style={runItemMetaStyle}>Hero {run.hero_slot}</div>
+                            </button>
+                            <button
+                              type="button"
+                              aria-label={`Delete saved run for Hero ${run.hero_slot}`}
+                              style={{
+                                ...runDeleteButtonStyle,
+                                opacity: hoveredRunId === run.run_id ? 1 : 0.18,
+                              }}
+                              onClick={() => {
+                                setPendingDeleteRunId(run.run_id);
+                                setRunsMenuOpen(false);
+                              }}
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  )}
+                </div>
                 <div style={{ position: "relative" }}>
                   <button
                     type="button"
@@ -1071,9 +1143,14 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
               const correctionDisplay = calibration ? buildCalibrationDisplay(calibration, heroCalibration, slot === heroSlot) : null;
               const previewMode = previewModeBySlot[slot] ?? "original";
               const signalPreviewMode = signalPreviewModeBySlot[slot] ?? "image";
+              const correctedPreviewPath = calibration?.corrected_preview_path ?? "";
               const correctedPreviewUrl = calibration?.corrected_preview_path ? frameDataUrls[calibration.corrected_preview_path] : "";
               const supportsCorrectedPreview = slot !== heroSlot && Boolean(calibration?.chart_detected && correctedPreviewUrl);
-              const signalPreview = rawAnalysis ? signalPreviewByFramePath[rawAnalysis.representative_frame_path] : undefined;
+              const signalPreviewPath = previewMode === "corrected" && supportsCorrectedPreview && correctedPreviewPath
+                ? correctedPreviewPath
+                : rawAnalysis?.representative_frame_path ?? "";
+              const signalPreview = signalPreviewPath ? signalPreviewByFramePath[signalPreviewPath] : undefined;
+              const previewToneStyle = clipFormatBadgeStyle(clipPath || "", rawAnalysis);
               const signalOnly = Boolean(rawAnalysis) && !calibration?.chart_detected;
               const decisionSummary = analysis && rawAnalysis
                 ? buildDecisionSummary({
@@ -1099,51 +1176,59 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                 <div key={slot} className="matchLabColumn" style={cameraColumnStyle}>
                   <div className="matchLabCard" style={cameraCardStyle}>
                     <div style={slotHeaderRowStyle}>
-                      <span style={{ ...slotBadgeStyle, ...slotBadgeColor(slot) }}>Camera {slot}</span>
-                      {heroSlot === slot && <span style={heroChipStyle}>Hero</span>}
-                    </div>
-                    {isProxyOnlyRawClip(clipPath || "") ? (
-                      <div style={sourceMetaRowStyle}>
-                        <span style={sourceBadgeStyle}>{getProxyOnlyFormatBadge(clipPath || "")}</span>
-                        <span style={sourceMetaTextStyle}>{analysisOverrideBySlot[slot] ? "Proxy attached" : "Proxy required"}</span>
+                      <div style={slotHeaderLeadStyle}>
+                        <span style={{ ...slotBadgeStyle, ...slotBadgeColor(slot) }}>Camera {slot}</span>
+                        {clipPath ? (
+                          <span style={{ ...sourceBadgeStyle, ...clipFormatBadgeStyle(clipPath || "", rawAnalysis) }}>
+                            {getClipFormatBadge(clipPath || "", rawAnalysis)}
+                          </span>
+                        ) : null}
+                        {heroSlot === slot && <span style={heroChipStyle}>Hero</span>}
                       </div>
-                    ) : null}
-                    <div className="matchLabCameraActions" style={cameraActionsWrapStyle}>
-                      <div style={cameraActionsTopRowStyle}>
-                        <button type="button" className="btn btn-secondary btn-sm" onClick={() => void pickClip(slot)}>
-                          <FolderOpen size={14} /> {clipPath ? "Replace" : "Import Clip"}
-                        </button>
+                      <div style={slotHeaderActionsStyle}>
                         {clipPath ? (
                           <button type="button" className="btn btn-ghost btn-sm" onClick={() => clearSlot(slot)}>Clear</button>
-                        ) : (
-                          <span style={actionPlaceholderStyle} aria-hidden="true" />
-                        )}
+                        ) : null}
+                      </div>
+                    </div>
+                    <div className="matchLabCameraActions" style={cameraActionsWrapStyle}>
+                      <div style={cameraActionsTopRowStyle}>
+                        <button type="button" className="btn btn-secondary btn-sm" style={primaryCameraActionButtonStyle} onClick={() => void pickClip(slot)}>
+                          <FolderOpen size={14} /> {clipPath ? "Replace" : "Import"}
+                        </button>
                         {rawAnalysis?.representative_frame_path ? (
                           <button
                             type="button"
                             className="btn btn-ghost btn-sm"
+                            style={calibrateButtonStyle}
                             onClick={() => void recalibrateSlot(slot, rawAnalysis.representative_frame_path)}
                             disabled={Boolean(calibratingSlots[slot])}
                           >
-                            <Pipette size={14} /> {calibratingSlots[slot] ? "Calibrating..." : "Calibrate"}
+                            <Pipette size={14} /> {calibratingSlots[slot] ? "Running..." : "Calibrate"}
+                          </button>
+                        ) : (
+                          <span style={actionPlaceholderStyle} aria-hidden="true" />
+                        )}
+                        {rawAnalysis?.representative_frame_path ? (
+                          <button type="button" className="btn btn-ghost btn-sm" style={primaryCameraActionButtonStyle} onClick={() => openCropAssist(slot)}>
+                            <Maximize2 size={14} /> Fit chart
                           </button>
                         ) : (
                           <span style={actionPlaceholderStyle} aria-hidden="true" />
                         )}
                       </div>
-                      <div style={cameraActionsSupportRowStyle}>
-                        {isProxyOnlyRawClip(clipPath || "") && !rawAnalysis?.representative_frame_path ? (
+                      {isDecoderBackedRawClip(clipPath || "") ? (
+                        <div style={sourceMetaRowStyle}>
+                          <span style={sourceMetaTextStyle}>{analysisOverrideBySlot[slot] ? "Proxy attached" : "Auto proxy or operator proxy"}</span>
+                        </div>
+                      ) : null}
+                      {isDecoderBackedRawClip(clipPath || "") && !rawAnalysis?.representative_frame_path ? (
+                        <div style={cameraActionsSupportRowStyle}>
                           <button type="button" className="btn btn-ghost btn-sm" onClick={() => void pickExistingProxy(slot)}>
                             <FolderOpen size={14} /> Use existing MP4/MOV proxy…
                           </button>
-                        ) : rawAnalysis?.representative_frame_path ? (
-                          <button type="button" className="btn btn-ghost btn-sm" onClick={() => openCropAssist(slot)}>
-                            <Maximize2 size={14} /> Zoom to chart
-                          </button>
-                        ) : (
-                          <span style={supportRowPlaceholderStyle} aria-hidden="true" />
-                        )}
-                      </div>
+                        </div>
+                      ) : null}
                     </div>
                     <div className="matchLabPathPrimary" style={fileMetaStyle} title={clipPath ? getFileName(clipPath) : "No clip selected"}>{clipPath ? getFileName(clipPath) : "No clip selected"}</div>
                     <div className="matchLabPathSecondary" style={helperMetaStyle} title={clipPath || "One short test clip per camera."}>{clipPath || "One short test clip per camera."}</div>
@@ -1213,6 +1298,7 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                               active={signalPreviewMode === "image"}
                               onClick={() => setSignalPreviewModeBySlot((prev) => ({ ...prev, [slot]: "image" }))}
                               label="Image preview"
+                              toneStyle={previewToneStyle}
                             />
                             <PreviewModeButton
                               icon={<Waves size={14} />}
@@ -1220,6 +1306,7 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                               onClick={() => setSignalPreviewModeBySlot((prev) => ({ ...prev, [slot]: "waveform" }))}
                               label="Waveform preview"
                               disabled={!signalPreview}
+                              toneStyle={previewToneStyle}
                             />
                             <PreviewModeButton
                               icon={<Palette size={14} />}
@@ -1227,13 +1314,15 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                               onClick={() => setSignalPreviewModeBySlot((prev) => ({ ...prev, [slot]: "falseColor" }))}
                               label="False color preview"
                               disabled={!signalPreview}
+                              toneStyle={previewToneStyle}
                             />
                             <PreviewModeButton
                               icon={<ChartColumn size={14} />}
                               active={signalPreviewMode === "scope"}
                               onClick={() => setSignalPreviewModeBySlot((prev) => ({ ...prev, [slot]: "scope" }))}
-                              label="Scope preview"
+                              label="RGB parade preview"
                               disabled={!signalPreview}
+                              toneStyle={previewToneStyle}
                             />
                           </div>
                           {calibration?.chart_detected ? (
@@ -1265,7 +1354,7 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                                 : signalPreviewMode === "falseColor"
                                   ? "False Color"
                                   : signalPreviewMode === "scope"
-                                    ? "Scope"
+                                    ? "RGB Parade"
                                 : calibration?.chart_detected
                                   ? activePreviewLabel
                                   : "Preview"}
@@ -1311,9 +1400,15 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                         {signalOnly ? (
                           <div style={signalOnlyStripStyle}>
                             <span style={signalOnlyChipStyle}>Signal only</span>
-                            <span style={signalOnlyTextStyle}>Calibration unavailable · Using signal analysis only</span>
+                            <span style={signalOnlyTextStyle}>Chart not found. Using scopes only.</span>
                           </div>
                         ) : null}
+                        <MatchMethodBanner
+                          slot={slot}
+                          heroSlot={heroSlot}
+                          calibration={calibration}
+                          heroCalibration={heroCalibration}
+                        />
                         {signalPreviewMode === "falseColor" && signalPreview ? (
                           <>
                             <div style={metricsWrapStyle}>
@@ -1331,6 +1426,34 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                             </div>
                           </>
                         ) : null}
+                        <div style={signalActionPanelStyle}>
+                          <div style={signalActionPanelHeaderStyle}>
+                            <span style={chipLabelStyle}>Signal Read</span>
+                            <div style={signalActionPanelHeaderMetaWrapStyle}>
+                              <span style={signalActionPanelMetaStyle}>{slot === heroSlot ? "Reference camera" : `Matching to Hero ${heroSlot}`}</span>
+                              <span
+                                style={signalReadHintStyle}
+                                title="Read left to right. Start with exposure, then white balance and tint, then refine highlights, midtones, and shadows."
+                                aria-label="Signal read guidance"
+                              >
+                                <CircleHelp size={14} />
+                              </span>
+                            </div>
+                          </div>
+                          <div style={signalActionGridStyle}>
+                            {buildMatchActionChips(
+                              analysis,
+                              rawAnalysis,
+                              calibration?.chart_detected ? correctionDisplay : null,
+                              signalPreview,
+                            ).map((action) => (
+                              <div key={`${slot}-${action.key}`} style={signalActionCardStyle} title={action.reason}>
+                                <span style={signalActionCardLabelStyle}>{action.label}</span>
+                                <span style={signalActionCardValueStyle}>{slot === heroSlot ? "REF" : action.value}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
                         {calibration?.chart_detected ? (
                           <div style={calibrationStripStyle}>
                           <div style={calibrationHeaderStyle}>
@@ -1403,44 +1526,57 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                             </div>
                           </div>
                         ) : null}
-                        <div style={metricsWrapStyle}>
-                          <MetricChip label="Luma" value={formatPercent(analysis.metrics.luma_median)} />
-                          <MetricChip label="RGB" value={formatRgbTriplet(analysis.metrics.rgb_medians)} />
-                          <MetricChip label="Hi %" value={formatPercent(analysis.metrics.highlight_percent)} />
-                          <MetricChip label="Mid %" value={formatPercent(analysis.metrics.midtone_density)} />
-                        </div>
-                        <div style={deltaRowStyle}>
-                          <DeltaChip label="Delta Luma" value={analysis.delta_vs_hero ? formatSignedPercent(analysis.delta_vs_hero.luma_median) : "Hero"} />
-                          <DeltaChip label="Delta Hi" value={analysis.delta_vs_hero ? formatSignedPercent(analysis.delta_vs_hero.highlight_percent) : "Hero"} />
-                          <DeltaChip label="Delta Mid" value={analysis.delta_vs_hero ? formatSignedPercent(analysis.delta_vs_hero.midtone_density) : "Hero"} />
-                        </div>
-                        <div style={metricsWrapStyle}>
-                          <SuggestionChip label="Exposure" value={analysis.suggestions?.exposure ?? "Hero baseline"} />
-                          <SuggestionChip label="WB" value={analysis.suggestions?.white_balance ?? "Hero baseline"} />
-                          <SuggestionChip label="Highlights" value={analysis.suggestions?.highlight ?? "Hero baseline"} />
-                          <SuggestionChip label="Confidence" value={analysis.suggestions?.confidence ?? "Low"} />
-                        </div>
-                        <div style={metricsWrapStyle}>
-                          <SuggestionChip label="Format" value={formatSourceKindLabel(rawAnalysis)} />
-                          <SuggestionChip label="Source" value={formatAnalysisSourceLabel(rawAnalysis)} />
-                          <SuggestionChip label="Resolution" value={rawAnalysis.measurement_bundle.resolution ?? `${rawAnalysis.per_frame[0]?.width ?? "—"}×${rawAnalysis.per_frame[0]?.height ?? "—"}`} />
-                          <SuggestionChip label="Waveform" value={`${formatPercent(rawAnalysis.measurement_bundle.waveform_summary.median_luma)} mid`} />
-                        </div>
+                        <MetricInfoRow
+                          items={[
+                            { label: "Luma", value: formatPercent(analysis.metrics.luma_median) },
+                            { label: "RGB", value: formatRgbTriplet(analysis.metrics.rgb_medians) },
+                            { label: "Hi %", value: formatPercent(analysis.metrics.highlight_percent) },
+                            { label: "Mid %", value: formatPercent(analysis.metrics.midtone_density) },
+                          ]}
+                        />
+                        <MetricInfoRow
+                          tone="delta"
+                          items={[
+                            { label: "Delta Luma", value: analysis.delta_vs_hero ? formatSignedPercent(analysis.delta_vs_hero.luma_median) : "Hero" },
+                            { label: "Delta Hi", value: analysis.delta_vs_hero ? formatSignedPercent(analysis.delta_vs_hero.highlight_percent) : "Hero" },
+                            { label: "Delta Mid", value: analysis.delta_vs_hero ? formatSignedPercent(analysis.delta_vs_hero.midtone_density) : "Hero" },
+                          ]}
+                        />
+                        <MetricInfoRow
+                          compact
+                          items={[
+                            { label: "Format", value: formatSourceKindLabel(rawAnalysis) },
+                            { label: "Source", value: formatAnalysisSourceLabel(rawAnalysis) },
+                            { label: "Confidence", value: analysis.suggestions?.confidence ?? "Low" },
+                            { label: "Resolution", value: rawAnalysis.measurement_bundle.resolution ?? `${rawAnalysis.per_frame[0]?.width ?? "—"}×${rawAnalysis.per_frame[0]?.height ?? "—"}` },
+                          ]}
+                        />
+                        {rawAnalysis.proxy_info ? (
+                          <details style={noteStripStyle}>
+                            <summary style={noteStripSummaryStyle}>
+                              <span style={noteStripLabelStyle}>Source note</span>
+                              <span style={noteStripToggleStyle}>Show details <ChevronDown size={13} /></span>
+                            </summary>
+                            <div style={noteStripBodyStyle}>
+                              <span style={noteStripValueStyle}>{rawAnalysis.proxy_info}</span>
+                            </div>
+                          </details>
+                        ) : null}
                         {analysis.suggestions?.warning ? <div style={inlineWarningStyle}>{analysis.suggestions.warning}</div> : null}
                         {decisionSummary ? (
                           <div style={decisionSummaryStyle}>
                             <div style={decisionSummaryHeaderStyle}>
                               <span style={chipLabelStyle}>Decision</span>
-                              <span style={decisionSummaryMetaStyle}>{signalOnly ? "Signal match" : "Match status"}</span>
+                              <span style={decisionSummaryMetaStyle}>{signalOnly ? "Temporary alignment" : "Recommended sequence"}</span>
                             </div>
                             <div style={decisionListStyle}>
-                              {decisionSummary.items.map((item) => (
+                              {decisionSummary.items.map((item, index) => (
                                 <div key={item.id} style={decisionRowStyle}>
-                                  <span style={{ ...guidanceToneDotStyle, ...guidanceToneDotColor(item.tone) }} />
-                                  <span style={decisionLabelStyle}>{item.label}</span>
-                                  <span title={item.reason} style={guidanceHelpStyle}>
-                                    <HelpCircle size={12} />
-                                  </span>
+                                  <span style={decisionStepIndexStyle}>{index + 1}</span>
+                                  <div style={decisionTextBlockStyle}>
+                                    <span style={{ ...decisionLabelStyle, ...decisionLabelToneStyle(item.tone) }}>{item.label}</span>
+                                    <span style={decisionReasonStyle}>{item.reason}</span>
+                                  </div>
                                 </div>
                               ))}
                             </div>
@@ -1473,68 +1609,6 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                             ) : null}
                           </div>
                         ) : null}
-                        <details style={detailsWrapStyle}>
-                          <summary style={detailsSummaryStyle}>
-                            <ImageIcon size={14} /> Frames & Details
-                          </summary>
-                          {rawAnalysis.proxy_info ? (
-                            <div style={detailsMetaLineStyle}>
-                              <span style={rawMetricsLabelStyle}>Proxy info</span>
-                              <span style={detailsMetaValueStyle}>{rawAnalysis.proxy_info}</span>
-                            </div>
-                          ) : null}
-                          <div style={detailsMetaLineStyle}>
-                            <span style={rawMetricsLabelStyle}>Source</span>
-                            <span style={detailsMetaValueStyle}>{formatMeasurementBundleLine(rawAnalysis.measurement_bundle)}</span>
-                          </div>
-                          <div style={framesGridStyle}>
-                            {rawAnalysis.frame_paths.map((framePath) => (
-                              <button
-                                key={framePath}
-                                type="button"
-                                style={frameThumbButtonStyle}
-                                onClick={() => setFramesOpenBySlot((prev) => ({ ...prev, [slot]: !prev[slot] }))}
-                              >
-                                {frameDataUrls[framePath] ? (
-                                  <img src={frameDataUrls[framePath]} alt={`${slot} frame`} style={frameThumbStyle} />
-                                ) : (
-                                  <div style={frameThumbPlaceholderStyle}>Missing</div>
-                                )}
-                              </button>
-                            ))}
-                          </div>
-                          {framesOpenBySlot[slot] && (
-                            <div style={detailsDrawerStyle}>
-                              <div style={rawMetricsGridStyle}>
-                                {rawAnalysis.per_frame.map((frame) => (
-                                  <div key={frame.frame_index} style={rawMetricsCardStyle}>
-                                    <div style={rawMetricsTitleStyle}>Frame {frame.frame_index + 1}</div>
-                                    <div style={rawMetricsLineStyle}>
-                                      <span style={rawMetricsLabelStyle}>Time</span>
-                                      <span style={rawMetricsValueStyle}>{Math.round(frame.timestamp_ms / 1000)}s</span>
-                                    </div>
-                                    <div style={rawMetricsLineStyle}>
-                                      <span style={rawMetricsLabelStyle}>Luma</span>
-                                      <span style={rawMetricsValueStyle}>{formatPercent(frame.luma_median)}</span>
-                                    </div>
-                                    <div style={rawMetricsLineStyle}>
-                                      <span style={rawMetricsLabelStyle}>RGB</span>
-                                      <span style={rawMetricsValueStyle}>{formatRgbTriplet(frame.rgb_medians)}</span>
-                                    </div>
-                                    <div style={rawMetricsLineStyle}>
-                                      <span style={rawMetricsLabelStyle}>Hi</span>
-                                      <span style={rawMetricsValueStyle}>{formatPercent(frame.highlight_percent)}</span>
-                                    </div>
-                                    <div style={rawMetricsLineStyle}>
-                                      <span style={rawMetricsLabelStyle}>Mid</span>
-                                      <span style={rawMetricsValueStyle}>{formatPercent(frame.midtone_density)}</span>
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-                        </details>
                       </>
                     ) : (
                       <div style={placeholderStyle}>
@@ -1552,7 +1626,7 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
               <div style={guidanceHeaderStyle}>
                 <div>
                   <div style={guidanceTitleStyle}>Match Actions</div>
-                  <div style={matchActionsSubtitleStyle}>Apply these changes to move each camera toward the hero.</div>
+                  <div style={matchActionsSubtitleStyle}>Use these steps in order. They tell the operator what to change next on each non-hero camera.</div>
                 </div>
               </div>
               <div style={matchActionsGridStyle}>
@@ -1573,9 +1647,7 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                         <div key={`${card.slot}-${action.key}`} style={matchActionChipStyle}>
                           <span style={matchActionChipLabelStyle}>{action.label}</span>
                           <span style={matchActionChipValueStyle}>{action.value}</span>
-                          <span title={action.reason} style={guidanceHelpStyle}>
-                            <HelpCircle size={12} />
-                          </span>
+                          <span style={matchActionChipReasonStyle}>{action.reason}</span>
                         </div>
                       ))}
                     </div>
@@ -1620,7 +1692,7 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
           <div style={modalCardStyle} onClick={(event) => event.stopPropagation()}>
             <div style={modalTitleStyle}>Delete run?</div>
             <div style={modalBodyStyle}>This removes the saved analysis and cached frames for this run.</div>
-                <div style={modalMetaStyle}>{formatRunTimestamp(pendingRun.created_at)} · Hero {pendingRun.hero_slot}</div>
+                <div style={modalMetaStyle}>Hero {pendingRun.hero_slot}</div>
             <div style={modalActionsStyle}>
               <button type="button" className="btn btn-ghost btn-sm" onClick={() => setPendingDeleteRunId(null)} disabled={deletingRun}>Cancel</button>
               <button type="button" className="btn btn-secondary btn-sm" onClick={() => void confirmDeleteRun()} disabled={deletingRun}>
@@ -2087,9 +2159,9 @@ async function buildSignalPreviewData(dataUrl: string): Promise<SignalPreviewDat
     throw new Error("signal preview unavailable");
   }
   const image = await loadImage(dataUrl);
-  const width = 160;
-  const height = 90;
-  const waveformBins = 64;
+  const width = 240;
+  const height = 135;
+  const waveformBins = 96;
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
@@ -2140,12 +2212,12 @@ async function buildSignalPreviewData(dataUrl: string): Promise<SignalPreviewDat
       lumaSum += luma;
       lumaValues.push(luma);
 
-      if (luma >= 0.97) clippedCount += 1;
-      else if (luma >= 0.88) nearClipCount += 1;
-      else if (luma >= 0.46 && luma <= 0.63) skinCount += 1;
-      else if (luma >= 0.28 && luma < 0.46) midsCount += 1;
-      else if (luma <= 0.12) shadowCount += 1;
-      if (luma <= 0.04) crushedCount += 1;
+      if (luma >= 0.98) clippedCount += 1;
+      else if (luma >= 0.9) nearClipCount += 1;
+      else if (luma >= 0.45 && luma <= 0.64) skinCount += 1;
+      else if (luma >= 0.22 && luma < 0.45) midsCount += 1;
+      else if (luma <= 0.16) shadowCount += 1;
+      if (luma <= 0.05) crushedCount += 1;
 
       const falseColor = falseColorRgb(luma);
       falseColorImage.data[index] = falseColor[0];
@@ -2210,14 +2282,15 @@ function normalizeDensityGrid(grid: number[][]) {
 }
 
 function falseColorRgb(luma: number): [number, number, number] {
-  if (luma >= 0.97) return [255, 64, 64];
-  if (luma >= 0.88) return [255, 149, 0];
-  if (luma >= 0.62) return [255, 214, 10];
-  if (luma >= 0.46) return [235, 78, 155];
-  if (luma >= 0.28) return [72, 187, 120];
-  if (luma >= 0.12) return [32, 156, 238];
-  if (luma >= 0.04) return [88, 92, 246];
-  return [36, 28, 72];
+  if (luma >= 0.98) return [255, 246, 248];
+  if (luma >= 0.9) return [255, 111, 76];
+  if (luma >= 0.75) return [255, 187, 71];
+  if (luma >= 0.58) return [255, 214, 10];
+  if (luma >= 0.45) return [214, 112, 214];
+  if (luma >= 0.22) return [89, 214, 145];
+  if (luma >= 0.1) return [48, 157, 255];
+  if (luma >= 0.05) return [70, 88, 255];
+  return [18, 24, 40];
 }
 
 function HistogramOverlay({ histogram }: { histogram: number[] }) {
@@ -2244,12 +2317,14 @@ function PreviewModeButton({
   onClick,
   label,
   disabled,
+  toneStyle,
 }: {
   icon: React.ReactNode;
   active: boolean;
   onClick: () => void;
   label: string;
   disabled?: boolean;
+  toneStyle?: React.CSSProperties;
 }) {
   return (
     <button
@@ -2259,7 +2334,10 @@ function PreviewModeButton({
       aria-label={label}
       title={label}
       disabled={disabled}
-      style={previewIconButtonStyle}
+      style={{
+        ...previewIconButtonStyle,
+        ...(active ? toneStyle : null),
+      }}
     >
       {icon}
     </button>
@@ -2281,34 +2359,68 @@ function WaveformPreview({ data }: { data?: SignalPreviewData }) {
   }).join(" ");
   return (
     <svg viewBox="0 0 100 100" preserveAspectRatio="none" style={waveformSvgStyle}>
-      <rect x="0" y="0" width="100" height="100" fill="rgba(7,9,12,0.96)" />
-      {[20, 40, 60, 80].map((y) => (
-        <line key={y} x1="0" y1={y} x2="100" y2={y} stroke="rgba(255,255,255,0.12)" strokeWidth="0.5" strokeDasharray="2 2" />
-      ))}
-      <DensityGridOverlay density={data.waveform_density} color="rgba(110,231,183," />
-      <polyline fill="none" stroke="rgba(255,255,255,0.92)" strokeWidth="0.55" points={points} />
+      <defs>
+        <linearGradient id="wave-bg" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#09090b" />
+          <stop offset="100%" stopColor="#111114" />
+        </linearGradient>
+        <filter id="wave-glow">
+          <feGaussianBlur stdDeviation="1.2" result="blur" />
+          <feMerge>
+            <feMergeNode in="blur" />
+            <feMergeNode in="SourceGraphic" />
+          </feMerge>
+        </filter>
+      </defs>
+      <rect x="0" y="0" width="100" height="100" fill="url(#wave-bg)" />
+      {[0, 25, 50, 75, 100].map((ire) => {
+        const y = 100 - ire;
+        return (
+          <g key={ire}>
+            <line x1="0" y1={y} x2="100" y2={y} stroke="rgba(203,213,225,0.14)" strokeWidth="0.45" strokeDasharray="3 2" />
+            <text x="1.8" y={Math.max(4, y - 1.8)} fill="rgba(203,213,225,0.52)" fontSize="3.2">
+              {ire}
+            </text>
+          </g>
+        );
+      })}
+      <DensityGridOverlay density={data.waveform_density} color="rgba(234,211,178," threshold={0.03} />
+      <polyline fill="none" stroke="rgba(214,190,156,0.34)" strokeWidth="1.1" points={points} filter="url(#wave-glow)" />
+      <polyline fill="none" stroke="rgba(241,245,249,0.96)" strokeWidth="0.45" points={points} />
+      <text x="98" y="6.5" fill="rgba(203,213,225,0.68)" fontSize="3.4" textAnchor="end">Waveform / IRE</text>
     </svg>
   );
 }
 
 function ScopePreview({ data }: { data?: SignalPreviewData }) {
   if (!data) {
-    return <div style={waveformEmptyStyle}>Scope unavailable</div>;
+    return <div style={waveformEmptyStyle}>RGB parade unavailable</div>;
   }
   return (
     <svg viewBox="0 0 100 100" preserveAspectRatio="none" style={waveformSvgStyle}>
-      <rect x="0" y="0" width="100" height="100" fill="rgba(7,9,12,0.96)" />
-      {[20, 40, 60, 80].map((y) => (
-        <line key={y} x1="0" y1={y} x2="100" y2={y} stroke="rgba(255,255,255,0.1)" strokeWidth="0.5" strokeDasharray="2 2" />
+      <defs>
+        <linearGradient id="parade-bg" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#09090b" />
+          <stop offset="100%" stopColor="#111114" />
+        </linearGradient>
+      </defs>
+      <rect x="0" y="0" width="100" height="100" fill="url(#parade-bg)" />
+      {[0, 25, 50, 75, 100].map((ire) => {
+        const y = 100 - ire;
+        return <line key={ire} x1="0" y1={y} x2="100" y2={y} stroke="rgba(203,213,225,0.12)" strokeWidth="0.45" strokeDasharray="3 2" />;
+      })}
+      {[33.333, 66.666].map((x) => (
+        <line key={x} x1={x} y1="0" x2={x} y2="100" stroke="rgba(255,255,255,0.08)" strokeWidth="0.45" />
       ))}
-      <g>
-        <rect x="0" y="0" width="33.333" height="100" fill="rgba(255,255,255,0.015)" />
-        <rect x="33.333" y="0" width="33.333" height="100" fill="rgba(255,255,255,0.02)" />
-        <rect x="66.666" y="0" width="33.334" height="100" fill="rgba(255,255,255,0.015)" />
-      </g>
-      <DensityGridOverlay density={data.rgb_scope_density.red} color="rgba(248,113,113," xOffset={0} widthScale={1 / 3} />
-      <DensityGridOverlay density={data.rgb_scope_density.green} color="rgba(74,222,128," xOffset={1 / 3} widthScale={1 / 3} />
-      <DensityGridOverlay density={data.rgb_scope_density.blue} color="rgba(96,165,250," xOffset={2 / 3} widthScale={1 / 3} />
+      <rect x="0" y="0" width="33.333" height="100" fill="rgba(239,68,68,0.035)" />
+      <rect x="33.333" y="0" width="33.333" height="100" fill="rgba(34,197,94,0.035)" />
+      <rect x="66.666" y="0" width="33.334" height="100" fill="rgba(59,130,246,0.035)" />
+      <DensityGridOverlay density={data.rgb_scope_density.red} color="rgba(248,113,113," xOffset={0} widthScale={1 / 3} threshold={0.03} />
+      <DensityGridOverlay density={data.rgb_scope_density.green} color="rgba(74,222,128," xOffset={1 / 3} widthScale={1 / 3} threshold={0.03} />
+      <DensityGridOverlay density={data.rgb_scope_density.blue} color="rgba(96,165,250," xOffset={2 / 3} widthScale={1 / 3} threshold={0.03} />
+      <text x="16.6" y="6.5" fill="rgba(248,113,113,0.9)" fontSize="3.4" textAnchor="middle">R</text>
+      <text x="50" y="6.5" fill="rgba(74,222,128,0.9)" fontSize="3.4" textAnchor="middle">G</text>
+      <text x="83.3" y="6.5" fill="rgba(96,165,250,0.9)" fontSize="3.4" textAnchor="middle">B</text>
     </svg>
   );
 }
@@ -2318,11 +2430,13 @@ function DensityGridOverlay({
   color,
   xOffset = 0,
   widthScale = 1,
+  threshold = 0.06,
 }: {
   density: number[][];
   color: string;
   xOffset?: number;
   widthScale?: number;
+  threshold?: number;
 }) {
   const columns = density.length;
   const rows = density[0]?.length ?? 0;
@@ -2331,7 +2445,7 @@ function DensityGridOverlay({
     <>
       {density.map((column, xIndex) => (
         column.map((value, yIndex) => (
-          value > 0.06 ? (
+          value > threshold ? (
             <rect
               key={`${xOffset}-${xIndex}-${yIndex}`}
               x={xOffset * 100 + (xIndex / columns) * 100 * widthScale}
@@ -2356,29 +2470,49 @@ function LegendChip({ color, label }: { color: string; label: string }) {
   );
 }
 
-function MetricChip({ label, value }: { label: string; value: string }) {
-  return (
-    <div style={chipStyle}>
-      <div style={chipLabelStyle}>{label}</div>
-      <div style={chipValueStyle}>{value}</div>
-    </div>
-  );
-}
-
-function DeltaChip({ label, value }: { label: string; value: string }) {
-  return (
-    <div style={deltaChipStyle}>
-      <div style={chipLabelStyle}>{label}</div>
-      <div style={chipValueStyle}>{value}</div>
-    </div>
-  );
-}
-
 function SuggestionChip({ label, value }: { label: string; value: string }) {
   return (
     <div style={suggestionChipStyle}>
       <div style={chipLabelStyle}>{label}</div>
       <div style={chipValueStyle}>{value}</div>
+    </div>
+  );
+}
+
+function MetricInfoRow({
+  items,
+  tone = "default",
+  compact = false,
+}: {
+  items: Array<{ label: string; value: string }>;
+  tone?: "default" | "delta";
+  compact?: boolean;
+}) {
+  const rowTemplateColumns = items
+    .flatMap((item, index) => {
+      const column = item.label === "RGB" ? "minmax(0, 1.4fr)" : "minmax(0, 1fr)";
+      return index < items.length - 1 ? [column, "1px"] : [column];
+    })
+    .join(" ");
+  return (
+    <div style={{ ...metricInfoRowStyle, gridTemplateColumns: rowTemplateColumns, ...(tone === "delta" ? metricInfoRowDeltaStyle : null) }}>
+      {items.map((item, index) => (
+        <React.Fragment key={`${item.label}-${index}`}>
+          {index > 0 ? <span style={metricInfoDividerStyle} aria-hidden="true" /> : null}
+          <div style={metricInfoItemStyle}>
+            <div style={metricInfoLabelStyle}>{item.label}</div>
+            <div
+              style={{
+                ...metricInfoValueStyle,
+                ...(compact ? metricInfoValueCompactStyle : null),
+                ...(item.label === "RGB" ? metricInfoValueInlineStyle : null),
+              }}
+            >
+              {item.value}
+            </div>
+          </div>
+        </React.Fragment>
+      ))}
     </div>
   );
 }
@@ -2402,6 +2536,30 @@ function CalibrationOverlay({ calibration }: { calibration: CalibrationChartDete
         />
       ))}
     </svg>
+  );
+}
+
+function MatchMethodBanner({
+  slot,
+  heroSlot,
+  calibration,
+  heroCalibration,
+}: {
+  slot: string;
+  heroSlot: string;
+  calibration?: CalibrationChartDetection;
+  heroCalibration?: CalibrationChartDetection;
+}) {
+  const descriptor = describeMatchMethod(slot, heroSlot, calibration, heroCalibration);
+  return (
+    <div style={matchMethodBannerStyle}>
+      <div style={matchMethodHeaderStyle}>
+        <span style={chipLabelStyle}>Match Method</span>
+        <span style={{ ...matchMethodBadgeStyle, ...matchMethodToneStyle(descriptor.tone) }}>{descriptor.badge}</span>
+      </div>
+      <div style={matchMethodTitleStyle}>{descriptor.title}</div>
+      <div style={matchMethodBodyStyle}>{descriptor.body}</div>
+    </div>
   );
 }
 
@@ -2479,6 +2637,55 @@ function buildCalibrationDisplay(
     exposure: formatExposureShift(exposure),
     whiteBalance: formatKelvinShift(wbShift),
     tint: formatTintDelta(tintShift),
+  };
+}
+
+function describeMatchMethod(
+  slot: string,
+  heroSlot: string,
+  calibration?: CalibrationChartDetection,
+  heroCalibration?: CalibrationChartDetection,
+) {
+  if (slot === heroSlot) {
+    if (heroCalibration?.chart_detected) {
+      return {
+        tone: "good" as const,
+        badge: "Chart anchor",
+        title: `Camera ${slot} is the chart-calibrated hero`,
+        body: "This camera defines the color anchor. Other cameras should be brought to this chart reference, not the other way around.",
+      };
+    }
+    return {
+      tone: "warning" as const,
+      badge: "Signal anchor",
+      title: `Camera ${slot} is the signal-only hero`,
+      body: "This hero has no chart lock, so matching is provisional. Use it for exposure and balance only until the chart is calibrated.",
+    };
+  }
+
+  if (heroCalibration?.chart_detected && calibration?.chart_detected) {
+    return {
+      tone: "good" as const,
+      badge: "Chart to chart",
+      title: `Camera ${slot} is chart-matched to Hero ${heroSlot}`,
+      body: "This is the strongest match path. Exposure, white balance, tint, and patch deltas are all being compared chart-to-chart.",
+    };
+  }
+
+  if (heroCalibration?.chart_detected && !calibration?.chart_detected) {
+    return {
+      tone: "warning" as const,
+      badge: "Signal to chart",
+      title: `Camera ${slot} is only signal-matched to Hero ${heroSlot}`,
+      body: "Useful for rough alignment, but not a final color match. The hero chart stays valid; this camera still needs its own chart lock for consistent color.",
+    };
+  }
+
+  return {
+    tone: "critical" as const,
+    badge: "Signal only",
+    title: `Camera ${slot} has no chart-calibrated reference`,
+    body: "This comparison relies on waveform, parade, and false color only. Treat it as provisional until a chart is detected.",
   };
 }
 
@@ -2582,13 +2789,13 @@ function buildDecisionSummary({
   const ordered = items.slice(0, 4);
   let action: DecisionAction | null = null;
   if (isProxyOnlyRawClip(clipPath) && rawAnalysis.source_kind !== "proxy") {
-    action = { kind: "proxy", label: "Apply Proxy" };
+    action = { kind: "proxy", label: "Attach a clean MP4/MOV proxy" };
   } else if (!calibration?.chart_detected && rawAnalysis.representative_frame_path) {
-    action = { kind: "recalibrate", label: "Retry Calibration" };
+    action = { kind: "recalibrate", label: "Reframe the chart and retry calibration" };
   } else if (!calibration?.chart_detected) {
-    action = { kind: "signal", label: "Proceed with Signal Match" };
+    action = { kind: "signal", label: "Use signal scopes for a temporary alignment" };
   } else {
-    action = { kind: "export", label: "Export Results" };
+    action = { kind: "export", label: "Export the current match sheet" };
   }
 
   return { items: ordered, action };
@@ -2614,37 +2821,44 @@ function buildMatchActionChips(
     ? "Protect"
     : "OK";
   const midValue = getMidAction(rawAnalysis, analysis, signalPreview);
+  const shadowValue = getShadowAction(rawAnalysis, analysis, signalPreview);
 
   return [
     {
       key: "wb",
-      label: "WB",
+      label: "White balance",
       value: wbValue,
-      reason: wbValue === "OK" ? "White balance is already close to the hero." : "RGB balance and metadata support a warm/cool trim toward the hero.",
+      reason: wbValue === "OK" ? "Leave white balance as-is. It is already tracking close to the hero camera." : "Adjust white balance toward the hero reference before refining tint or exposure.",
     },
     {
       key: "exp",
-      label: "EXP",
+      label: "Exposure",
       value: expValue,
-      reason: expValue === "OK" ? "Exposure is already within the hero tolerance band." : "Waveform median, highlight density, and hero-relative luma indicate this exposure trim.",
+      reason: expValue === "OK" ? "Exposure is already inside the target band." : "Trim overall exposure first so the waveform sits closer to the hero reference.",
     },
     {
       key: "tint",
-      label: "TINT",
+      label: "Tint",
       value: tintValue,
-      reason: tintValue === "OK" ? "Green/magenta balance is already controlled." : "RGB balance and neutral bias indicate a green/magenta trim toward the hero.",
+      reason: tintValue === "OK" ? "Tint is stable. No magenta or green correction is needed right now." : "Trim tint after white balance to neutralize green or magenta bias.",
     },
     {
       key: "hl",
-      label: "HL",
+      label: "Highlights",
       value: hlValue,
-      reason: hlValue === "OK" ? "Highlight shape is currently safe against the hero." : "False color and highlight percentage show the top end getting too hot.",
+      reason: hlValue === "OK" ? "Highlight rolloff is staying in a safe range." : "Protect the top end before matching color. Highlights are getting too hot compared with the hero.",
     },
     {
       key: "mid",
-      label: "MID",
+      label: "Midtones",
       value: midValue,
-      reason: midValue === "OK" ? "Midtone density is close to the hero." : "Midtone density and skin placement are drifting from the hero.",
+      reason: midValue === "OK" ? "Midtone placement is already close to the hero." : "Nudge the mids so faces and key mid-values sit closer to the hero.",
+    },
+    {
+      key: "shadows",
+      label: "Shadows",
+      value: shadowValue,
+      reason: shadowValue === "Hold" ? "Shadow density is sitting in a stable range." : shadowValue === "Lift" ? "Open the low end slightly so the shadow floor tracks closer to the hero." : "Lower the low end to keep shadows from floating above the hero.",
     },
   ];
 }
@@ -2669,9 +2883,9 @@ function classifyMatchSeverity(
 }
 
 function buildMatchStatusText(slot: string, heroSlot: string, severity: "Close" | "Moderate" | "Major") {
-  if (severity === "Close") return `${slot} Close to Hero ${heroSlot}`;
-  if (severity === "Moderate") return `${slot} Needs adjustment`;
-  return `${slot} Major correction needed`;
+  if (severity === "Close") return `Camera ${slot} is already close to Hero ${heroSlot}`;
+  if (severity === "Moderate") return `Camera ${slot} needs a controlled trim to land on Hero ${heroSlot}`;
+  return `Camera ${slot} needs a strong correction pass before it can match Hero ${heroSlot}`;
 }
 
 function getFileName(path: string) {
@@ -2696,17 +2910,54 @@ function isProxyOnlyRawClip(path: string) {
   return isNrawClip(path) || isR3dClip(path);
 }
 
+function isDecoderBackedRawClip(path: string) {
+  return isBrawClip(path) || isProxyOnlyRawClip(path);
+}
+
 function getProxyOnlyFormatBadge(path: string) {
+  if (isBrawClip(path)) return "BRAW";
   if (isNrawClip(path)) return "N-RAW";
   if (isR3dClip(path)) return "R3D";
   return "RAW";
+}
+
+function isProResCodec(codecName?: string | null) {
+  const value = (codecName || "").toLowerCase();
+  return value.includes("prores") || value.includes("apch") || value.includes("apcn") || value.includes("apcs") || value.includes("apco") || value.includes("ap4h") || value.includes("ap4x");
+}
+
+function getClipExtension(path: string) {
+  const match = path.toLowerCase().match(/\.([a-z0-9]+)$/);
+  return match?.[1] ?? "";
+}
+
+function getClipFormatBadge(path: string, analysis?: CameraMatchAnalysisResult | null) {
+  if (isBrawClip(path)) return "BRAW";
+  if (isNrawClip(path)) return "N-RAW";
+  if (isR3dClip(path)) return "R3D";
+  if (isProResCodec(analysis?.measurement_bundle?.codec_name) || path.toLowerCase().includes("prores")) return "PRORES";
+  const extension = getClipExtension(path);
+  if (extension === "mp4") return "MP4";
+  if (extension === "mov") return "MOV";
+  return extension ? extension.toUpperCase() : "VIDEO";
+}
+
+function clipFormatBadgeStyle(path: string, analysis?: CameraMatchAnalysisResult | null): React.CSSProperties {
+  const badge = getClipFormatBadge(path, analysis);
+  if (badge === "R3D") return { background: "rgba(239,68,68,0.12)", color: "rgba(252,165,165,0.98)", border: "1px solid rgba(239,68,68,0.22)" };
+  if (badge === "N-RAW") return { background: "rgba(245,158,11,0.12)", color: "rgba(253,224,71,0.98)", border: "1px solid rgba(245,158,11,0.24)" };
+  if (badge === "BRAW") return { background: "rgba(249,115,22,0.12)", color: "rgba(253,186,116,0.98)", border: "1px solid rgba(249,115,22,0.24)" };
+  if (badge === "MP4") return { background: "rgba(56,189,248,0.12)", color: "rgba(186,230,253,0.98)", border: "1px solid rgba(56,189,248,0.22)" };
+  if (badge === "MOV") return { background: "rgba(161,161,170,0.12)", color: "rgba(228,228,231,0.98)", border: "1px solid rgba(161,161,170,0.22)" };
+  if (badge === "PRORES") return { background: "rgba(168,85,247,0.14)", color: "rgba(233,213,255,0.98)", border: "1px solid rgba(168,85,247,0.26)" };
+  return {};
 }
 
 function formatSourceKindLabel(analysis: CameraMatchAnalysisResult) {
   const kind = analysis.original_format_kind || "";
   if (kind === "NIKON_NRAW") return "N-RAW";
   if (kind === "RED_R3D") return "R3D";
-  if (kind === "BLACKMAGIC_BRAW") return "BRAW";
+  if (kind === "BLACKMAGIC_BRAW" || kind === "BLACKMAGIC_RAW") return "BRAW";
   if (kind) return kind.replace(/_/g, " ");
   return "Video";
 }
@@ -2720,27 +2971,6 @@ function formatAnalysisSourceLabel(analysis: CameraMatchAnalysisResult) {
 
 function formatZonePercent(value: number) {
   return `${Math.round(value * 100)}%`;
-}
-
-function formatMeasurementBundleLine(bundle: CameraMatchAnalysisResult["measurement_bundle"]) {
-  const parts = [
-    formatSourceKindFromBundle(bundle),
-    bundle.analysis_source_kind === "proxy" ? "proxy" : null,
-    bundle.resolution,
-    bundle.fps ? `${roundTo(bundle.fps, 0.01)} fps` : null,
-    bundle.iso_metadata ? `ISO ${bundle.iso_metadata}` : null,
-    bundle.wb_metadata ? `WB ${bundle.wb_metadata}` : null,
-  ].filter(Boolean);
-  return parts.join(" · ");
-}
-
-function formatSourceKindFromBundle(bundle: CameraMatchAnalysisResult["measurement_bundle"]) {
-  const kind = bundle.original_format_kind || "";
-  if (kind === "NIKON_NRAW") return "N-RAW";
-  if (kind === "RED_R3D") return "R3D";
-  if (kind === "BLACKMAGIC_RAW") return "BRAW";
-  if (kind) return kind.replace(/_/g, " ");
-  return bundle.codec_name || "Video";
 }
 
 function extractWhiteBalanceAction(value?: string | null) {
@@ -2770,6 +3000,14 @@ function getMidAction(rawAnalysis: CameraMatchAnalysisResult, analysis: CameraMa
   return "OK";
 }
 
+function getShadowAction(rawAnalysis: CameraMatchAnalysisResult, analysis: CameraMatchAnalysis, signalPreview?: SignalPreviewData) {
+  const shadowWeight = signalPreview ? signalPreview.zones.shadows + signalPreview.zones.crushed : rawAnalysis.measurement_bundle.shadow_percentage;
+  const lumaDelta = analysis.delta_vs_hero?.luma_median ?? 0;
+  if (shadowWeight > 0.22 || lumaDelta < -0.03) return "Lift";
+  if (shadowWeight < 0.08 && lumaDelta > 0.03) return "Lower";
+  return "Hold";
+}
+
 function deriveWhiteBalanceAction(rawAnalysis: CameraMatchAnalysisResult, analysis: CameraMatchAnalysis) {
   const bundle = rawAnalysis.measurement_bundle;
   const calibrationKelvin = analysis.suggestions?.white_balance ? extractWhiteBalanceAction(analysis.suggestions.white_balance) : "OK";
@@ -2796,15 +3034,6 @@ function deriveExposureAction(rawAnalysis: CameraMatchAnalysisResult, analysis: 
   if (median < 0.36) return "+0.2";
   if (median > 0.62 || rawAnalysis.measurement_bundle.highlight_percentage > 0.035) return "-0.2";
   return "OK";
-}
-
-function formatRunTimestamp(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
 }
 
 function parseStructuredError(message: string) {
@@ -2892,18 +3121,25 @@ function qualityLevelFillStyle(level: string): React.CSSProperties {
   return { background: "linear-gradient(90deg, rgba(220,38,38,0.92), rgba(248,113,113,0.88))" };
 }
 
+function matchMethodToneStyle(tone: "critical" | "warning" | "info" | "good"): React.CSSProperties {
+  if (tone === "good") return { color: "#86efac", background: "rgba(34,197,94,0.12)", border: "1px solid rgba(34,197,94,0.22)" };
+  if (tone === "warning") return { color: "#fcd34d", background: "rgba(245,158,11,0.12)", border: "1px solid rgba(245,158,11,0.22)" };
+  if (tone === "critical") return { color: "#fca5a5", background: "rgba(239,68,68,0.12)", border: "1px solid rgba(239,68,68,0.22)" };
+  return { color: "#d6ccff", background: "rgba(165,146,255,0.12)", border: "1px solid rgba(165,146,255,0.22)" };
+}
+
 function matchActionSeverityTone(tone: MatchActionCard["tone"]): React.CSSProperties {
   if (tone === "critical") return { color: "rgba(248,113,113,0.96)", borderColor: "rgba(239,68,68,0.28)" };
   if (tone === "warning") return { color: "rgba(251,191,36,0.96)", borderColor: "rgba(245,158,11,0.24)" };
   if (tone === "good") return { color: "rgba(110,231,183,0.98)", borderColor: "rgba(34,197,94,0.24)" };
-  return { color: "rgba(147,197,253,0.96)", borderColor: "rgba(59,130,246,0.24)" };
+  return { color: "rgba(214,204,255,0.96)", borderColor: "rgba(165,146,255,0.24)" };
 }
 
-function guidanceToneDotColor(tone: DecisionItem["tone"] | MatchActionCard["tone"]): React.CSSProperties {
-  if (tone === "critical") return { background: "var(--status-orange)" };
-  if (tone === "warning") return { background: "var(--text-muted)" };
-  if (tone === "good") return { background: "var(--status-green)" };
-  return { background: "var(--color-accent)" };
+function decisionLabelToneStyle(tone: DecisionItem["tone"]): React.CSSProperties {
+  if (tone === "critical") return { color: "rgba(248,113,113,0.98)" };
+  if (tone === "warning") return { color: "rgba(234,211,178,0.98)" };
+  if (tone === "good") return { color: "rgba(196,221,181,0.98)" };
+  return { color: "rgba(241,245,249,0.96)" };
 }
 
 function roundTo(value: number, step: number) {
@@ -2911,9 +3147,9 @@ function roundTo(value: number, step: number) {
 }
 
 function slotBadgeColor(slot: string): React.CSSProperties {
-  if (slot === "A") return { background: "rgba(59,130,246,0.14)", color: "#93c5fd" };
-  if (slot === "B") return { background: "rgba(34,197,94,0.14)", color: "#86efac" };
-  return { background: "rgba(245,158,11,0.14)", color: "#fcd34d" };
+  if (slot === "A") return { background: "rgba(165,146,255,0.14)", color: "#d6ccff" };
+  if (slot === "B") return { background: "rgba(234,177,225,0.14)", color: "#ebb7e1" };
+  return { background: "rgba(216,212,223,0.14)", color: "#d8d4df" };
 }
 
 const headerRowStyle: React.CSSProperties = { display: "grid", gap: 14, marginBottom: 20 };
@@ -2922,13 +3158,14 @@ const headerTitleStyle: React.CSSProperties = { color: "var(--text-primary)", fo
 const headerUtilityRowStyle: React.CSSProperties = { display: "flex", justifyContent: "space-between", gap: 24, alignItems: "center", flexWrap: "wrap", minWidth: 0 };
 const headerMetaClusterStyle: React.CSSProperties = { display: "flex", alignItems: "center", gap: 24, minWidth: 0, flexWrap: "wrap", flex: "1 1 auto" };
 const headerCapsuleStyle: React.CSSProperties = { display: "inline-flex", alignItems: "center", gap: 12, padding: "8px 12px", borderRadius: 14, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.03)", minHeight: 44, maxWidth: "100%", flexWrap: "nowrap", minWidth: 0 };
-const capsuleDividerStyle: React.CSSProperties = { width: 1, alignSelf: "stretch", background: "rgba(255,255,255,0.08)" };
 const headerActionsStyle: React.CSSProperties = { display: "flex", gap: 12, alignItems: "center", flexWrap: "nowrap", justifyContent: "flex-end", minWidth: 0 };
 const headerInfoBlockStyle: React.CSSProperties = { display: "grid", gap: 2, minWidth: 0 };
 const headerProjectNameStyle: React.CSSProperties = { color: "var(--text-primary)", fontSize: "0.96rem", fontWeight: 700, textAlign: "left", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" };
 const headerControlGroupStyle: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8, minHeight: 32 };
-const headerControlLabelStyle: React.CSSProperties = { fontSize: "0.72rem", textTransform: "uppercase", letterSpacing: "0.12em", fontWeight: 800, color: "var(--text-muted)" };
+const headerControlLabelStyle: React.CSSProperties = { fontSize: "0.72rem", textTransform: "uppercase", letterSpacing: "0.12em", fontWeight: 800, color: "var(--color-accent)" };
 const heroInlineStyle: React.CSSProperties = { display: "flex", gap: 6, flexWrap: "nowrap" };
+const heroSelectButtonStyle: React.CSSProperties = { minWidth: 34, minHeight: 34, borderRadius: 999, border: "1px solid rgba(255,255,255,0.08)", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: "0.76rem", fontWeight: 800, letterSpacing: "0.08em", color: "rgba(228,228,231,0.94)", background: "rgba(255,255,255,0.03)", transition: "transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease, color 120ms ease" };
+const heroSelectButtonActiveStyle: React.CSSProperties = { color: "rgba(214,204,255,0.98)", boxShadow: "0 0 0 1px rgba(165,146,255,0.18), 0 12px 24px rgba(0,0,0,0.22)", transform: "translateY(-1px)", border: "1px solid rgba(165,146,255,0.24)", background: "rgba(165,146,255,0.1)" };
 const runChipStyle: React.CSSProperties = { display: "inline-flex", alignItems: "center", gap: 8, maxWidth: 240, whiteSpace: "nowrap", minWidth: 0, borderRadius: 12 };
 const runChipLabelStyle: React.CSSProperties = { color: "var(--text-muted)", fontSize: "0.78rem", fontWeight: 700 };
 const runChipValueStyle: React.CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
@@ -2936,7 +3173,7 @@ const matchLabLayoutStyle: React.CSSProperties = { display: "block" };
 const runsPopoverStyle: React.CSSProperties = { position: "absolute", top: "calc(100% + 8px)", right: 0, width: 280, maxHeight: 280, overflowY: "auto", padding: 8, borderRadius: 12, background: "#0c0d0f", border: "1px solid rgba(255,255,255,0.08)", boxShadow: "0 18px 40px rgba(0,0,0,0.4)", zIndex: 30, display: "grid", gap: 6 };
 const runsEmptyStyle: React.CSSProperties = { padding: "10px 8px", color: "var(--text-muted)", borderRadius: 12, background: "rgba(255,255,255,0.02)", textAlign: "center", whiteSpace: "nowrap" };
 const runItemStyle: React.CSSProperties = { padding: "8px 8px", borderRadius: 12, border: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.03)", color: "var(--text-primary)", textAlign: "left", display: "flex", alignItems: "center", gap: 8, minHeight: 46 };
-const runItemActiveStyle: React.CSSProperties = { border: "1px solid rgba(88,166,255,0.35)", background: "rgba(88,166,255,0.08)" };
+const runItemActiveStyle: React.CSSProperties = { border: "1px solid rgba(165,146,255,0.3)", background: "rgba(165,146,255,0.08)" };
 const runSelectButtonStyle: React.CSSProperties = { border: "none", background: "transparent", color: "inherit", padding: 0, textAlign: "left", cursor: "pointer", width: "100%", minWidth: 0 };
 const runDeleteButtonStyle: React.CSSProperties = { border: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.04)", color: "var(--text-muted)", width: 30, height: 30, borderRadius: 10, display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0, transition: "opacity 120ms ease" };
 const runItemTitleStyle: React.CSSProperties = { fontSize: "0.88rem", fontWeight: 700 };
@@ -2958,23 +3195,26 @@ const errorDetailsSummaryStyle: React.CSSProperties = { cursor: "pointer", color
 const errorDetailsBodyStyle: React.CSSProperties = { margin: "8px 0 0", whiteSpace: "pre-wrap", wordBreak: "break-word", fontSize: "0.76rem", lineHeight: 1.45, color: "#fca5a5" };
 const gridStyle: React.CSSProperties = { minWidth: 0 };
 const cameraColumnStyle: React.CSSProperties = { minWidth: 0 };
-const cameraCardStyle: React.CSSProperties = { padding: 16, borderRadius: 18, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.025)", minWidth: 0 };
-const slotHeaderRowStyle: React.CSSProperties = { display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", marginBottom: 12 };
+const cameraCardStyle: React.CSSProperties = { padding: 20, borderRadius: 18, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.025)", minWidth: 0, minHeight: 196, display: "grid", alignContent: "start" };
+const slotHeaderRowStyle: React.CSSProperties = { display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", marginBottom: 14 };
+const slotHeaderLeadStyle: React.CSSProperties = { display: "inline-flex", alignItems: "center", gap: 8, minWidth: 0 };
+const slotHeaderActionsStyle: React.CSSProperties = { display: "inline-flex", alignItems: "center", gap: 10, marginLeft: "auto" };
 const slotBadgeStyle: React.CSSProperties = { display: "inline-flex", alignItems: "center", padding: "6px 10px", borderRadius: 999, fontSize: "0.72rem", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.12em" };
-const heroChipStyle: React.CSSProperties = { display: "inline-flex", alignItems: "center", padding: "5px 8px", borderRadius: 999, background: "rgba(255,255,255,0.08)", color: "var(--text-primary)", fontSize: "0.72rem", fontWeight: 700 };
-const cameraActionsWrapStyle: React.CSSProperties = { display: "grid", gap: 8, marginBottom: 12, minWidth: 0 };
-const cameraActionsTopRowStyle: React.CSSProperties = { display: "flex", gap: 10, alignItems: "center", flexWrap: "nowrap", minHeight: 34, minWidth: 0 };
+const heroChipStyle: React.CSSProperties = { display: "inline-flex", alignItems: "center", padding: "5px 8px", borderRadius: 999, background: "rgba(59,130,246,0.16)", border: "1px solid rgba(59,130,246,0.28)", color: "rgba(191,219,254,0.98)", fontSize: "0.72rem", fontWeight: 800, letterSpacing: "0.02em" };
+const cameraActionsWrapStyle: React.CSSProperties = { display: "grid", gap: 10, marginBottom: 14, minWidth: 0 };
+const cameraActionsTopRowStyle: React.CSSProperties = { display: "flex", gap: 12, alignItems: "center", flexWrap: "nowrap", minHeight: 38, minWidth: 0 };
 const cameraActionsSupportRowStyle: React.CSSProperties = { display: "flex", alignItems: "center", minHeight: 34, minWidth: 0 };
+const primaryCameraActionButtonStyle: React.CSSProperties = { border: "1px solid rgba(255,255,255,0.14)", background: "rgba(255,255,255,0.06)", color: "rgba(244,244,245,0.98)", boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.04), 0 8px 18px rgba(0,0,0,0.22)" };
+const calibrateButtonStyle: React.CSSProperties = primaryCameraActionButtonStyle;
 const actionPlaceholderStyle: React.CSSProperties = { display: "inline-flex", minWidth: 92, height: 34, visibility: "hidden", flexShrink: 0 };
-const supportRowPlaceholderStyle: React.CSSProperties = { display: "block", width: 1, height: 34, visibility: "hidden" };
-const fileMetaStyle: React.CSSProperties = { fontSize: "0.94rem", fontWeight: 700, color: "var(--text-primary)", marginBottom: 6, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" };
-const helperMetaStyle: React.CSSProperties = { color: "var(--text-muted)", lineHeight: 1.45, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" };
-const sourceMetaRowStyle: React.CSSProperties = { marginTop: 8, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" };
-const sourceBadgeStyle: React.CSSProperties = { display: "inline-flex", alignItems: "center", padding: "4px 8px", borderRadius: 999, background: "rgba(255,255,255,0.08)", color: "var(--text-primary)", fontSize: "0.68rem", fontWeight: 800, letterSpacing: "0.08em" };
+const fileMetaStyle: React.CSSProperties = { fontSize: "0.94rem", fontWeight: 700, color: "var(--text-primary)", marginBottom: 10, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" };
+const helperMetaStyle: React.CSSProperties = { color: "rgba(113,113,122,0.58)", fontSize: "0.82rem", lineHeight: 1.35, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" };
+const sourceMetaRowStyle: React.CSSProperties = { marginTop: 4, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" };
+const sourceBadgeStyle: React.CSSProperties = { display: "inline-flex", alignItems: "center", padding: "4px 8px", borderRadius: 999, background: "rgba(165,146,255,0.12)", color: "rgba(214,204,255,0.96)", fontSize: "0.68rem", fontWeight: 800, letterSpacing: "0.08em", border: "1px solid rgba(165,146,255,0.18)" };
 const sourceMetaTextStyle: React.CSSProperties = { color: "var(--text-secondary)", fontSize: "0.74rem", fontWeight: 700 };
-const sourceMetaInlineStyle: React.CSSProperties = { marginTop: 8, color: "var(--text-secondary)", fontSize: "0.74rem", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" };
-const statusMetaStyle: React.CSSProperties = { marginTop: 10, fontSize: "0.78rem", color: "#93c5fd" };
-const analysisCardStyle: React.CSSProperties = { padding: 14, borderRadius: 18, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(9,10,13,0.78)", minHeight: 420, display: "flex", flexDirection: "column", minWidth: 0 };
+const sourceMetaInlineStyle: React.CSSProperties = { marginTop: 10, color: "var(--text-secondary)", fontSize: "0.74rem", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" };
+const statusMetaStyle: React.CSSProperties = { marginTop: 10, fontSize: "0.76rem", color: "rgba(216,212,223,0.86)" };
+const analysisCardStyle: React.CSSProperties = { padding: 14, borderRadius: 18, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(9,10,13,0.9)", minHeight: 1120, display: "flex", flexDirection: "column", minWidth: 0 };
 const frameWrapStyle: React.CSSProperties = { position: "relative", borderRadius: 14, overflow: "hidden", border: "1px solid rgba(255,255,255,0.08)", background: "#080a0c", aspectRatio: "16 / 9", marginBottom: 12 };
 const frameImageStyle: React.CSSProperties = { width: "100%", height: "100%", display: "block", objectFit: "cover" };
 const frameOverlayStyle: React.CSSProperties = { position: "absolute", left: 10, right: 10, bottom: 10, height: 88, borderRadius: 10, overflow: "hidden", border: "1px solid rgba(255,255,255,0.08)" };
@@ -2984,8 +3224,13 @@ const waveformEmptyStyle: React.CSSProperties = { width: "100%", height: "100%",
 const calibrationOverlaySvgStyle: React.CSSProperties = { position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" };
 const calibrationStripStyle: React.CSSProperties = { display: "grid", gap: 8, marginBottom: 10 };
 const signalOnlyStripStyle: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 10 };
-const signalOnlyChipStyle: React.CSSProperties = { display: "inline-flex", alignItems: "center", padding: "4px 8px", borderRadius: 999, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.05)", color: "var(--text-primary)", fontSize: "0.68rem", fontWeight: 800, letterSpacing: "0.04em" };
+const signalOnlyChipStyle: React.CSSProperties = { display: "inline-flex", alignItems: "center", padding: "4px 8px", borderRadius: 999, border: "1px solid rgba(165,146,255,0.18)", background: "rgba(165,146,255,0.1)", color: "rgba(214,204,255,0.96)", fontSize: "0.68rem", fontWeight: 800, letterSpacing: "0.04em" };
 const signalOnlyTextStyle: React.CSSProperties = { color: "var(--text-secondary)", fontSize: "0.74rem", fontWeight: 700 };
+const matchMethodBannerStyle: React.CSSProperties = { display: "grid", gap: 6, marginBottom: 12, padding: "12px 12px 11px", borderRadius: 15, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.02)" };
+const matchMethodHeaderStyle: React.CSSProperties = { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" };
+const matchMethodBadgeStyle: React.CSSProperties = { display: "inline-flex", alignItems: "center", padding: "4px 8px", borderRadius: 999, border: "1px solid rgba(255,255,255,0.08)", fontSize: "0.68rem", fontWeight: 800, letterSpacing: "0.05em" };
+const matchMethodTitleStyle: React.CSSProperties = { color: "rgba(241,245,249,0.96)", fontSize: "0.86rem", fontWeight: 800, lineHeight: 1.25 };
+const matchMethodBodyStyle: React.CSSProperties = { color: "rgba(148,163,184,0.92)", fontSize: "0.76rem", lineHeight: 1.45 };
 const calibrationHeaderStyle: React.CSSProperties = { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 };
 const calibrationHeaderMetaStyle: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8, minWidth: 0, flexWrap: "wrap", justifyContent: "flex-end" };
 const qualitySummaryStyle: React.CSSProperties = { color: "var(--text-secondary)", fontSize: "0.74rem", fontWeight: 700 };
@@ -3013,58 +3258,66 @@ const cropViewportMaskStyle: React.CSSProperties = { position: "absolute", inset
 const cropViewportBoxStyle: React.CSSProperties = { position: "absolute", inset: 0, border: "2px solid rgba(255,255,255,0.78)", borderRadius: 14, boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.18)", pointerEvents: "none" };
 const editableCalibrationOverlaySvgStyle: React.CSSProperties = { position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" };
 const editableCornerHandleStyle: React.CSSProperties = { position: "absolute", width: 16, height: 16, borderRadius: 999, border: "2px solid rgba(255,255,255,0.95)", background: "rgba(251,191,36,0.92)", boxShadow: "0 0 0 4px rgba(251,191,36,0.18)", transform: "translate(-50%, -50%)", cursor: "move" };
-const inlineWarningStyle: React.CSSProperties = { marginBottom: 10, color: "rgba(251,191,36,0.94)", fontSize: "0.78rem" };
-const metricsWrapStyle: React.CSSProperties = { display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 10 };
+const inlineWarningStyle: React.CSSProperties = { marginBottom: 10, color: "rgba(220,184,124,0.94)", fontSize: "0.76rem", lineHeight: 1.4 };
+const metricsWrapStyle: React.CSSProperties = { display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 8, marginBottom: 10 };
+const signalActionPanelStyle: React.CSSProperties = { display: "grid", gap: 10, marginBottom: 12, padding: "12px 12px 10px", borderRadius: 16, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.02)" };
+const signalActionPanelHeaderStyle: React.CSSProperties = { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" };
+const signalActionPanelHeaderMetaWrapStyle: React.CSSProperties = { display: "inline-flex", alignItems: "center", gap: 8, minWidth: 0 };
+const signalActionPanelMetaStyle: React.CSSProperties = { color: "rgba(216,212,223,0.82)", fontSize: "0.72rem", fontWeight: 700, letterSpacing: "0.04em" };
+const signalReadHintStyle: React.CSSProperties = { display: "inline-flex", alignItems: "center", justifyContent: "center", width: 20, height: 20, borderRadius: 999, border: "1px solid rgba(255,255,255,0.1)", color: "rgba(161,161,170,0.88)", background: "rgba(255,255,255,0.03)", cursor: "help", flexShrink: 0 };
+const signalActionGridStyle: React.CSSProperties = { display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 8 };
+const signalActionCardStyle: React.CSSProperties = { display: "grid", gap: 4, minWidth: 0, padding: "10px 10px 9px", borderRadius: 12, border: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.02)" };
+const signalActionCardLabelStyle: React.CSSProperties = { color: "rgba(161,161,170,0.82)", fontSize: "0.56rem", fontWeight: 800, letterSpacing: "0.11em", textTransform: "uppercase", lineHeight: 1.2 };
+const signalActionCardValueStyle: React.CSSProperties = { color: "rgba(241,245,249,0.96)", fontSize: "0.8rem", fontWeight: 800, whiteSpace: "normal", overflow: "hidden", textOverflow: "ellipsis", lineHeight: 1.15, wordBreak: "break-word" };
 const falseColorLegendStyle: React.CSSProperties = { display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 10 };
 const legendChipStyle: React.CSSProperties = { display: "inline-flex", alignItems: "center", gap: 6, padding: "4px 8px", borderRadius: 999, border: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.03)", color: "var(--text-secondary)", fontSize: "0.68rem", fontWeight: 700 };
 const legendSwatchStyle: React.CSSProperties = { width: 8, height: 8, borderRadius: 999, flexShrink: 0 };
-const decisionSummaryStyle: React.CSSProperties = { display: "grid", gap: 8, marginBottom: 10, padding: 10, borderRadius: 12, border: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.025)" };
+const decisionSummaryStyle: React.CSSProperties = { display: "grid", gap: 10, marginBottom: 10, padding: 12, borderRadius: 14, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.02)" };
 const decisionSummaryHeaderStyle: React.CSSProperties = { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 };
 const decisionSummaryMetaStyle: React.CSSProperties = { color: "var(--text-muted)", fontSize: "0.72rem", fontWeight: 700 };
-const decisionListStyle: React.CSSProperties = { display: "grid", gap: 6 };
-const decisionRowStyle: React.CSSProperties = { display: "grid", gridTemplateColumns: "8px minmax(0, 1fr) auto", alignItems: "center", gap: 8, minWidth: 0 };
-const decisionLabelStyle: React.CSSProperties = { color: "var(--text-primary)", fontSize: "0.8rem", fontWeight: 700, minWidth: 0 };
+const decisionListStyle: React.CSSProperties = { display: "grid", gap: 8 };
+const decisionRowStyle: React.CSSProperties = { display: "grid", gridTemplateColumns: "24px minmax(0, 1fr)", alignItems: "start", gap: 10, minWidth: 0 };
+const decisionStepIndexStyle: React.CSSProperties = { width: 24, height: 24, borderRadius: 999, display: "inline-flex", alignItems: "center", justifyContent: "center", border: "1px solid rgba(165,146,255,0.14)", color: "rgba(214,204,255,0.92)", fontSize: "0.72rem", fontWeight: 800, background: "rgba(165,146,255,0.08)" };
+const decisionTextBlockStyle: React.CSSProperties = { display: "grid", gap: 3, minWidth: 0 };
+const decisionLabelStyle: React.CSSProperties = { color: "var(--text-primary)", fontSize: "0.78rem", fontWeight: 800, minWidth: 0, lineHeight: 1.25 };
+const decisionReasonStyle: React.CSSProperties = { color: "var(--text-secondary)", fontSize: "0.72rem", lineHeight: 1.45 };
 const decisionActionRowStyle: React.CSSProperties = { display: "flex", justifyContent: "flex-start" };
-const deltaRowStyle: React.CSSProperties = { display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 8, marginBottom: 10 };
-const chipStyle: React.CSSProperties = { padding: "10px 12px", borderRadius: 12, border: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.025)", flex: "1 1 120px", minWidth: 0 };
-const deltaChipStyle: React.CSSProperties = { ...chipStyle, background: "rgba(255,255,255,0.035)", border: "1px solid rgba(255,255,255,0.08)" };
-const suggestionChipStyle: React.CSSProperties = { ...chipStyle, background: "rgba(255,255,255,0.035)" };
+const chipStyle: React.CSSProperties = { padding: "10px 11px", borderRadius: 12, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.02)", minWidth: 0 };
+const suggestionChipStyle: React.CSSProperties = { ...chipStyle, border: "1px solid rgba(255,255,255,0.08)" };
 const chipLabelStyle: React.CSSProperties = { fontSize: "0.7rem", textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--text-muted)", marginBottom: 5 };
-const chipValueStyle: React.CSSProperties = { fontSize: "0.9rem", fontWeight: 700, color: "var(--text-primary)" };
-const detailsWrapStyle: React.CSSProperties = { marginTop: 4 };
-const detailsSummaryStyle: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8, cursor: "pointer", listStyle: "none", color: "var(--text-secondary)", fontSize: "0.84rem", fontWeight: 700 };
-const detailsMetaLineStyle: React.CSSProperties = { marginTop: 10, marginBottom: 8, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, minWidth: 0 };
-const detailsMetaValueStyle: React.CSSProperties = { color: "var(--text-secondary)", fontSize: "0.74rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, textAlign: "right" };
-const framesGridStyle: React.CSSProperties = { marginTop: 12, display: "grid", gridTemplateColumns: "repeat(5, minmax(0, 1fr))", gap: 8 };
-const frameThumbButtonStyle: React.CSSProperties = { padding: 0, border: "1px solid rgba(255,255,255,0.08)", borderRadius: 6, overflow: "hidden", background: "#070809", cursor: "pointer" };
-const frameThumbStyle: React.CSSProperties = { display: "block", width: "100%", aspectRatio: "16 / 9", objectFit: "cover" };
-const frameThumbPlaceholderStyle: React.CSSProperties = { display: "flex", alignItems: "center", justifyContent: "center", aspectRatio: "16 / 9", color: "var(--text-muted)", fontSize: "0.72rem" };
-const detailsDrawerStyle: React.CSSProperties = { marginTop: 12 };
-const rawMetricsGridStyle: React.CSSProperties = { marginTop: 12, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))", gap: 8 };
-const rawMetricsCardStyle: React.CSSProperties = { padding: "12px 13px", borderRadius: 12, border: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.025)", display: "grid", gap: 8 };
-const rawMetricsTitleStyle: React.CSSProperties = { fontSize: "0.56rem", textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--color-accent)", marginBottom: 2, fontWeight: 800 };
-const rawMetricsLineStyle: React.CSSProperties = { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, color: "var(--text-secondary)", fontSize: "0.64rem", lineHeight: 1.2, whiteSpace: "nowrap" };
-const rawMetricsLabelStyle: React.CSSProperties = { color: "var(--text-muted)", fontWeight: 700, flexShrink: 0, fontSize: "0.6rem" };
-const rawMetricsValueStyle: React.CSSProperties = { color: "var(--text-primary)", fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", fontSize: "0.64rem" };
+const chipValueStyle: React.CSSProperties = { fontSize: "0.82rem", fontWeight: 800, color: "var(--text-primary)", lineHeight: 1.2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" };
+const metricInfoRowStyle: React.CSSProperties = { display: "grid", alignItems: "stretch", gap: 0, marginBottom: 10, padding: "10px 12px", borderRadius: 14, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.02)" };
+const metricInfoRowDeltaStyle: React.CSSProperties = { border: "1px solid rgba(255,255,255,0.1)", background: "rgba(255,255,255,0.03)" };
+const metricInfoItemStyle: React.CSSProperties = { display: "grid", gap: 4, minWidth: 0, padding: "0 10px" };
+const metricInfoDividerStyle: React.CSSProperties = { width: 1, alignSelf: "stretch", background: "rgba(255,255,255,0.08)" };
+const metricInfoLabelStyle: React.CSSProperties = { fontSize: "0.62rem", textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--text-muted)", whiteSpace: "normal", lineHeight: 1.15 };
+const metricInfoValueStyle: React.CSSProperties = { fontSize: "0.72rem", fontWeight: 800, color: "var(--text-primary)", lineHeight: 1.18, whiteSpace: "normal", overflow: "hidden", textOverflow: "ellipsis", wordBreak: "break-word" };
+const metricInfoValueInlineStyle: React.CSSProperties = { fontSize: "0.68rem", whiteSpace: "nowrap", wordBreak: "normal", overflow: "visible", textOverflow: "clip" };
+const metricInfoValueCompactStyle: React.CSSProperties = { fontSize: "0.69rem" };
+const noteStripStyle: React.CSSProperties = { display: "grid", gap: 4, marginBottom: 10, padding: "10px 11px", borderRadius: 12, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.02)" };
+const noteStripSummaryStyle: React.CSSProperties = { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, cursor: "pointer", listStyle: "none" };
+const noteStripLabelStyle: React.CSSProperties = { color: "var(--text-muted)", fontSize: "0.66rem", fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase" };
+const noteStripToggleStyle: React.CSSProperties = { display: "inline-flex", alignItems: "center", gap: 6, color: "var(--text-secondary)", fontSize: "0.72rem", fontWeight: 700 };
+const noteStripBodyStyle: React.CSSProperties = { marginTop: 8 };
+const noteStripValueStyle: React.CSSProperties = { color: "var(--text-secondary)", fontSize: "0.74rem", lineHeight: 1.4 };
 const placeholderStyle: React.CSSProperties = { minHeight: 320, display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center", gap: 12, color: "var(--text-muted)", textAlign: "center", padding: 24 };
-const guidanceSectionStyle: React.CSSProperties = { marginTop: 16, display: "grid", gap: 10, padding: 14, borderRadius: 18, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.022)" };
+const guidanceSectionStyle: React.CSSProperties = { marginTop: 20, display: "grid", gap: 12, padding: 16, borderRadius: 18, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.02)" };
 const guidanceHeaderStyle: React.CSSProperties = { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 };
 const guidanceTitleStyle: React.CSSProperties = { fontSize: "0.76rem", textTransform: "uppercase", letterSpacing: "0.12em", fontWeight: 800, color: "var(--text-muted)" };
 const matchActionsSubtitleStyle: React.CSSProperties = { marginTop: 4, color: "var(--text-secondary)", fontSize: "0.82rem", fontWeight: 600 };
 const matchActionsGridStyle: React.CSSProperties = { display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" };
-const matchActionCardStyle: React.CSSProperties = { display: "grid", gap: 10, padding: "12px 12px 10px", borderRadius: 14, border: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.02)" };
+const matchActionCardStyle: React.CSSProperties = { display: "grid", gap: 10, padding: "14px 14px 12px", borderRadius: 16, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.02)" };
 const matchActionCardHeaderStyle: React.CSSProperties = { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 };
 const matchActionCardTopStyle: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8, minWidth: 0 };
 const matchActionCardTitleStyle: React.CSSProperties = { color: "var(--text-primary)", fontSize: "0.86rem", fontWeight: 800 };
 const matchActionSeverityStyle: React.CSSProperties = { display: "inline-flex", alignItems: "center", padding: "4px 8px", borderRadius: 999, border: "1px solid rgba(255,255,255,0.08)", fontSize: "0.68rem", fontWeight: 800, letterSpacing: "0.04em" };
 const matchActionStatusStyle: React.CSSProperties = { color: "var(--text-secondary)", fontSize: "0.78rem", fontWeight: 700 };
-const matchActionChipGridStyle: React.CSSProperties = { display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 8 };
-const matchActionChipStyle: React.CSSProperties = { display: "grid", gridTemplateColumns: "auto 1fr auto", alignItems: "center", gap: 8, minWidth: 0, padding: "8px 10px", borderRadius: 12, border: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.025)" };
-const matchActionChipLabelStyle: React.CSSProperties = { color: "var(--text-muted)", fontSize: "0.68rem", fontWeight: 800, letterSpacing: "0.08em" };
-const matchActionChipValueStyle: React.CSSProperties = { color: "var(--text-primary)", fontSize: "0.82rem", fontWeight: 800, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" };
+const matchActionChipGridStyle: React.CSSProperties = { display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10 };
+const matchActionChipStyle: React.CSSProperties = { display: "grid", gap: 6, minWidth: 0, padding: "10px 11px", borderRadius: 12, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.02)", alignContent: "start" };
+const matchActionChipLabelStyle: React.CSSProperties = { color: "rgba(214,204,255,0.86)", fontSize: "0.64rem", fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase" };
+const matchActionChipValueStyle: React.CSSProperties = { color: "var(--text-primary)", fontSize: "0.82rem", fontWeight: 800, minWidth: 0, lineHeight: 1.2 };
+const matchActionChipReasonStyle: React.CSSProperties = { color: "var(--text-secondary)", fontSize: "0.72rem", lineHeight: 1.45 };
 const matchActionEmptyStyle: React.CSSProperties = { padding: "12px 14px", borderRadius: 14, border: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.02)", color: "var(--text-secondary)", fontSize: "0.82rem", fontWeight: 700 };
-const guidanceToneDotStyle: React.CSSProperties = { width: 7, height: 7, borderRadius: 999, flexShrink: 0 };
-const guidanceHelpStyle: React.CSSProperties = { display: "inline-flex", alignItems: "center", color: "var(--text-muted)", cursor: "help", flexShrink: 0 };
 const guidanceActionRowStyle: React.CSSProperties = { display: "flex", justifyContent: "flex-end", marginTop: 2 };
 const exportMenuStyle: React.CSSProperties = { position: "absolute", top: "calc(100% + 8px)", right: 0, minWidth: 244, padding: 8, borderRadius: 12, background: "#0c0d0f", border: "1px solid rgba(255,255,255,0.08)", boxShadow: "0 18px 40px rgba(0,0,0,0.4)", zIndex: 30, display: "grid", gap: 6 };
 const exportItemStyle: React.CSSProperties = { padding: "10px 12px", borderRadius: 10, border: "1px solid rgba(255,255,255,0.05)", background: "rgba(255,255,255,0.03)", color: "var(--text-primary)", cursor: "pointer", textAlign: "left", whiteSpace: "nowrap" };

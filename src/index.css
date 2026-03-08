@@ -5,11 +5,11 @@
   /* Brand tokens (Premium Greyscale with Electric Highlights) */
   --color-primary: #ffffff;
   --color-primary-hover: #f4f4f5;
-  --color-accent: #00d1ff;
-  /* Electric Blue Accent */
-  --color-accent-soft: rgba(255, 255, 255, 0.05);
-  --color-accent-glow: rgba(0, 209, 255, 0.2);
-  --color-electric-teal: #00d1ff;
+  --color-accent: #a592ff;
+  /* Lavender accent from brand status palette, reserved for interactive emphasis */
+  --color-accent-soft: rgba(165, 146, 255, 0.1);
+  --color-accent-glow: rgba(165, 146, 255, 0.18);
+  --color-electric-teal: #a592ff;
 
   /* Neutralized Status Colors (mostly greyscale or subtle) */
   --color-accent-orange: #a1a1aa;
@@ -36,7 +36,7 @@
   --status-red: #ef4444;
   --status-orange: #f59e0b;
   --status-green: #22c55e;
-  --status-blue: #3b82f6;
+  --status-blue: #a592ff;
 
   /* Status colors - Electric for OK, Mono for Warn, Red for Fail */
   --status-ok: var(--color-accent);
@@ -139,7 +139,7 @@
 }
 
 .inspector-value.highlight {
-  color: var(--color-accent);
+  color: #ead3b2;
 }
 
 .inspector-value.mono {
@@ -209,7 +209,7 @@ body {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: var(--space-gap);
-  align-items: start;
+  align-items: stretch;
   width: 100%;
   min-width: 0;
   padding: 0 2px;
@@ -218,7 +218,7 @@ body {
 .matchLabColumn {
   min-width: 0;
   display: grid;
-  gap: 12px;
+  gap: 16px;
   grid-template-rows: auto 1fr;
 }
 
@@ -226,6 +226,7 @@ body {
 .matchLabAnalysisCard {
   min-width: 0;
   overflow: hidden;
+  height: 100%;
 }
 
 .matchLabCameraActions {
