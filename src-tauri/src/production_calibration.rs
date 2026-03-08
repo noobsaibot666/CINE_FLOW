@@ -1,5 +1,5 @@
 use opencv::core::{
-    self, Mat, Point, Point2f, Rect, Scalar, Size, Vec3b, Vector, BORDER_REPLICATE,
+    self, Mat, Point, Point2f, Rect, RotatedRect, Scalar, Size, Size2f, Vec3b, Vector, BORDER_REPLICATE,
 };
 use opencv::imgcodecs;
 use opencv::imgproc;
@@ -20,16 +20,26 @@ const NEUTRAL_PATCHES: [usize; 6] = [18, 19, 20, 21, 22, 23];
 const SKIN_PATCHES: [usize; 3] = [0, 1, 8];
 
 #[derive(Debug, Clone, Copy)]
+enum DetectionMode {
+    Edges,
+    DarkMask,
+}
+
+#[derive(Debug, Clone, Copy)]
 struct DetectionAttemptConfig {
+    mode: DetectionMode,
     canny_low: f64,
     canny_high: f64,
     blur_size: i32,
     contrast_normalize: bool,
     downscale_ratio: f64,
+    max_dimension: i32,
     aspect_min: f64,
     aspect_max: f64,
     central_bias: bool,
     fallback_used: bool,
+    close_kernel: i32,
+    dilate_iterations: i32,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -38,7 +48,18 @@ struct DetectionDebugInfo {
     candidate_count: usize,
     best_aspect_ratio: Option<f64>,
     best_area_ratio: Option<f64>,
+    best_rectangularity: Option<f64>,
     fallback_used: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CandidateGeometry {
+    area: f64,
+    area_ratio: f64,
+    aspect_ratio: f64,
+    fill_ratio: f64,
+    center_x: f64,
+    center_y: f64,
 }
 
 struct CropContext {
@@ -168,6 +189,7 @@ pub fn detect_spydercheckr(
     slot: &str,
     frame_path: &Path,
     crop_rect: Option<&CalibrationCropRectNormalized>,
+    manual_corners: Option<&[CalibrationPoint]>,
 ) -> Result<CalibrationChartDetection, String> {
     let frame_path_str = frame_path
         .to_str()
@@ -185,11 +207,33 @@ pub fn detect_spydercheckr(
     }
 
     let crop_context = build_crop_context(&frame, crop_rect)?;
-    let (cropped_corners, debug_info) = detect_chart_corners(&crop_context.detection_frame)?;
-    let corners = if let Some(offset) = crop_context.offset {
-        cropped_corners.map(|point| Point2f::new(point.x + offset.x, point.y + offset.y))
+    let (cropped_corners, corners, debug_info) = if let Some(manual_corners) = manual_corners {
+        let corners = resolve_manual_corners(manual_corners, frame_width as f64, frame_height as f64)?;
+        let cropped = if let Some(offset) = crop_context.offset {
+            corners.map(|point| Point2f::new(point.x - offset.x, point.y - offset.y))
+        } else {
+            corners
+        };
+        (
+            cropped,
+            corners,
+            DetectionDebugInfo {
+                detection_attempts: 1,
+                candidate_count: 1,
+                best_aspect_ratio: Some(compute_manual_aspect_ratio(&corners)),
+                best_area_ratio: Some(compute_chart_area_ratio(&corners, frame_width as f64, frame_height as f64)),
+                best_rectangularity: Some(1.0),
+                fallback_used: true,
+            },
+        )
     } else {
-        cropped_corners
+        let (cropped_corners, debug_info) = detect_chart_corners(&crop_context.detection_frame)?;
+        let corners = if let Some(offset) = crop_context.offset {
+            cropped_corners.map(|point| Point2f::new(point.x + offset.x, point.y + offset.y))
+        } else {
+            cropped_corners
+        };
+        (cropped_corners, corners, debug_info)
     };
     let normalized = normalize_chart(&crop_context.detection_frame, &cropped_corners)?;
     let patch_samples = sample_patch_colors(&normalized)?;
@@ -1051,64 +1095,129 @@ fn detect_chart_corners(frame: &Mat) -> Result<([Point2f; 4], DetectionDebugInfo
 
     let attempts = [
         DetectionAttemptConfig {
+            mode: DetectionMode::Edges,
             canny_low: 75.0,
             canny_high: 180.0,
             blur_size: 5,
             contrast_normalize: false,
             downscale_ratio: 1.0,
+            max_dimension: 2200,
             aspect_min: 1.25,
             aspect_max: 1.9,
             central_bias: false,
             fallback_used: false,
+            close_kernel: 5,
+            dilate_iterations: 1,
         },
         DetectionAttemptConfig {
+            mode: DetectionMode::Edges,
             canny_low: 50.0,
             canny_high: 140.0,
             blur_size: 5,
             contrast_normalize: false,
             downscale_ratio: 1.0,
+            max_dimension: 1800,
             aspect_min: 1.25,
             aspect_max: 1.9,
             central_bias: false,
             fallback_used: true,
+            close_kernel: 7,
+            dilate_iterations: 1,
         },
         DetectionAttemptConfig {
+            mode: DetectionMode::Edges,
             canny_low: 50.0,
             canny_high: 140.0,
             blur_size: 5,
             contrast_normalize: true,
             downscale_ratio: 1.0,
+            max_dimension: 1800,
             aspect_min: 1.25,
             aspect_max: 1.9,
             central_bias: false,
             fallback_used: true,
+            close_kernel: 7,
+            dilate_iterations: 1,
         },
         DetectionAttemptConfig {
+            mode: DetectionMode::Edges,
             canny_low: 55.0,
             canny_high: 150.0,
             blur_size: 7,
             contrast_normalize: false,
             downscale_ratio: 0.8,
+            max_dimension: 1600,
             aspect_min: 1.18,
             aspect_max: 2.0,
             central_bias: false,
             fallback_used: true,
+            close_kernel: 9,
+            dilate_iterations: 2,
         },
         DetectionAttemptConfig {
+            mode: DetectionMode::Edges,
             canny_low: 55.0,
             canny_high: 150.0,
             blur_size: 7,
             contrast_normalize: true,
             downscale_ratio: 0.8,
+            max_dimension: 1600,
             aspect_min: 1.18,
             aspect_max: 2.0,
             central_bias: true,
             fallback_used: true,
+            close_kernel: 9,
+            dilate_iterations: 2,
+        },
+        DetectionAttemptConfig {
+            mode: DetectionMode::Edges,
+            canny_low: 35.0,
+            canny_high: 110.0,
+            blur_size: 7,
+            contrast_normalize: true,
+            downscale_ratio: 0.65,
+            max_dimension: 1400,
+            aspect_min: 1.12,
+            aspect_max: 2.1,
+            central_bias: true,
+            fallback_used: true,
+            close_kernel: 11,
+            dilate_iterations: 2,
+        },
+        DetectionAttemptConfig {
+            mode: DetectionMode::DarkMask,
+            canny_low: 0.0,
+            canny_high: 0.0,
+            blur_size: 5,
+            contrast_normalize: false,
+            downscale_ratio: 0.9,
+            max_dimension: 1800,
+            aspect_min: 1.05,
+            aspect_max: 2.2,
+            central_bias: true,
+            fallback_used: true,
+            close_kernel: 9,
+            dilate_iterations: 1,
+        },
+        DetectionAttemptConfig {
+            mode: DetectionMode::DarkMask,
+            canny_low: 0.0,
+            canny_high: 0.0,
+            blur_size: 7,
+            contrast_normalize: true,
+            downscale_ratio: 0.75,
+            max_dimension: 1600,
+            aspect_min: 1.0,
+            aspect_max: 2.3,
+            central_bias: true,
+            fallback_used: true,
+            close_kernel: 13,
+            dilate_iterations: 2,
         },
     ];
 
     let mut debug = DetectionDebugInfo::default();
-    let mut best_failure_candidate: Option<(f64, f64)> = None;
+    let mut best_failure_candidate: Option<(f64, f64, f64)> = None;
 
     for attempt in attempts {
         debug.detection_attempts += 1;
@@ -1117,15 +1226,18 @@ fn detect_chart_corners(frame: &Mat) -> Result<([Point2f; 4], DetectionDebugInfo
         }
         let prepared = prepare_detection_frame(&gray, &attempt)
             .map_err(|error| format!("Failed preparing calibration detection frame: {}", error))?;
-        let mut edges = Mat::default();
-        imgproc::canny(&prepared, &mut edges, attempt.canny_low, attempt.canny_high, 3, false)
-            .map_err(|error| format!("Failed running Canny edge detector: {}", error))?;
+        let detection_map = build_detection_map(&prepared, &attempt)
+            .map_err(|error| format!("Failed generating calibration detection map: {}", error))?;
 
         let mut contours = Vector::<Vector<Point>>::new();
         imgproc::find_contours(
-            &edges,
+            &detection_map,
             &mut contours,
-            imgproc::RETR_LIST,
+            if matches!(attempt.mode, DetectionMode::DarkMask) {
+                imgproc::RETR_EXTERNAL
+            } else {
+                imgproc::RETR_LIST
+            },
             imgproc::CHAIN_APPROX_SIMPLE,
             Point::new(0, 0),
         )
@@ -1135,38 +1247,28 @@ fn detect_chart_corners(frame: &Mat) -> Result<([Point2f; 4], DetectionDebugInfo
         let mut best: Option<([Point2f; 4], f64)> = None;
 
         for contour in contours {
-            let perimeter = imgproc::arc_length(&contour, true)
-                .map_err(|error| format!("Failed measuring contour perimeter: {}", error))?;
-            let mut approx = Vector::<Point>::new();
-            imgproc::approx_poly_dp(&contour, &mut approx, 0.02 * perimeter, true)
-                .map_err(|error| format!("Failed approximating contour polygon: {}", error))?;
-            if approx.len() != 4 {
+            let Some((ordered, geometry)) = extract_candidate_quad(&contour, frame_area)
+                .map_err(|error| format!("Failed extracting chart candidate: {}", error))?
+            else {
+                continue;
+            };
+            debug.candidate_count += 1;
+            update_best_candidate_debug(&mut debug, &geometry, &mut best_failure_candidate);
+
+            if geometry.area < frame_area * MIN_AREA_RATIO {
                 continue;
             }
-            debug.candidate_count += 1;
-            let area = imgproc::contour_area(&approx, false)
-                .map_err(|error| format!("Failed measuring contour area: {}", error))?;
-            let area_ratio = (area / frame_area).clamp(0.0, 1.0);
-            let rect = imgproc::bounding_rect(&approx)
-                .map_err(|error| format!("Failed computing contour bounds: {}", error))?;
-            let aspect_ratio = rect.width as f64 / rect.height.max(1) as f64;
-
-            update_best_candidate_debug(&mut debug, aspect_ratio, area_ratio, &mut best_failure_candidate);
-
-            if area < frame_area * MIN_AREA_RATIO {
-              continue;
+            if !(attempt.aspect_min..=attempt.aspect_max).contains(&geometry.aspect_ratio) {
+                continue;
             }
-            if !(attempt.aspect_min..=attempt.aspect_max).contains(&aspect_ratio) {
-              continue;
+            if geometry.fill_ratio < 0.72 {
+                continue;
             }
-            let ordered = order_quad_points(&approx)?;
-            let scale_back = if (attempt.downscale_ratio - 1.0).abs() > f64::EPSILON {
-                1.0 / attempt.downscale_ratio as f32
-            } else {
-                1.0
-            };
+            let prepared_max_dim = prepared.cols().max(prepared.rows()).max(1) as f64;
+            let gray_max_dim = gray.cols().max(gray.rows()).max(1) as f64;
+            let scale_back = (gray_max_dim / prepared_max_dim) as f32;
             let scaled = ordered.map(|point| Point2f::new(point.x * scale_back, point.y * scale_back));
-            let score = score_candidate_with_bias(area, aspect_ratio, &rect, prepared.cols(), prepared.rows(), attempt.central_bias);
+            let score = score_candidate_with_bias(&geometry, prepared.cols(), prepared.rows(), attempt.central_bias);
             if best.map(|(_, current)| score > current).unwrap_or(true) {
                 best = Some((scaled, score));
             }
@@ -1180,33 +1282,29 @@ fn detect_chart_corners(frame: &Mat) -> Result<([Point2f; 4], DetectionDebugInfo
     Err(format_detection_failure(&debug, best_failure_candidate))
 }
 
-fn score_candidate(area: f64, aspect_ratio: f64, rect: &Rect, frame_width: i32, frame_height: i32) -> f64 {
-    let frame_area = (frame_width * frame_height) as f64;
-    let area_score = (area / frame_area).clamp(0.0, 1.0);
-    let ratio_penalty = (aspect_ratio - TARGET_ASPECT_RATIO).abs();
-    let center_x = rect.x as f64 + rect.width as f64 * 0.5;
-    let center_y = rect.y as f64 + rect.height as f64 * 0.5;
+fn score_candidate(geometry: &CandidateGeometry, frame_width: i32, frame_height: i32) -> f64 {
+    let area_score = geometry.area_ratio.clamp(0.0, 1.0);
+    let ratio_penalty = (geometry.aspect_ratio - TARGET_ASPECT_RATIO).abs();
     let frame_center_x = frame_width as f64 * 0.5;
     let frame_center_y = frame_height as f64 * 0.5;
-    let dx = (center_x - frame_center_x).abs() / frame_width as f64;
-    let dy = (center_y - frame_center_y).abs() / frame_height as f64;
-    area_score * 0.7 + (1.0 - ratio_penalty.clamp(0.0, 1.0)) * 0.2 + (1.0 - (dx + dy).clamp(0.0, 1.0)) * 0.1
+    let dx = (geometry.center_x - frame_center_x).abs() / frame_width as f64;
+    let dy = (geometry.center_y - frame_center_y).abs() / frame_height as f64;
+    area_score * 0.58
+        + (1.0 - ratio_penalty.clamp(0.0, 1.0)) * 0.2
+        + geometry.fill_ratio.clamp(0.0, 1.0) * 0.14
+        + (1.0 - (dx + dy).clamp(0.0, 1.0)) * 0.08
 }
 
 fn score_candidate_with_bias(
-    area: f64,
-    aspect_ratio: f64,
-    rect: &Rect,
+    geometry: &CandidateGeometry,
     frame_width: i32,
     frame_height: i32,
     central_bias: bool,
 ) -> f64 {
-    let mut score = score_candidate(area, aspect_ratio, rect, frame_width, frame_height);
+    let mut score = score_candidate(geometry, frame_width, frame_height);
     if central_bias {
-        let center_x = rect.x as f64 + rect.width as f64 * 0.5;
-        let center_y = rect.y as f64 + rect.height as f64 * 0.5;
-        let dx = (center_x - frame_width as f64 * 0.5).abs() / frame_width as f64;
-        let dy = (center_y - frame_height as f64 * 0.5).abs() / frame_height as f64;
+        let dx = (geometry.center_x - frame_width as f64 * 0.5).abs() / frame_width as f64;
+        let dy = (geometry.center_y - frame_height as f64 * 0.5).abs() / frame_height as f64;
         score += (1.0 - (dx + dy).clamp(0.0, 1.0)) * 0.12;
     }
     score
@@ -1214,9 +1312,12 @@ fn score_candidate_with_bias(
 
 fn prepare_detection_frame(gray: &Mat, attempt: &DetectionAttemptConfig) -> opencv::Result<Mat> {
     let mut working = gray.clone();
-    if (attempt.downscale_ratio - 1.0).abs() > f64::EPSILON {
-        let width = ((gray.cols() as f64) * attempt.downscale_ratio).round().max(64.0) as i32;
-        let height = ((gray.rows() as f64) * attempt.downscale_ratio).round().max(64.0) as i32;
+    let gray_max_dimension = gray.cols().max(gray.rows()).max(1) as f64;
+    let dimension_scale = (attempt.max_dimension as f64 / gray_max_dimension).min(1.0);
+    let resize_scale = (dimension_scale * attempt.downscale_ratio).clamp(0.2, 1.0);
+    if (resize_scale - 1.0).abs() > f64::EPSILON {
+        let width = ((gray.cols() as f64) * resize_scale).round().max(64.0) as i32;
+        let height = ((gray.rows() as f64) * resize_scale).round().max(64.0) as i32;
         let mut resized = Mat::default();
         imgproc::resize(
             gray,
@@ -1247,38 +1348,158 @@ fn prepare_detection_frame(gray: &Mat, attempt: &DetectionAttemptConfig) -> open
     Ok(blurred)
 }
 
+fn build_detection_map(prepared: &Mat, attempt: &DetectionAttemptConfig) -> opencv::Result<Mat> {
+    match attempt.mode {
+        DetectionMode::Edges => {
+            let mut edges = Mat::default();
+            imgproc::canny(prepared, &mut edges, attempt.canny_low, attempt.canny_high, 3, false)?;
+            postprocess_edges(&edges, attempt)
+        }
+        DetectionMode::DarkMask => build_dark_mask(prepared, attempt),
+    }
+}
+
+fn postprocess_edges(edges: &Mat, attempt: &DetectionAttemptConfig) -> opencv::Result<Mat> {
+    let mut refined = edges.clone();
+    if attempt.close_kernel > 1 {
+        let kernel = imgproc::get_structuring_element(
+            imgproc::MORPH_RECT,
+            Size::new(attempt.close_kernel, attempt.close_kernel),
+            Point::new(-1, -1),
+        )?;
+        let mut closed = Mat::default();
+        imgproc::morphology_ex(
+            &refined,
+            &mut closed,
+            imgproc::MORPH_CLOSE,
+            &kernel,
+            Point::new(-1, -1),
+            1,
+            core::BORDER_CONSTANT,
+            Scalar::default(),
+        )?;
+        refined = closed;
+    }
+    if attempt.dilate_iterations > 0 {
+        let kernel = imgproc::get_structuring_element(
+            imgproc::MORPH_RECT,
+            Size::new(3, 3),
+            Point::new(-1, -1),
+        )?;
+        let mut dilated = Mat::default();
+        imgproc::dilate(
+            &refined,
+            &mut dilated,
+            &kernel,
+            Point::new(-1, -1),
+            attempt.dilate_iterations,
+            core::BORDER_CONSTANT,
+            Scalar::default(),
+        )?;
+        refined = dilated;
+    }
+    Ok(refined)
+}
+
+fn build_dark_mask(prepared: &Mat, attempt: &DetectionAttemptConfig) -> opencv::Result<Mat> {
+    let mut thresholded = Mat::default();
+    imgproc::threshold(
+        prepared,
+        &mut thresholded,
+        0.0,
+        255.0,
+        imgproc::THRESH_BINARY_INV | imgproc::THRESH_OTSU,
+    )?;
+
+    let kernel_size = attempt.close_kernel.max(3) | 1;
+    let kernel = imgproc::get_structuring_element(
+        imgproc::MORPH_RECT,
+        Size::new(kernel_size, kernel_size),
+        Point::new(-1, -1),
+    )?;
+
+    let mut closed = Mat::default();
+    imgproc::morphology_ex(
+        &thresholded,
+        &mut closed,
+        imgproc::MORPH_CLOSE,
+        &kernel,
+        Point::new(-1, -1),
+        2,
+        core::BORDER_CONSTANT,
+        Scalar::default(),
+    )?;
+
+    let mut opened = Mat::default();
+    imgproc::morphology_ex(
+        &closed,
+        &mut opened,
+        imgproc::MORPH_OPEN,
+        &kernel,
+        Point::new(-1, -1),
+        1,
+        core::BORDER_CONSTANT,
+        Scalar::default(),
+    )?;
+
+    if attempt.dilate_iterations > 0 {
+        let grow_kernel = imgproc::get_structuring_element(
+            imgproc::MORPH_RECT,
+            Size::new(3, 3),
+            Point::new(-1, -1),
+        )?;
+        let mut dilated = Mat::default();
+        imgproc::dilate(
+            &opened,
+            &mut dilated,
+            &grow_kernel,
+            Point::new(-1, -1),
+            attempt.dilate_iterations,
+            core::BORDER_CONSTANT,
+            Scalar::default(),
+        )?;
+        return Ok(dilated);
+    }
+
+    Ok(opened)
+}
+
 fn update_best_candidate_debug(
     debug: &mut DetectionDebugInfo,
-    aspect_ratio: f64,
-    area_ratio: f64,
-    best_failure_candidate: &mut Option<(f64, f64)>,
+    geometry: &CandidateGeometry,
+    best_failure_candidate: &mut Option<(f64, f64, f64)>,
 ) {
     match best_failure_candidate {
-        Some((best_area, _)) if area_ratio <= *best_area => {}
+        Some((best_area, _, best_fill)) if geometry.area_ratio <= *best_area && geometry.fill_ratio <= *best_fill => {}
         _ => {
-            *best_failure_candidate = Some((area_ratio, aspect_ratio));
-            debug.best_area_ratio = Some(area_ratio);
-            debug.best_aspect_ratio = Some(aspect_ratio);
+            *best_failure_candidate = Some((geometry.area_ratio, geometry.aspect_ratio, geometry.fill_ratio));
+            debug.best_area_ratio = Some(geometry.area_ratio);
+            debug.best_aspect_ratio = Some(geometry.aspect_ratio);
+            debug.best_rectangularity = Some(geometry.fill_ratio);
         }
     }
 }
 
 fn format_detection_failure(
     debug: &DetectionDebugInfo,
-    best_failure_candidate: Option<(f64, f64)>,
+    best_failure_candidate: Option<(f64, f64, f64)>,
 ) -> String {
     let best_area = best_failure_candidate
-        .map(|(area, _)| area * 100.0)
+        .map(|(area, _, _)| area * 100.0)
         .unwrap_or(0.0);
     let best_aspect = best_failure_candidate
-        .map(|(_, aspect)| aspect)
+        .map(|(_, aspect, _)| aspect)
+        .unwrap_or(0.0);
+    let best_fill = best_failure_candidate
+        .map(|(_, _, fill)| fill * 100.0)
         .unwrap_or(0.0);
     format!(
-        "Summary: Chart not detected\nDetails:\nDetection attempts: {}\nCandidate count: {}\nBest candidate area: {:.1}%\nBest aspect ratio: {:.2}\nFallback used: {}\nDetection remained below threshold.",
+        "Summary: Chart not detected\nDetails:\nDetection attempts: {}\nCandidate count: {}\nBest candidate area: {:.1}%\nBest aspect ratio: {:.2}\nBest rectangularity: {:.1}%\nFallback used: {}\nDetection remained below threshold.",
         debug.detection_attempts,
         debug.candidate_count,
         best_area,
         best_aspect,
+        best_fill,
         if debug.fallback_used { "yes" } else { "no" },
     )
 }
@@ -1316,6 +1537,115 @@ fn build_crop_context(
         detection_frame,
         offset: Some(Point2f::new(x as f32, y as f32)),
     })
+}
+
+fn resolve_manual_corners(
+    corners: &[CalibrationPoint],
+    frame_width: f64,
+    frame_height: f64,
+) -> Result<[Point2f; 4], String> {
+    if corners.len() != 4 {
+        return Err("Manual chart override requires exactly four corners.".to_string());
+    }
+    let mut points = Vector::<Point>::new();
+    for corner in corners {
+        let x = (corner.x.clamp(0.0, 1.0) * frame_width).round() as i32;
+        let y = (corner.y.clamp(0.0, 1.0) * frame_height).round() as i32;
+        points.push(Point::new(x, y));
+    }
+    order_quad_points(&points)
+}
+
+fn compute_manual_aspect_ratio(corners: &[Point2f; 4]) -> f64 {
+    let width_a = distance(corners[0], corners[1]);
+    let width_b = distance(corners[2], corners[3]);
+    let height_a = distance(corners[0], corners[3]);
+    let height_b = distance(corners[1], corners[2]);
+    ((width_a + width_b) * 0.5 / ((height_a + height_b) * 0.5).max(1.0)).max(1.0)
+}
+
+fn extract_candidate_quad(
+    contour: &Vector<Point>,
+    frame_area: f64,
+) -> Result<Option<([Point2f; 4], CandidateGeometry)>, String> {
+    if contour.len() < 4 {
+        return Ok(None);
+    }
+
+    let perimeter = imgproc::arc_length(contour, true)
+        .map_err(|error| format!("Failed measuring contour perimeter: {}", error))?;
+    if perimeter <= 0.0 {
+        return Ok(None);
+    }
+
+    let area = imgproc::contour_area(contour, false)
+        .map_err(|error| format!("Failed measuring contour area: {}", error))?
+        .abs();
+    if area <= 0.0 {
+        return Ok(None);
+    }
+
+    let rotated_rect = imgproc::min_area_rect(contour)
+        .map_err(|error| format!("Failed computing rotated chart bounds: {}", error))?;
+    let rect_size = normalized_rotated_size(&rotated_rect.size);
+    if rect_size.width < 12.0 || rect_size.height < 12.0 {
+        return Ok(None);
+    }
+
+    let rect_area = (rect_size.width * rect_size.height) as f64;
+    if rect_area <= 0.0 {
+        return Ok(None);
+    }
+
+    let geometry = CandidateGeometry {
+        area,
+        area_ratio: (area / frame_area).clamp(0.0, 1.0),
+        aspect_ratio: (rect_size.width as f64 / rect_size.height.max(1.0) as f64).max(1.0),
+        fill_ratio: (area / rect_area).clamp(0.0, 1.0),
+        center_x: rotated_rect.center.x as f64,
+        center_y: rotated_rect.center.y as f64,
+    };
+
+    let mut approx = Vector::<Point>::new();
+    imgproc::approx_poly_dp(contour, &mut approx, 0.02 * perimeter, true)
+        .map_err(|error| format!("Failed approximating contour polygon: {}", error))?;
+
+    if approx.len() == 4 {
+        let ordered = order_quad_points(&approx)?;
+        return Ok(Some((ordered, geometry)));
+    }
+
+    if geometry.fill_ratio < 0.84 {
+        return Ok(None);
+    }
+
+    let ordered = rotated_rect_points(&rotated_rect)?;
+    Ok(Some((ordered, geometry)))
+}
+
+fn normalized_rotated_size(size: &Size2f) -> Size2f {
+    if size.width >= size.height {
+        *size
+    } else {
+        Size2f::new(size.height, size.width)
+    }
+}
+
+fn rotated_rect_points(rect: &RotatedRect) -> Result<[Point2f; 4], String> {
+    let mut points = Mat::default();
+    imgproc::box_points(*rect, &mut points)
+        .map_err(|error| format!("Failed resolving rotated chart corners: {}", error))?;
+    let points = points
+        .reshape_def(Point2f::opencv_channels())
+        .map_err(|error| format!("Failed reshaping rotated chart corners: {}", error))?;
+    let mut corners = Vector::<Point>::new();
+    for index in 0..4 {
+        let point = points
+            .at_2d::<Point2f>(index, 0)
+            .map_err(|error| format!("Failed reading rotated chart corner: {}", error))?;
+        corners.push(Point::new(point.x.round() as i32, point.y.round() as i32));
+    }
+    order_quad_points(&corners)
 }
 
 fn order_quad_points(points: &Vector<Point>) -> Result<[Point2f; 4], String> {
@@ -1580,4 +1910,125 @@ fn polygon_area(corners: &[Point2f; 4]) -> f64 {
         area += current.x as f64 * next.y as f64 - next.x as f64 * current.y as f64;
     }
     area.abs() * 0.5
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_candidate_quad_accepts_dense_rectangular_contour() {
+        let contour = Vector::<Point>::from_iter([
+            Point::new(10, 12),
+            Point::new(48, 8),
+            Point::new(92, 11),
+            Point::new(126, 20),
+            Point::new(132, 48),
+            Point::new(128, 78),
+            Point::new(86, 84),
+            Point::new(38, 82),
+            Point::new(14, 70),
+            Point::new(8, 40),
+        ]);
+
+        let (corners, geometry) = extract_candidate_quad(&contour, 200.0 * 120.0)
+            .expect("candidate extraction should succeed")
+            .expect("rectangular contour should produce a candidate");
+
+        assert_eq!(corners.len(), 4);
+        assert!(geometry.aspect_ratio > 1.2 && geometry.aspect_ratio < 1.9);
+        assert!(geometry.fill_ratio > 0.72);
+        assert!(geometry.area_ratio > MIN_AREA_RATIO);
+    }
+
+    #[test]
+    fn prepare_detection_frame_caps_large_input_dimension() {
+        let gray = Mat::new_rows_cols_with_default(4000, 6000, core::CV_8UC1, Scalar::all(0.0))
+            .expect("test mat should allocate");
+        let attempt = DetectionAttemptConfig {
+            mode: DetectionMode::Edges,
+            canny_low: 50.0,
+            canny_high: 140.0,
+            blur_size: 5,
+            contrast_normalize: false,
+            downscale_ratio: 1.0,
+            max_dimension: 1800,
+            aspect_min: 1.2,
+            aspect_max: 1.9,
+            central_bias: false,
+            fallback_used: false,
+            close_kernel: 5,
+            dilate_iterations: 1,
+        };
+
+        let prepared = prepare_detection_frame(&gray, &attempt).expect("prepare should succeed");
+
+        assert_eq!(prepared.cols().max(prepared.rows()), 1800);
+    }
+
+    #[test]
+    fn resolve_manual_corners_orders_input_quad() {
+        let corners = [
+            CalibrationPoint { x: 0.82, y: 0.78 },
+            CalibrationPoint { x: 0.18, y: 0.22 },
+            CalibrationPoint { x: 0.18, y: 0.8 },
+            CalibrationPoint { x: 0.84, y: 0.2 },
+        ];
+        let ordered = resolve_manual_corners(&corners, 1000.0, 800.0).expect("manual corners should resolve");
+        assert!(ordered[0].x < ordered[1].x);
+        assert!(ordered[0].y < ordered[3].y);
+        assert!(ordered[2].x > ordered[3].x);
+    }
+
+    #[test]
+    fn dark_mask_detection_map_finds_large_dark_region() {
+        let mut gray = Mat::new_rows_cols_with_default(240, 320, core::CV_8UC1, Scalar::all(220.0))
+            .expect("test mat should allocate");
+        imgproc::rectangle(
+            &mut gray,
+            Rect::new(80, 60, 140, 100),
+            Scalar::all(35.0),
+            -1,
+            imgproc::LINE_8,
+            0,
+        )
+        .expect("rectangle should draw");
+
+        let attempt = DetectionAttemptConfig {
+            mode: DetectionMode::DarkMask,
+            canny_low: 0.0,
+            canny_high: 0.0,
+            blur_size: 5,
+            contrast_normalize: false,
+            downscale_ratio: 1.0,
+            max_dimension: 320,
+            aspect_min: 1.0,
+            aspect_max: 2.2,
+            central_bias: true,
+            fallback_used: true,
+            close_kernel: 9,
+            dilate_iterations: 1,
+        };
+
+        let prepared = prepare_detection_frame(&gray, &attempt).expect("prepare should succeed");
+        let mask = build_detection_map(&prepared, &attempt).expect("dark mask should build");
+
+        let mut contours = Vector::<Vector<Point>>::new();
+        imgproc::find_contours(
+            &mask,
+            &mut contours,
+            imgproc::RETR_EXTERNAL,
+            imgproc::CHAIN_APPROX_SIMPLE,
+            Point::new(0, 0),
+        )
+        .expect("contours should extract");
+
+        let frame_area = (prepared.cols() * prepared.rows()) as f64;
+        let best_area_ratio = contours
+            .iter()
+            .filter_map(|contour| extract_candidate_quad(&contour, frame_area).ok().flatten().map(|(_, geometry)| geometry.area_ratio))
+            .fold(0.0, f64::max);
+
+        assert!(best_area_ratio > 0.12);
+    }
 }

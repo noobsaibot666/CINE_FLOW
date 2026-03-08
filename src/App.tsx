@@ -430,11 +430,33 @@ function AppContent() {
     }
   }, [safeInvoke]);
 
+  const hasActiveJobs = scanning || extracting || jobs.some((job) => job.status === "running" || job.status === "queued");
+
   useEffect(() => {
-    refreshJobs();
-    const t = setInterval(refreshJobs, 1000);
-    return () => clearInterval(t);
-  }, [refreshJobs]);
+    let cancelled = false;
+    let timeoutId: number | undefined;
+
+    const schedule = (delayMs: number) => {
+      timeoutId = window.setTimeout(() => {
+        void tick();
+      }, delayMs);
+    };
+
+    const tick = async () => {
+      await refreshJobs();
+      if (cancelled) return;
+      schedule(jobsOpen || hasActiveJobs ? 1000 : 15000);
+    };
+
+    void tick();
+
+    return () => {
+      cancelled = true;
+      if (timeoutId) {
+        window.clearTimeout(timeoutId);
+      }
+    };
+  }, [refreshJobs, jobsOpen, hasActiveJobs]);
 
 
   useEffect(() => {

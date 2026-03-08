@@ -22,7 +22,7 @@ use crate::production_match_lab::{
     ProductionMatchLabProxyResult, ProductionMatchLabRun, ProductionMatchLabRunResult,
     ProductionMatchLabRunResultInput, ProductionMatchLabRunSummary,
 };
-use crate::production_calibration::{CalibrationChartDetection, CalibrationCropRectNormalized};
+use crate::production_calibration::{CalibrationChartDetection, CalibrationCropRectNormalized, CalibrationPoint};
 use crate::review_core;
 use crate::scanner;
 use crate::thumbnail;
@@ -6527,6 +6527,7 @@ pub async fn production_matchlab_detect_calibration(
     slot: String,
     frame_path: String,
     crop_rect_normalized: Option<CalibrationCropRectNormalized>,
+    manual_chart_corners: Option<Vec<CalibrationPoint>>,
     state: State<'_, Arc<AppState>>,
 ) -> Result<CalibrationChartDetection, String> {
     crate::production_calibration::detect_spydercheckr(
@@ -6535,6 +6536,7 @@ pub async fn production_matchlab_detect_calibration(
         &slot,
         Path::new(&frame_path),
         crop_rect_normalized.as_ref(),
+        manual_chart_corners.as_deref(),
     )
 }
 

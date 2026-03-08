@@ -3,6 +3,7 @@ import { ChartColumn, ChevronDown, Download, FolderOpen, Gauge, HelpCircle, Imag
 import { open, save } from "@tauri-apps/plugin-dialog";
 import {
   CalibrationChartDetection,
+  CalibrationPoint,
   CalibrationCropRectNormalized,
   CameraMatchAnalysis,
   CameraMatchAnalysisResult,
@@ -42,7 +43,6 @@ type MatchActionCard = {
 type MatchActionsAction =
   | { kind: "proxy"; label: string; slot: string }
   | { kind: "recalibrate"; label: string; slot: string }
-  | { kind: "lut"; label: string; slot: string }
   | { kind: "export"; label: string }
   | { kind: "analyze"; label: string };
 
@@ -52,6 +52,11 @@ type CalibrationCropState = {
   offset_x: number;
   offset_y: number;
   crop_rect_normalized: CalibrationCropRectNormalized;
+};
+
+type CalibrationCornerDragState = {
+  slot: string;
+  cornerIndex: number;
 };
 
 type PreviewViewMode = "image" | "waveform" | "falseColor" | "scope";
@@ -118,13 +123,15 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
   const [calibrationBySlot, setCalibrationBySlot] = useState<Record<string, CalibrationChartDetection>>({});
   const [calibratingSlots, setCalibratingSlots] = useState<Record<string, boolean>>({});
   const [fullscreenSlot, setFullscreenSlot] = useState<string | null>(null);
-  const [previewModeBySlot, setPreviewModeBySlot] = useState<Record<string, "original" | "corrected" | "lut">>({});
+  const [previewModeBySlot, setPreviewModeBySlot] = useState<Record<string, "original" | "corrected">>({});
   const [transformingSlots, setTransformingSlots] = useState<Record<string, boolean>>({});
   const [signalPreviewModeBySlot, setSignalPreviewModeBySlot] = useState<Record<string, PreviewViewMode>>({});
   const [signalPreviewByFramePath, setSignalPreviewByFramePath] = useState<Record<string, SignalPreviewData>>({});
   const [cropStateBySlot, setCropStateBySlot] = useState<Record<string, CalibrationCropState>>({});
+  const [manualChartCornersBySlot, setManualChartCornersBySlot] = useState<Record<string, CalibrationPoint[]>>({});
   const [cropAssistSlot, setCropAssistSlot] = useState<string | null>(null);
   const [cropDragging, setCropDragging] = useState<{ slot: string; startX: number; startY: number; startOffsetX: number; startOffsetY: number } | null>(null);
+  const [cornerDragging, setCornerDragging] = useState<CalibrationCornerDragState | null>(null);
   const cropViewportRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -266,13 +273,15 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
         const nextAnalyses: Record<string, CameraMatchAnalysisResult> = {};
         const nextClips: Record<string, string> = {};
         const nextCalibrations: Record<string, CalibrationChartDetection> = {};
-        const nextPreviewModes: Record<string, "original" | "corrected" | "lut"> = {};
+        const nextPreviewModes: Record<string, "original" | "corrected"> = {};
         run.results.forEach((result) => {
           nextAnalyses[result.slot] = result.analysis;
           nextClips[result.slot] = result.analysis.clip_path;
           if (result.calibration?.chart_detected) {
             nextCalibrations[result.slot] = result.calibration;
-            nextPreviewModes[result.slot] = result.calibration.transform_preview_path ? "lut" : "corrected";
+            nextPreviewModes[result.slot] = result.slot === (run.hero_slot || "A")
+              ? "original"
+              : "corrected";
           }
         });
         startTransition(() => {
@@ -377,7 +386,7 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                   transform_preview_path: null,
                 },
               }));
-              setPreviewModeBySlot((prev) => ({ ...prev, [slot]: "corrected" }));
+              setPreviewModeBySlot((prev) => ({ ...prev, [slot]: "original" }));
             });
           }
           continue;
@@ -407,7 +416,7 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
           didChange = true;
           startTransition(() => {
             setCalibrationBySlot((prev) => ({ ...prev, [slot]: transformed }));
-            setPreviewModeBySlot((prev) => ({ ...prev, [slot]: transformed.transform_preview_path ? "lut" : "corrected" }));
+            setPreviewModeBySlot((prev) => ({ ...prev, [slot]: "corrected" }));
             setSlotStatuses((prev) => ({ ...prev, [slot]: "Calibration ready" }));
           });
         } catch (error) {
@@ -514,6 +523,16 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
       delete next[slot];
       return next;
     });
+    setCropStateBySlot((prev) => {
+      const next = { ...prev };
+      delete next[slot];
+      return next;
+    });
+    setManualChartCornersBySlot((prev) => {
+      const next = { ...prev };
+      delete next[slot];
+      return next;
+    });
     if (isProxyOnlyRawClip(selected)) {
       setSlotStatuses((prev) => ({ ...prev, [slot]: `${getProxyOnlyFormatBadge(selected)} detected · Proxy required` }));
     }
@@ -571,9 +590,36 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
       delete next[slot];
       return next;
     });
+    setCropStateBySlot((prev) => {
+      const next = { ...prev };
+      delete next[slot];
+      return next;
+    });
+    setManualChartCornersBySlot((prev) => {
+      const next = { ...prev };
+      delete next[slot];
+      return next;
+    });
   };
 
-  const calibrateSlot = async (slot: string, framePath?: string, cropRectNormalized?: CalibrationCropRectNormalized) => {
+  const recalibrateSlot = async (slot: string, framePath?: string) => {
+    if (!framePath) return;
+    const cropState = cropStateBySlot[slot];
+    const manualCorners = manualChartCornersBySlot[slot] ?? calibrationBySlot[slot]?.chart_corners;
+    await calibrateSlot(
+      slot,
+      framePath,
+      cropState?.crop_rect_normalized,
+      manualCorners && manualCorners.length === 4 ? orderCalibrationCorners(manualCorners) : undefined,
+    );
+  };
+
+  const calibrateSlot = async (
+    slot: string,
+    framePath?: string,
+    cropRectNormalized?: CalibrationCropRectNormalized,
+    manualChartCorners?: CalibrationPoint[],
+  ) => {
     if (!framePath) return;
     setCalibratingSlots((prev) => ({ ...prev, [slot]: true }));
     try {
@@ -582,10 +628,11 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
         slot,
         framePath,
         cropRectNormalized: cropRectNormalized ?? null,
+        manualChartCorners: manualChartCorners ?? null,
       });
       startTransition(() => {
         setCalibrationBySlot((prev) => ({ ...prev, [slot]: result }));
-        setPreviewModeBySlot((prev) => ({ ...prev, [slot]: "corrected" }));
+        setPreviewModeBySlot((prev) => ({ ...prev, [slot]: slot === heroSlot ? "original" : "corrected" }));
         setSlotStatuses((prev) => ({ ...prev, [slot]: "Calibration ready" }));
         setSlotErrors((prev) => {
           const next = { ...prev };
@@ -717,28 +764,32 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
 
   const exportMatchSheet = async (kind: "pdf" | "image") => {
     setExportMenuOpen(false);
-    const exportPayload = {
-      fileName: `${project.name}_MatchLab_${heroSlot}.${kind === "pdf" ? "pdf" : "jpg"}`,
-      title: "Match Sheet",
-      projectName: project.name,
-      clientName: project.client_name,
-      heroSlot,
-      generatedAt: matchResult.generated_at,
-      cameras: matchResult.analyses.map((analysis) => ({
-        slot: analysis.slot,
-        title: analysis.clip_name,
-        frameDataUrl: frameDataUrls[analysis.representative_frame_path] ?? "",
-        metrics: analysis.metrics,
-        delta: analysis.delta_vs_hero ?? null,
-        suggestions: analysis.suggestions ?? null,
-        calibration: calibrationBySlot[analysis.slot] ?? null,
-      })),
-    };
-    if (kind === "pdf") {
-      await exportProductionMatchSheetPdf(exportPayload);
-      return;
+    try {
+      const exportPayload = {
+        fileName: `${project.name}_MatchLab_${heroSlot}.${kind === "pdf" ? "pdf" : "jpg"}`,
+        title: "Match Sheet",
+        projectName: project.name,
+        clientName: project.client_name,
+        heroSlot,
+        generatedAt: matchResult.generated_at,
+        cameras: matchResult.analyses.map((analysis) => ({
+          slot: analysis.slot,
+          title: analysis.clip_name,
+          frameDataUrl: frameDataUrls[analysis.representative_frame_path] ?? "",
+          metrics: analysis.metrics,
+          delta: analysis.delta_vs_hero ?? null,
+          suggestions: analysis.suggestions ?? null,
+          calibration: calibrationBySlot[analysis.slot] ?? null,
+        })),
+      };
+      const success = kind === "pdf"
+        ? await exportProductionMatchSheetPdf(exportPayload)
+        : await exportProductionMatchSheetImage(exportPayload);
+      setSavedRunMessage(success ? "Match sheet exported" : "Export cancelled");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setSavedRunMessage(message || "Export failed");
     }
-    await exportProductionMatchSheetImage(exportPayload);
   };
 
   const exportSlotLut = async (slot: string, calibration: CalibrationChartDetection) => {
@@ -753,11 +804,16 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
       filters: [{ name: "LUT", extensions: ["cube"] }],
     });
     if (typeof destination !== "string") return;
-    await invokeGuarded("production_matchlab_export_lut", {
-      lutPath: calibration.lut_path,
-      destinationPath: destination,
-    });
-    setSavedRunMessage(`Exported LUT for camera ${slot}`);
+    try {
+      await invokeGuarded("production_matchlab_export_lut", {
+        lutPath: calibration.lut_path,
+        destinationPath: destination,
+      });
+      setSavedRunMessage(`Exported LUT for camera ${slot}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setSavedRunMessage(message.split("\n")[0] || `LUT unavailable for camera ${slot}`);
+    }
   };
 
   const exportSlotMonitorLut = async (slot: string, calibration: CalibrationChartDetection) => {
@@ -803,9 +859,13 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
   };
 
   const openCropAssist = (slot: string) => {
-    setCropStateBySlot((prev) => ({
+    const nextCropState = cropStateBySlot[slot] ?? buildDefaultCropState();
+    setCropStateBySlot((prev) => ({ ...prev, [slot]: nextCropState }));
+    setManualChartCornersBySlot((prev) => ({
       ...prev,
-      [slot]: prev[slot] ?? buildDefaultCropState(),
+      [slot]: prev[slot]
+        ?? calibrationBySlot[slot]?.chart_corners
+        ?? buildDefaultChartCorners(nextCropState.crop_rect_normalized),
     }));
     setCropAssistSlot(slot);
   };
@@ -821,15 +881,26 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
   };
 
   const resetCropAssist = (slot: string) => {
-    setCropStateBySlot((prev) => ({ ...prev, [slot]: buildDefaultCropState() }));
+    const nextCropState = buildDefaultCropState();
+    setCropStateBySlot((prev) => ({ ...prev, [slot]: nextCropState }));
+    setManualChartCornersBySlot((prev) => ({
+      ...prev,
+      [slot]: calibrationBySlot[slot]?.chart_corners ?? buildDefaultChartCorners(nextCropState.crop_rect_normalized),
+    }));
   };
 
   const confirmCropAssist = async (slot: string) => {
     const framePath = analysisBySlot[slot]?.representative_frame_path;
     if (!framePath) return;
     const cropState = cropStateBySlot[slot] ?? buildDefaultCropState();
+    const manualCorners = orderCalibrationCorners(
+      manualChartCornersBySlot[slot] ?? calibrationBySlot[slot]?.chart_corners ?? buildDefaultChartCorners(cropState.crop_rect_normalized),
+    );
+    setManualChartCornersBySlot((prev) => ({ ...prev, [slot]: manualCorners }));
     setCropAssistSlot(null);
-    await calibrateSlot(slot, framePath, cropState.crop_rect_normalized);
+    setCropDragging(null);
+    setCornerDragging(null);
+    await calibrateSlot(slot, framePath, cropState.crop_rect_normalized, manualCorners);
   };
 
   const confirmDeleteRun = async () => {
@@ -883,20 +954,11 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                 <div style={headerInfoBlockStyle}>
                   <div style={headerProjectNameStyle}>Project {project.name}</div>
                 </div>
-                <div className="production-matchlab-header-capsule" style={headerCapsuleStyle}>
+              <div className="production-matchlab-header-capsule" style={headerCapsuleStyle}>
                   <div style={headerControlGroupStyle}>
                     <span style={headerControlLabelStyle}>Hero</span>
                     <div style={heroInlineStyle}>
-                      {SLOT_ORDER.filter((slot) => clipsBySlot[slot]).map((slot) => (
-                        <button
-                          key={slot}
-                          type="button"
-                          className={`btn btn-sm ${heroSlot === slot ? "production-matchlab-hero-active" : "btn-ghost"}`}
-                          onClick={() => setHeroSlot(slot)}
-                        >
-                          {slot}
-                        </button>
-                      ))}
+                      <span style={{ ...slotBadgeStyle, ...slotBadgeColor("A"), minWidth: 32, justifyContent: "center" }}>A</span>
                     </div>
                   </div>
                   <div style={capsuleDividerStyle} />
@@ -1010,7 +1072,7 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
               const previewMode = previewModeBySlot[slot] ?? "original";
               const signalPreviewMode = signalPreviewModeBySlot[slot] ?? "image";
               const correctedPreviewUrl = calibration?.corrected_preview_path ? frameDataUrls[calibration.corrected_preview_path] : "";
-              const transformPreviewUrl = calibration?.transform_preview_path ? frameDataUrls[calibration.transform_preview_path] : "";
+              const supportsCorrectedPreview = slot !== heroSlot && Boolean(calibration?.chart_detected && correctedPreviewUrl);
               const signalPreview = rawAnalysis ? signalPreviewByFramePath[rawAnalysis.representative_frame_path] : undefined;
               const signalOnly = Boolean(rawAnalysis) && !calibration?.chart_detected;
               const decisionSummary = analysis && rawAnalysis
@@ -1025,15 +1087,11 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                 })
                 : null;
               const activePreviewUrl =
-                previewMode === "lut" && transformPreviewUrl
-                  ? transformPreviewUrl
-                  : previewMode === "corrected" && correctedPreviewUrl
-                    ? correctedPreviewUrl
-                    : representativeFrameUrl;
+                previewMode === "corrected" && supportsCorrectedPreview
+                  ? correctedPreviewUrl
+                  : representativeFrameUrl;
               const activePreviewLabel =
-                previewMode === "lut" && transformPreviewUrl
-                  ? "LUT Preview"
-                  : previewMode === "corrected" && correctedPreviewUrl
+                previewMode === "corrected" && supportsCorrectedPreview
                     ? "Corrected"
                     : "Original";
 
@@ -1064,7 +1122,7 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                           <button
                             type="button"
                             className="btn btn-ghost btn-sm"
-                            onClick={() => void calibrateSlot(slot, rawAnalysis.representative_frame_path)}
+                            onClick={() => void recalibrateSlot(slot, rawAnalysis.representative_frame_path)}
                             disabled={Boolean(calibratingSlots[slot])}
                           >
                             <Pipette size={14} /> {calibratingSlots[slot] ? "Calibrating..." : "Calibrate"}
@@ -1116,7 +1174,7 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                                 <button
                                   type="button"
                                   className="btn btn-ghost btn-sm"
-                                  onClick={() => void calibrateSlot(slot, rawAnalysis.representative_frame_path)}
+                                  onClick={() => void recalibrateSlot(slot, rawAnalysis.representative_frame_path)}
                                   disabled={Boolean(calibratingSlots[slot])}
                                 >
                                   <Pipette size={14} /> Retry Calibration
@@ -1187,22 +1245,15 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                               >
                                 Original
                               </button>
-                              <button
-                                type="button"
-                                className={`btn btn-sm ${previewMode === "corrected" ? "btn-secondary" : "btn-ghost"}`}
-                                onClick={() => setPreviewModeBySlot((prev) => ({ ...prev, [slot]: "corrected" }))}
-                                disabled={!correctedPreviewUrl}
-                              >
-                                Corrected
-                              </button>
-                              <button
-                                type="button"
-                                className={`btn btn-sm ${previewMode === "lut" ? "btn-secondary" : "btn-ghost"}`}
-                                onClick={() => setPreviewModeBySlot((prev) => ({ ...prev, [slot]: "lut" }))}
-                                disabled={!transformPreviewUrl}
-                              >
-                                LUT Preview
-                              </button>
+                              {supportsCorrectedPreview ? (
+                                <button
+                                  type="button"
+                                  className={`btn btn-sm ${previewMode === "corrected" ? "btn-secondary" : "btn-ghost"}`}
+                                  onClick={() => setPreviewModeBySlot((prev) => ({ ...prev, [slot]: "corrected" }))}
+                                >
+                                  Corrected
+                                </button>
+                              ) : null}
                               <span style={previewToggleDividerStyle} />
                             </>
                           ) : null}
@@ -1216,7 +1267,7 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                                   : signalPreviewMode === "scope"
                                     ? "Scope"
                                 : calibration?.chart_detected
-                                  ? `${activePreviewLabel}`
+                                  ? activePreviewLabel
                                   : "Preview"}
                           </span>
                         </div>
@@ -1404,15 +1455,11 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                                       return;
                                     }
                                     if (decisionSummary.action?.kind === "recalibrate" && rawAnalysis.representative_frame_path) {
-                                      void calibrateSlot(slot, rawAnalysis.representative_frame_path);
-                                      return;
-                                    }
-                                    if (decisionSummary.action?.kind === "lut" && calibration) {
-                                      void exportSlotLut(slot, calibration);
+                                      void recalibrateSlot(slot, rawAnalysis.representative_frame_path);
                                       return;
                                     }
                                     if (decisionSummary.action?.kind === "export") {
-                                      setExportMenuOpen(true);
+                                      void exportMatchSheet("image");
                                       return;
                                     }
                                     if (decisionSummary.action?.kind === "signal") {
@@ -1550,19 +1597,12 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                     if (matchActions.action.kind === "recalibrate") {
                       const framePath = analysisBySlot[matchActions.action.slot]?.representative_frame_path;
                       if (framePath) {
-                        void calibrateSlot(matchActions.action.slot, framePath);
-                      }
-                      return;
-                    }
-                    if (matchActions.action.kind === "lut") {
-                      const calibration = calibrationBySlot[matchActions.action.slot];
-                      if (calibration) {
-                        void exportSlotLut(matchActions.action.slot, calibration);
+                        void recalibrateSlot(matchActions.action.slot, framePath);
                       }
                       return;
                     }
                     if (matchActions.action.kind === "export") {
-                      setExportMenuOpen(true);
+                      void exportMatchSheet("image");
                       return;
                     }
                     void analyzeClips();
@@ -1602,11 +1642,9 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
             </div>
             <div style={fullscreenFrameWrapStyle}>
               <img
-                src={previewModeBySlot[fullscreenSlot] === "corrected" && calibrationBySlot[fullscreenSlot]?.corrected_preview_path
+                src={previewModeBySlot[fullscreenSlot] === "corrected" && fullscreenSlot !== heroSlot && calibrationBySlot[fullscreenSlot]?.corrected_preview_path
                   ? frameDataUrls[calibrationBySlot[fullscreenSlot].corrected_preview_path] || frameDataUrls[analysisBySlot[fullscreenSlot].representative_frame_path]
-                  : previewModeBySlot[fullscreenSlot] === "lut" && calibrationBySlot[fullscreenSlot]?.transform_preview_path
-                    ? frameDataUrls[calibrationBySlot[fullscreenSlot].transform_preview_path!] || frameDataUrls[analysisBySlot[fullscreenSlot].representative_frame_path]
-                    : frameDataUrls[analysisBySlot[fullscreenSlot].representative_frame_path]}
+                  : frameDataUrls[analysisBySlot[fullscreenSlot].representative_frame_path]}
                 alt={`Calibration preview ${fullscreenSlot}`}
                 style={frameImageStyle}
               />
@@ -1616,14 +1654,14 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
         </div>
       ) : null}
       {cropAssistSlot && analysisBySlot[cropAssistSlot] ? (
-        <div style={modalBackdropStyle} onClick={() => { setCropAssistSlot(null); setCropDragging(null); }}>
+        <div style={modalBackdropStyle} onClick={() => { setCropAssistSlot(null); setCropDragging(null); setCornerDragging(null); }}>
           <div style={fullscreenCardStyle} onClick={(event) => event.stopPropagation()}>
             <div style={fullscreenHeaderStyle}>
               <div>
-                <div style={modalTitleStyle}>Zoom to chart · Camera {cropAssistSlot}</div>
+                <div style={modalTitleStyle}>Adjust chart fit · Camera {cropAssistSlot}</div>
                 <div style={modalMetaStyle}>{getFileName(analysisBySlot[cropAssistSlot].clip_path)}</div>
               </div>
-              <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setCropAssistSlot(null); setCropDragging(null); }}>Close</button>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setCropAssistSlot(null); setCropDragging(null); setCornerDragging(null); }}>Close</button>
             </div>
             <div style={cropControlsStyle}>
               <button type="button" className="btn btn-ghost btn-sm" onClick={() => updateCropZoom(cropAssistSlot, Math.max(1, (cropStateBySlot[cropAssistSlot]?.zoom ?? 1) - 0.25))}>-</button>
@@ -1649,6 +1687,7 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                 backgroundPosition: `${cropBackgroundPosition(cropStateBySlot[cropAssistSlot] ?? buildDefaultCropState()).x}% ${cropBackgroundPosition(cropStateBySlot[cropAssistSlot] ?? buildDefaultCropState()).y}%`,
               }}
               onMouseDown={(event) => {
+                if (cornerDragging) return;
                 const current = cropStateBySlot[cropAssistSlot] ?? buildDefaultCropState();
                 setCropDragging({
                   slot: cropAssistSlot,
@@ -1659,8 +1698,19 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                 });
               }}
               onMouseMove={(event) => {
-                if (!cropDragging || cropDragging.slot !== cropAssistSlot || !cropViewportRef.current) return;
+                if (!cropViewportRef.current) return;
                 const rect = cropViewportRef.current.getBoundingClientRect();
+                if (cornerDragging && cornerDragging.slot === cropAssistSlot) {
+                  const current = cropStateBySlot[cropAssistSlot] ?? buildDefaultCropState();
+                  const nextPoint = viewportEventToFramePoint(event.clientX, event.clientY, rect, current.crop_rect_normalized);
+                  setManualChartCornersBySlot((prev) => {
+                    const base = [...(prev[cropAssistSlot] ?? calibrationBySlot[cropAssistSlot]?.chart_corners ?? buildDefaultChartCorners(current.crop_rect_normalized))];
+                    base[cornerDragging.cornerIndex] = nextPoint;
+                    return { ...prev, [cropAssistSlot]: orderCalibrationCorners(base) };
+                  });
+                  return;
+                }
+                if (!cropDragging || cropDragging.slot !== cropAssistSlot) return;
                 const current = cropStateBySlot[cropAssistSlot] ?? buildDefaultCropState();
                 const visible = 1 / current.zoom;
                 const maxOffset = Math.max(0, 1 - visible);
@@ -1675,16 +1725,26 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                   ),
                 }));
               }}
-              onMouseUp={() => setCropDragging(null)}
-              onMouseLeave={() => setCropDragging(null)}
+              onMouseUp={() => { setCropDragging(null); setCornerDragging(null); }}
+              onMouseLeave={() => { setCropDragging(null); setCornerDragging(null); }}
             >
               <div style={cropViewportMaskStyle} />
               <div style={cropViewportBoxStyle} />
+              <EditableCalibrationOverlay
+                cropState={cropStateBySlot[cropAssistSlot] ?? buildDefaultCropState()}
+                corners={manualChartCornersBySlot[cropAssistSlot] ?? calibrationBySlot[cropAssistSlot]?.chart_corners ?? buildDefaultChartCorners((cropStateBySlot[cropAssistSlot] ?? buildDefaultCropState()).crop_rect_normalized)}
+                onCornerMouseDown={(cornerIndex, event) => {
+                  event.stopPropagation();
+                  setCropDragging(null);
+                  setCornerDragging({ slot: cropAssistSlot, cornerIndex });
+                }}
+              />
             </div>
+            <div style={modalMetaStyle}>Drag the frame to zoom/reposition, then drag the 4 corner handles to fit the chart exactly.</div>
             <div style={modalActionsStyle}>
-              <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setCropAssistSlot(null); setCropDragging(null); }}>Cancel</button>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setCropAssistSlot(null); setCropDragging(null); setCornerDragging(null); }}>Cancel</button>
               <button type="button" className="btn btn-secondary btn-sm" onClick={() => void confirmCropAssist(cropAssistSlot)}>
-                Use crop
+                Recalibrate from fit
               </button>
             </div>
           </div>
@@ -1785,6 +1845,46 @@ function cropBackgroundPosition(cropState: CalibrationCropState) {
   };
 }
 
+function buildDefaultChartCorners(cropRect: CalibrationCropRectNormalized): CalibrationPoint[] {
+  const insetX = cropRect.width * 0.08;
+  const insetY = cropRect.height * 0.08;
+  return [
+    { x: clamp(cropRect.x + insetX, 0, 1), y: clamp(cropRect.y + insetY, 0, 1) },
+    { x: clamp(cropRect.x + cropRect.width - insetX, 0, 1), y: clamp(cropRect.y + insetY, 0, 1) },
+    { x: clamp(cropRect.x + cropRect.width - insetX, 0, 1), y: clamp(cropRect.y + cropRect.height - insetY, 0, 1) },
+    { x: clamp(cropRect.x + insetX, 0, 1), y: clamp(cropRect.y + cropRect.height - insetY, 0, 1) },
+  ];
+}
+
+function orderCalibrationCorners(corners: CalibrationPoint[]) {
+  if (corners.length !== 4) return corners;
+  const sorted = [...corners].sort((a, b) => (a.x + a.y) - (b.x + b.y));
+  const [topLeft, , , bottomRight] = sorted;
+  const remaining = [sorted[1], sorted[2]].sort((a, b) => (a.y - a.x) - (b.y - b.x));
+  return [topLeft, remaining[0], bottomRight, remaining[1]];
+}
+
+function framePointToCropViewport(point: CalibrationPoint, cropRect: CalibrationCropRectNormalized) {
+  const relativeX = (point.x - cropRect.x) / Math.max(cropRect.width, 0.0001);
+  const relativeY = (point.y - cropRect.y) / Math.max(cropRect.height, 0.0001);
+  if (relativeX < 0 || relativeX > 1 || relativeY < 0 || relativeY > 1) return null;
+  return { x: relativeX, y: relativeY };
+}
+
+function viewportEventToFramePoint(
+  clientX: number,
+  clientY: number,
+  rect: DOMRect,
+  cropRect: CalibrationCropRectNormalized,
+): CalibrationPoint {
+  const relativeX = clamp((clientX - rect.left) / Math.max(rect.width, 1), 0, 1);
+  const relativeY = clamp((clientY - rect.top) / Math.max(rect.height, 1), 0, 1);
+  return {
+    x: clamp(cropRect.x + relativeX * cropRect.width, 0, 1),
+    y: clamp(cropRect.y + relativeY * cropRect.height, 0, 1),
+  };
+}
+
 function buildMatchActions({
   heroSlot,
   analyses,
@@ -1840,12 +1940,8 @@ function buildMatchActions({
     return { cards, action: { kind: "recalibrate", label: "Retry Calibration", slot: recalibrateSlot } };
   }
 
-  const lutSlot = cards.find((card) => calibrationBySlot[card.slot]?.lut_path)?.slot;
-  if (lutSlot) {
-    return { cards, action: { kind: "lut", label: "Proceed to LUT Export", slot: lutSlot } };
-  }
   if (analyses.length > 0) {
-    return { cards, action: { kind: "export", label: "Export Results" } };
+    return { cards, action: { kind: "export", label: "Export Match Sheet" } };
   }
   if (selectedSlots.length > 0) {
     return { cards, action: { kind: "analyze", label: "Re-check Match" } };
@@ -1871,6 +1967,12 @@ function buildCalibrationRecoveryActions(slot: string, details: string) {
     items.push({
       label: "Keep chart flat",
       reason: `Camera ${slot} should see a cleaner rectangle with less angle and perspective distortion.`,
+    });
+  }
+  if (detailText.includes("best rectangularity")) {
+    items.push({
+      label: "Isolate chart edges",
+      reason: `Camera ${slot} should frame the chart with cleaner border separation so calibration can lock the full rectangle.`,
     });
   }
   if (detailText.includes("candidate count: 0") || detailText.includes("below threshold")) {
@@ -2303,6 +2405,51 @@ function CalibrationOverlay({ calibration }: { calibration: CalibrationChartDete
   );
 }
 
+function EditableCalibrationOverlay({
+  cropState,
+  corners,
+  onCornerMouseDown,
+}: {
+  cropState: CalibrationCropState;
+  corners: CalibrationPoint[];
+  onCornerMouseDown: (cornerIndex: number, event: React.MouseEvent<HTMLButtonElement>) => void;
+}) {
+  const orderedCorners = orderCalibrationCorners(corners);
+  const viewportCorners = orderedCorners
+    .map((corner) => framePointToCropViewport(corner, cropState.crop_rect_normalized))
+    .filter((corner) => corner != null);
+  const polygon = viewportCorners
+    .map((corner) => `${corner.x * 100},${corner.y * 100}`)
+    .join(" ");
+
+  return (
+    <>
+      {viewportCorners.length === 4 ? (
+        <svg viewBox="0 0 100 100" preserveAspectRatio="none" style={editableCalibrationOverlaySvgStyle}>
+          <polygon points={polygon} fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.92)" strokeWidth="0.45" />
+        </svg>
+      ) : null}
+      {orderedCorners.map((corner, cornerIndex) => {
+        const mapped = framePointToCropViewport(corner, cropState.crop_rect_normalized);
+        if (!mapped) return null;
+        return (
+          <button
+            key={`${cornerIndex}:${corner.x}:${corner.y}`}
+            type="button"
+            aria-label={`Move chart corner ${cornerIndex + 1}`}
+            style={{
+              ...editableCornerHandleStyle,
+              left: `${mapped.x * 100}%`,
+              top: `${mapped.y * 100}%`,
+            }}
+            onMouseDown={(event) => onCornerMouseDown(cornerIndex, event)}
+          />
+        );
+      })}
+    </>
+  );
+}
+
 function PatchDeltaSwatch({ patch }: { patch: CalibrationChartDetection["patch_samples"][number] }) {
   return (
     <div style={patchSwatchStyle}>
@@ -2438,8 +2585,6 @@ function buildDecisionSummary({
     action = { kind: "proxy", label: "Apply Proxy" };
   } else if (!calibration?.chart_detected && rawAnalysis.representative_frame_path) {
     action = { kind: "recalibrate", label: "Retry Calibration" };
-  } else if (calibration?.chart_detected && calibration.lut_path && slot !== heroSlot) {
-    action = { kind: "lut", label: "Proceed to LUT Export" };
   } else if (!calibration?.chart_detected) {
     action = { kind: "signal", label: "Proceed with Signal Match" };
   } else {
@@ -2656,9 +2801,7 @@ function deriveExposureAction(rawAnalysis: CameraMatchAnalysisResult, analysis: 
 function formatRunTimestamp(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString([], {
-    month: "short",
-    day: "numeric",
+  return date.toLocaleTimeString([], {
     hour: "2-digit",
     minute: "2-digit",
   });
@@ -2868,6 +3011,8 @@ const cropSliderStyle: React.CSSProperties = { flex: "1 1 220px" };
 const cropViewportStyle: React.CSSProperties = { position: "relative", width: "100%", borderRadius: 16, overflow: "hidden", border: "1px solid rgba(255,255,255,0.08)", backgroundColor: "#07090c", backgroundRepeat: "no-repeat", cursor: "grab" };
 const cropViewportMaskStyle: React.CSSProperties = { position: "absolute", inset: 0, boxShadow: "inset 0 0 0 9999px rgba(5,8,12,0.26)", pointerEvents: "none" };
 const cropViewportBoxStyle: React.CSSProperties = { position: "absolute", inset: 0, border: "2px solid rgba(255,255,255,0.78)", borderRadius: 14, boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.18)", pointerEvents: "none" };
+const editableCalibrationOverlaySvgStyle: React.CSSProperties = { position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" };
+const editableCornerHandleStyle: React.CSSProperties = { position: "absolute", width: 16, height: 16, borderRadius: 999, border: "2px solid rgba(255,255,255,0.95)", background: "rgba(251,191,36,0.92)", boxShadow: "0 0 0 4px rgba(251,191,36,0.18)", transform: "translate(-50%, -50%)", cursor: "move" };
 const inlineWarningStyle: React.CSSProperties = { marginBottom: 10, color: "rgba(251,191,36,0.94)", fontSize: "0.78rem" };
 const metricsWrapStyle: React.CSSProperties = { display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 10 };
 const falseColorLegendStyle: React.CSSProperties = { display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 10 };
