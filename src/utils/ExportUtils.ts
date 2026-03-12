@@ -18,6 +18,7 @@ interface ExportOptions {
   brandName?: string;
   appVersion?: string;
   onWarning?: (message: string) => void;
+  shuffle?: boolean;
 }
 
 interface MosaicAsset {
@@ -100,33 +101,52 @@ async function collectMosaicAssets(
   jumpSeconds: number,
   onWarning?: (message: string) => void,
   cacheKeyContext?: string,
+  shuffle?: boolean,
 ): Promise<MosaicAsset[]> {
   const assets: MosaicAsset[] = [];
   let skipped = 0;
 
   for (const clip of clips) {
-    const firstThumb = getDisplayedThumbsForClip({
+    const displayedThumbs = getDisplayedThumbsForClip({
       clipId: clip.id,
       thumbnails: thumbnailsByClipId[clip.id] ?? [],
       thumbnailCache,
       thumbCount,
       jumpSeconds,
       cacheKeyContext,
-    })[0]?.src;
-    if (!firstThumb) {
+    });
+    
+    if (displayedThumbs.length === 0) {
       skipped += 1;
       continue;
     }
-    const dataUrl = await readThumbAsDataUrl(firstThumb);
-    if (!dataUrl) {
-      skipped += 1;
-      continue;
+    
+    let clipThumbsAdded = 0;
+    for (const thumb of displayedThumbs) {
+      const src = thumb.src;
+      if (!src) continue;
+      
+      const dataUrl = await readThumbAsDataUrl(src);
+      if (!dataUrl) continue;
+      
+      assets.push({ clip, dataUrl });
+      clipThumbsAdded++;
     }
-    assets.push({ clip, dataUrl });
+    
+    if (clipThumbsAdded === 0) {
+      skipped += 1;
+    }
   }
 
   if (skipped > 0) {
     onWarning?.("Some clips had no thumbnails yet and were skipped.");
+  }
+  
+  if (shuffle) {
+    for (let i = assets.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [assets[i], assets[j]] = [assets[j], assets[i]];
+    }
   }
 
   return assets;
@@ -496,20 +516,35 @@ export async function exportImage(options: ExportOptions): Promise<boolean> {
 }
 
 export async function exportMosaicImage(options: ExportOptions): Promise<boolean> {
-  const { projectName, clips, thumbnailsByClipId, thumbnailCache, thumbCount, jumpSeconds, onWarning, cacheKeyContext } = options;
-  const assets = await collectMosaicAssets(clips, thumbnailsByClipId, thumbnailCache, thumbCount, jumpSeconds, onWarning, cacheKeyContext);
+  const { projectName, clips, thumbnailsByClipId, thumbnailCache, thumbCount, jumpSeconds, onWarning, cacheKeyContext, shuffle } = options;
+  const assets = await collectMosaicAssets(clips, thumbnailsByClipId, thumbnailCache, thumbCount, jumpSeconds, onWarning, cacheKeyContext, shuffle);
   if (assets.length === 0) {
     onWarning?.("Some clips had no thumbnails yet and were skipped.");
     return false;
   }
 
-  const pages = chunkArray(assets, 25);
+  const pages = chunkArray(assets, 100);
+  let baseFilePath: string | null = null;
+
   for (let pageIndex = 0; pageIndex < pages.length; pageIndex += 1) {
-    const filePath = await save({
-      filters: [{ name: "Image", extensions: ["jpeg"] }],
-      defaultPath: `${projectName}_Mosaic${pages.length > 1 ? `_p${pageIndex + 1}` : ""}.jpeg`,
-    });
-    if (!filePath) return false;
+    let filePath: string | null = null;
+
+    if (pageIndex === 0) {
+      filePath = await save({
+        filters: [{ name: "Image", extensions: ["jpeg"] }],
+        defaultPath: `${projectName}_Mosaic.jpeg`,
+      });
+      if (!filePath) return false;
+      baseFilePath = filePath;
+    } else if (baseFilePath) {
+      // For subsequent pages, derive the name from the first one
+      const extIndex = baseFilePath.lastIndexOf(".");
+      const base = extIndex !== -1 ? baseFilePath.substring(0, extIndex) : baseFilePath;
+      const ext = extIndex !== -1 ? baseFilePath.substring(extIndex) : ".jpeg";
+      filePath = `${base}_p${pageIndex + 1}${ext}`;
+    }
+
+    if (!filePath) continue;
 
     const pageAssets = pages[pageIndex];
     const grid = getMosaicGrid(pageAssets.length);
@@ -542,14 +577,14 @@ export async function exportMosaicImage(options: ExportOptions): Promise<boolean
 }
 
 export async function exportMosaicPdf(options: ExportOptions): Promise<boolean> {
-  const { projectName, clips, thumbnailsByClipId, thumbnailCache, thumbCount, jumpSeconds, onWarning, cacheKeyContext } = options;
+  const { projectName, clips, thumbnailsByClipId, thumbnailCache, thumbCount, jumpSeconds, onWarning, cacheKeyContext, shuffle } = options;
   const filePath = await save({
     filters: [{ name: "PDF Document", extensions: ["pdf"] }],
     defaultPath: `${projectName}_Mosaic.pdf`,
   });
   if (!filePath) return false;
 
-  const assets = await collectMosaicAssets(clips, thumbnailsByClipId, thumbnailCache, thumbCount, jumpSeconds, onWarning, cacheKeyContext);
+  const assets = await collectMosaicAssets(clips, thumbnailsByClipId, thumbnailCache, thumbCount, jumpSeconds, onWarning, cacheKeyContext, shuffle);
   if (assets.length === 0) {
     onWarning?.("Some clips had no thumbnails yet and were skipped.");
     return false;
@@ -560,7 +595,7 @@ export async function exportMosaicPdf(options: ExportOptions): Promise<boolean> 
   const pageH = 210;
   const margin = 10;
   const gap = 3;
-  const pages = chunkArray(assets, 25);
+  const pages = chunkArray(assets, 144);
 
   for (let pageIndex = 0; pageIndex < pages.length; pageIndex += 1) {
     if (pageIndex > 0) pdf.addPage();
@@ -618,10 +653,18 @@ function drawSquareTile(
 }
 
 function getMosaicGrid(count: number): number {
+  if (count <= 1) return 1;
   if (count <= 4) return 2;
   if (count <= 9) return 3;
   if (count <= 16) return 4;
-  return 5;
+  if (count <= 25) return 5;
+  if (count <= 36) return 6;
+  if (count <= 49) return 7;
+  if (count <= 64) return 8;
+  if (count <= 81) return 9;
+  if (count <= 100) return 10;
+  if (count <= 121) return 11;
+  return 12;
 }
 
 function chunkArray<T>(arr: T[], size: number): T[][] {

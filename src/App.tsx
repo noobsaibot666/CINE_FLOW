@@ -30,6 +30,7 @@ import { JobsPanel } from "./components/JobsPanel";
 import { AboutPanel } from "./components/AboutPanel";
 import { FolderCreator } from "./components/FolderCreator";
 import { ReviewCore } from "./components/ReviewCore";
+import { MosaicBuilder } from "./components/MosaicBuilder";
 import { TourGuide, TourStep } from "./components/TourGuide";
 import { exportPdf, exportImage, exportMosaicImage, exportMosaicPdf } from "./utils/ExportUtils";
 import appLogo from "./assets/Icon_square_rounded.svg";
@@ -466,7 +467,7 @@ function AppContent() {
   }, [safeInvoke]);
 
   // State for delayed actions
-  const [postScanTab, setPostScanTab] = useState<"preproduction" | "shot-planner" | "media-workspace" | "clip-review" | "scene-blocks" | "contact" | "blocks" | "all" | null>(null);
+  const [postScanTab, setPostScanTab] = useState<"preproduction" | "shot-planner" | "mosaic-builder" | "media-workspace" | "clip-review" | "scene-blocks" | "contact" | "blocks" | "all" | null>(null);
 
   const [projectLut, setProjectLut] = useState<{ path: string; name: string; hash: string } | null>(null);
   const [lutRenderNonce, setLutRenderNonce] = useState(0);
@@ -600,9 +601,9 @@ function AppContent() {
 
   useEffect(() => {
     if (projectId && postScanTab) {
-      if (postScanTab === "preproduction" || postScanTab === "shot-planner") {
+      if (postScanTab === "preproduction" || postScanTab === "shot-planner" || postScanTab === "mosaic-builder") {
         setActiveTab("preproduction");
-        setActivePreproductionApp("shot-planner");
+        setActivePreproductionApp(postScanTab === "preproduction" ? "shot-planner" : postScanTab);
       } else if (postScanTab === "media-workspace" || postScanTab === "clip-review") {
         setActiveTab("media-workspace");
         setActiveMediaWorkspaceApp("clip-review");
@@ -757,7 +758,7 @@ function AppContent() {
     localStorage.setItem("wp_recent_projects", JSON.stringify(next));
   }, []);
 
-  const handleSelectFolder = useCallback(async (targetTab?: "preproduction" | "shot-planner" | "media-workspace" | "clip-review" | "scene-blocks" | "contact" | "blocks" | "all") => {
+  const handleSelectFolder = useCallback(async (targetTab?: "preproduction" | "shot-planner" | "mosaic-builder" | "media-workspace" | "clip-review" | "scene-blocks" | "contact" | "blocks" | "all") => {
     const selected = await open({
       directory: true,
       multiple: false,
@@ -766,7 +767,7 @@ function AppContent() {
 
     if (!selected) return;
 
-    const targetPhase: Phase = (targetTab === "preproduction" || targetTab === "shot-planner") ? "pre" : "post";
+    const targetPhase: Phase = (targetTab === "preproduction" || targetTab === "shot-planner" || targetTab === "mosaic-builder") ? "pre" : "post";
 
     setPhaseState(targetPhase, { scanning: true, projectId: null, clips: [] });
     if (targetTab) setPostScanTab(targetTab);
@@ -929,7 +930,7 @@ function AppContent() {
     return null;
   }, [effectiveLookbookSortMode]);
 
-  const runExport = useCallback(async (kind: "pdf" | "image" | "mosaic-pdf" | "mosaic-image") => {
+  const runExport = useCallback(async (kind: "pdf" | "image" | "mosaic-pdf" | "mosaic-image", options?: { shuffle?: boolean }) => {
     const exportClips = getExportClips();
     if (exportClips.length === 0) {
       alert("Please select at least one clip to export.");
@@ -940,7 +941,7 @@ function AppContent() {
       setPreparingExport({ kind, message: kind === "image" ? "Generating contact sheet image..." : "Generating mosaic image..." });
       try {
         const exporter = kind === "image" ? exportImage : exportMosaicImage;
-        await exporter({
+        const payload: any = {
           projectName: projectName || "ContactSheet",
           clips: exportClips,
           thumbnailsByClipId,
@@ -951,8 +952,10 @@ function AppContent() {
           projectLutHash: projectLut?.hash || null,
           brandName: brandProfile?.name,
           appVersion: appInfo?.version || "unknown",
-          onWarning: (message) => setUiError({ title: "Export branding fallback", hint: message }),
-        });
+          onWarning: (message: string) => setUiError({ title: "Export branding fallback", hint: message }),
+        };
+        if (options?.shuffle !== undefined) payload.shuffle = options.shuffle;
+        await exporter(payload);
         setUiError(null);
       } catch (err) {
         console.error(err);
@@ -969,7 +972,7 @@ function AppContent() {
     setPreparingExport({ kind, message: kind === "pdf" ? "Generating PDF contact sheet..." : "Generating mosaic PDF..." });
     try {
       const exporter = kind === "pdf" ? exportPdf : exportMosaicPdf;
-      await exporter({
+      const payload: any = {
         projectName: projectName || "ContactSheet",
         clips: exportClips,
         thumbnailsByClipId,
@@ -980,8 +983,10 @@ function AppContent() {
         projectLutHash: projectLut?.hash || null,
         brandName: brandProfile?.name,
         appVersion: appInfo?.version || "unknown",
-        onWarning: (message) => setUiError({ title: "Export branding fallback", hint: message }),
-      });
+        onWarning: (message: string) => setUiError({ title: "Export branding fallback", hint: message }),
+      };
+      if (options?.shuffle !== undefined) payload.shuffle = options.shuffle;
+      await exporter(payload);
       setUiError(null);
     } catch (err) {
       console.error(err);
@@ -1397,7 +1402,23 @@ function AppContent() {
               </div>
             )}
             {activeTab === 'preproduction' ? (
-              activePreproductionApp === 'shot-planner' ? (
+              activePreproductionApp === 'mosaic-builder' ? (
+                <MosaicBuilder
+                  clips={clips}
+                  thumbnailCache={thumbnailCache}
+                  selectedIds={selectedClipIds}
+                  onToggleSelection={toggleClipSelection}
+                  onToggleSelectAll={() => toggleSelectAll(clips.filter(c => c.clip.flag !== "reject").map(c => c.clip.id))}
+                  thumbCount={thumbCount}
+                  onSetThumbCount={setThumbCount}
+                  jumpSeconds={selectedJumpSeconds}
+                  cacheKeyContext={thumbCacheContext}
+                  onExportPdf={(options) => runExport("mosaic-pdf", options)}
+                  onExportImage={(options) => runExport("mosaic-image", options)}
+                  onLoadFootage={() => handleSelectFolder("mosaic-builder")}
+                  scanning={projectStates.pre.scanning || false}
+                />
+              ) : activePreproductionApp === 'shot-planner' ? (
                 projectId ? (
                   <div className="media-workspace">
                     <div className="stats-bar" style={{ background: "var(--inspector-bg)", borderBottom: "var(--inspector-border)", backdropFilter: "var(--inspector-glass-blur)" }}>
@@ -1598,6 +1619,20 @@ function AppContent() {
                         <div className="module-info">
                           <h3>Folder Creator</h3>
                           <p>Generate sophisticated folder structures for multi-platform use.</p>
+                          <span className="module-action">Open App <ArrowRight size={14} /></span>
+                        </div>
+                      </div>
+                      <div
+                        className="module-card premium-card"
+                        onClick={() => {
+                          if (projectStates.pre.projectId) setActivePreproductionApp('mosaic-builder');
+                          else handleSelectFolder('mosaic-builder');
+                        }}
+                      >
+                        <div className="module-icon"><LayoutGrid size={20} strokeWidth={1.5} /></div>
+                        <div className="module-info">
+                          <h3>Grid Mosaic</h3>
+                          <p>Generate large multi-frame image grids and PDF sheets from clip thumbnails.</p>
                           <span className="module-action">Open App <ArrowRight size={14} /></span>
                         </div>
                       </div>
