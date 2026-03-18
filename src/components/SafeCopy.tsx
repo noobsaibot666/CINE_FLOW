@@ -443,7 +443,7 @@ export function SafeCopy({ projectId, onJobCreated, onError }: SafeCopyProps) {
                   <span>{Math.round(percent)}%</span>
                 </div>
                 <div className="progress-bar-wrapper">
-                  <div className="progress-bar-fill" style={{ width: `${percent}%`, background: "var(--status-blue)" }} />
+                  <div className="progress-bar-fill" style={{ width: `${percent}%`, background: "var(--phase-postproduction)" }} />
                 </div>
               </div>
             )}

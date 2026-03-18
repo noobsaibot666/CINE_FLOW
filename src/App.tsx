@@ -21,6 +21,7 @@ import {
   Image,
   XCircle,
   FileSearch,
+  ClipboardCheck,
 } from "lucide-react";
 import { ClipList } from "./components/ClipList";
 import { PrintLayout } from "./components/PrintLayout";
@@ -33,6 +34,7 @@ import { FolderCreator } from "./components/FolderCreator";
 import { ReviewCore } from "./components/ReviewCore";
 import { MosaicBuilder } from "./components/MosaicBuilder";
 import { DuplicateFinderApp } from "./components/DuplicateFinderApp";
+import StarterSetup from "./components/PreProduction/StarterSetup";
 import { TourGuide, TourStep } from "./components/TourGuide";
 import { exportPdf, exportImage, exportMosaicImage, exportMosaicPdf } from "./utils/ExportUtils";
 import appLogo from "./assets/Icon_square_rounded.svg";
@@ -1596,15 +1598,41 @@ function AppContent() {
                 <div className="scrollable-view">
                   <DuplicateFinderApp />
                 </div>
+              ) : activePreproductionApp === 'starter-setup' ? (
+                <div className="scrollable-view">
+                  <StarterSetup onBack={() => setActivePreproductionApp(null)} />
+                </div>
               ) : (
                 <div className="scrollable-view">
-                  <div className="onboarding-container postproduction-launcher">
+                  <div className="onboarding-container preproduction-launcher">
                     <div className="onboarding-header">
                       <span className="onboarding-eyebrow">Module</span>
                       <h1>Pre-production</h1>
                       <p>Plan your shoot and organize your project structure.</p>
                     </div>
                     <div className="onboarding-grid onboarding-grid-root">
+                      <div
+                        className="module-card premium-card"
+                        onClick={() => setActivePreproductionApp('folder-creator')}
+                      >
+                        <div className="module-icon"><FolderTree size={20} strokeWidth={1.5} /></div>
+                        <div className="module-info">
+                          <h3>Folder Creator</h3>
+                          <p>Generate sophisticated folder structures for multi-platform use.</p>
+                          <span className="module-action">Open App <ArrowRight size={14} /></span>
+                        </div>
+                      </div>
+                      <div
+                        className="module-card premium-card"
+                        onClick={() => setActivePreproductionApp('starter-setup')}
+                      >
+                        <div className="module-icon"><ClipboardCheck size={20} strokeWidth={1.5} /></div>
+                        <div className="module-info">
+                          <h3>Starter Setup</h3>
+                          <p>Get a safe technical starting setup sheet for your shoot instantly.</p>
+                          <span className="module-action">Open App <ArrowRight size={14} /></span>
+                        </div>
+                      </div>
                       <div
                         className="module-card premium-card"
                         onClick={() => {
@@ -1621,17 +1649,6 @@ function AppContent() {
                       </div>
                       <div
                         className="module-card premium-card"
-                        onClick={() => setActivePreproductionApp('folder-creator')}
-                      >
-                        <div className="module-icon"><FolderTree size={20} strokeWidth={1.5} /></div>
-                        <div className="module-info">
-                          <h3>Folder Creator</h3>
-                          <p>Generate sophisticated folder structures for multi-platform use.</p>
-                          <span className="module-action">Open App <ArrowRight size={14} /></span>
-                        </div>
-                      </div>
-                      <div
-                        className="module-card premium-card"
                         onClick={() => {
                           if (projectStates.pre.projectId) setActivePreproductionApp('mosaic-builder');
                           else handleSelectFolder('mosaic-builder');
@@ -1643,7 +1660,7 @@ function AppContent() {
                           <p>Generate large multi-frame image grids and PDF sheets from clip thumbnails.</p>
                           <span className="module-action">Open App <ArrowRight size={14} /></span>
                         </div>
-                        </div>
+                      </div>
                       <div
                         className="module-card premium-card"
                         onClick={() => setActivePreproductionApp('duplicate-finder')}
@@ -1814,7 +1831,7 @@ function AppContent() {
                 </div>
               ) : (
                 <div className="scrollable-view">
-                  <div className="onboarding-container">
+                  <div className="onboarding-container postproduction-launcher">
                     <div className="onboarding-header">
                       <h1>Media Workspace</h1>
                       <p>Post-production suite for media verification and organization.</p>

@@ -391,9 +391,9 @@ export function FolderCreator() {
 
       {(statusMessage || errorMessage) && (
         <div className={`folder-creator-status ${errorMessage ? "error" : "success"}`} style={{
-          background: errorMessage ? "rgba(239, 68, 68, 0.1)" : "rgba(0, 209, 255, 0.05)",
-          border: `1px solid ${errorMessage ? "rgba(239, 68, 68, 0.2)" : "rgba(0, 209, 255, 0.1)"}`,
-          color: errorMessage ? "var(--status-red)" : "var(--color-accent)"
+          background: errorMessage ? "rgba(239, 68, 68, 0.1)" : "rgba(125, 211, 252, 0.05)",
+          border: `1px solid ${errorMessage ? "rgba(239, 68, 68, 0.2)" : "rgba(125, 211, 252, 0.1)"}`,
+          color: errorMessage ? "var(--status-red)" : "var(--phase-preproduction)"
         }}>
           {errorMessage || statusMessage}
         </div>
@@ -456,8 +456,8 @@ export function FolderCreator() {
         }
 
         .accent-badge {
-            background: var(--color-accent-soft);
-            color: var(--color-accent);
+            background: var(--phase-preproduction-soft);
+            color: var(--phase-preproduction);
             font-size: var(--inspector-label-size);
             font-weight: var(--inspector-label-weight);
             letter-spacing: var(--inspector-label-spacing);
@@ -466,7 +466,7 @@ export function FolderCreator() {
             width: fit-content;
             margin-bottom: 12px;
             text-transform: uppercase;
-            border: 1px solid var(--color-accent-glow);
+            border: 1px solid var(--phase-preproduction-glow);
         }
 
         .folder-creator-header h2 {
@@ -534,8 +534,8 @@ export function FolderCreator() {
         }
 
         .root-node {
-            background: rgba(0, 209, 255, 0.04);
-            border-color: rgba(0, 209, 255, 0.1);
+            background: var(--phase-preproduction-soft);
+            border-color: var(--phase-preproduction-glow);
         }
 
         @keyframes nodeFade {
@@ -557,7 +557,7 @@ export function FolderCreator() {
         }
 
         .folder-node-icon.folder-kind {
-          color: var(--color-accent);
+          color: var(--phase-preproduction);
         }
 
         .folder-node-icon.file-kind {
@@ -630,7 +630,7 @@ export function FolderCreator() {
         }
 
         .btn-glow:hover {
-            box-shadow: 0 0 20px var(--color-accent-glow);
+            box-shadow: 0 0 20px var(--phase-preproduction-glow);
         }
 
         .btn-glass {

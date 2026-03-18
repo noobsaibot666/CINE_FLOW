@@ -48,9 +48,9 @@
   --phase-production: var(--color-accent);
   --phase-production-soft: var(--color-accent-soft);
   --phase-production-glow: var(--color-accent-glow);
-  --phase-postproduction: #f4d35e;
-  --phase-postproduction-soft: rgba(244, 211, 94, 0.14);
-  --phase-postproduction-glow: rgba(244, 211, 94, 0.18);
+  --phase-postproduction: #f97316;
+  --phase-postproduction-soft: rgba(249, 115, 22, 0.14);
+  --phase-postproduction-glow: rgba(249, 115, 22, 0.2);
 
   /* Spacing */
   --space-xs: 4px;
@@ -3666,8 +3666,20 @@ body {
   max-width: 980px;
 }
 
+.preproduction-launcher .onboarding-header {
+  padding-top: 18px;
+}
+
+.preproduction-launcher .module-action {
+  color: var(--phase-preproduction);
+}
+
 .postproduction-launcher .onboarding-header {
   padding-top: 18px;
+}
+
+.postproduction-launcher .module-action {
+  color: var(--phase-postproduction);
 }
 
 .postproduction-apps-grid {
@@ -3884,6 +3896,14 @@ body {
 .premium-card:hover .module-action {
   color: var(--card-accent, var(--color-accent));
   transform: translateX(4px);
+}
+
+.preproduction-launcher .premium-card:hover .module-action {
+  color: var(--phase-preproduction);
+}
+
+.postproduction-launcher .premium-card:hover .module-action {
+  color: var(--phase-postproduction);
 }
 
 @media (prefers-reduced-motion: reduce) {

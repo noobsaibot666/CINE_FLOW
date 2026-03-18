@@ -447,8 +447,8 @@ export function DuplicateFinderApp() {
         }
 
         .accent-badge {
-          background: var(--color-accent-soft);
-          color: var(--color-accent);
+          background: var(--phase-preproduction-soft);
+          color: var(--phase-preproduction);
           font-size: var(--inspector-label-size);
           font-weight: var(--inspector-label-weight);
           letter-spacing: var(--inspector-label-spacing);
@@ -457,7 +457,7 @@ export function DuplicateFinderApp() {
           width: fit-content;
           margin-bottom: 12px;
           text-transform: uppercase;
-          border: 1px solid var(--color-accent-glow);
+          border: 1px solid var(--phase-preproduction-glow);
         }
 
         .duplicate-finder-workspace {
@@ -519,7 +519,7 @@ export function DuplicateFinderApp() {
 
         .folder-tag:hover {
           background: rgba(255, 255, 255, 0.06);
-          border-color: var(--color-accent-soft);
+          border-color: var(--phase-preproduction-soft);
         }
 
         .folder-path {
@@ -571,7 +571,7 @@ export function DuplicateFinderApp() {
         }
 
         .stat-item value.highlight {
-          color: var(--color-accent);
+          color: var(--phase-preproduction);
         }
 
         .results-list {
@@ -660,7 +660,7 @@ export function DuplicateFinderApp() {
         }
 
         .file-icon {
-          color: var(--color-accent);
+          color: var(--phase-preproduction);
           opacity: 0.6;
         }
 
@@ -692,7 +692,7 @@ export function DuplicateFinderApp() {
           gap: 6px;
           background: rgba(0, 209, 255, 0.05);
           border: 1px solid rgba(0, 209, 255, 0.1);
-          color: var(--color-accent);
+          color: var(--phase-preproduction);
           padding: 4px 10px;
           border-radius: 4px;
           font-size: 0.8rem;
@@ -702,9 +702,9 @@ export function DuplicateFinderApp() {
         }
 
         .btn-browse:hover {
-          background: var(--color-accent);
+          background: var(--phase-preproduction);
           color: white;
-          border-color: var(--color-accent);
+          border-color: var(--phase-preproduction);
         }
 
         .loading-state, .empty-state-large {
@@ -737,7 +737,7 @@ export function DuplicateFinderApp() {
           align-items: center;
           justify-content: center;
           margin-bottom: 24px;
-          color: var(--color-accent);
+          color: var(--phase-preproduction);
           opacity: 0.4;
         }
 
@@ -805,7 +805,7 @@ export function DuplicateFinderApp() {
           left: -30%;
           width: 30%;
           height: 100%;
-          background: var(--color-accent);
+          background: var(--phase-preproduction);
           animation: progressIndeterminate 1.5s infinite linear;
         }
 
@@ -824,7 +824,7 @@ export function DuplicateFinderApp() {
 
         .count-badge {
           font-size: 0.8rem;
-          color: var(--color-accent);
+          color: var(--phase-preproduction);
           font-weight: 700;
         }
 

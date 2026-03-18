@@ -187,7 +187,7 @@ export const MosaicBuilder = memo(function MosaicBuilder({
                 onClick={() => {
                   if (!isRejected) onToggleSelection(item.clip.id);
                 }}
-                style={{ cursor: isRejected ? "not-allowed" : "pointer", opacity: isRejected ? 0.6 : 1, "--corner-color": isSelected ? "var(--color-accent-soft)" : "rgba(255,255,255,0.03)", paddingBottom: "12px" } as any}
+                style={{ cursor: isRejected ? "not-allowed" : "pointer", opacity: isRejected ? 0.6 : 1, "--corner-color": isSelected ? "var(--phase-preproduction-soft)" : "rgba(255,255,255,0.03)", paddingBottom: "12px" } as any}
               >
                 <div className="clip-card-header">
                   <div className="clip-card-title-group">
