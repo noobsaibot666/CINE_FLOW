@@ -220,7 +220,7 @@ export const FramePreviewApp: React.FC<FramePreviewAppProps> = ({ project, onBac
     }
   };
 
-  const handleExportRatioWithMedia = async (ratio: RatioType, media: FramePreviewMedia) => {
+  const handleExportRatioWithMedia = async (ratio: RatioType, _media: FramePreviewMedia) => {
     // Note: html-to-image captures what's currently in the DOM.
     // If we want to export multiple DIFFERENT media, we must switch them 
     // or render off-screen. For MVP, we'll assume the user exports the ACTIVE layout.
