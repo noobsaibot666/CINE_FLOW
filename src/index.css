@@ -4420,24 +4420,36 @@ body {
   flex-wrap: nowrap;
 }
 
-.shot-planner-export {
+.shot-planner-export, .shot-planner-export-dropdown {
   position: relative;
   flex-shrink: 0;
 }
 
-.shot-planner-export-menu {
+.shot-planner-export .shot-planner-export-menu,
+.shot-planner-export-dropdown .shot-planner-export-menu {
   position: absolute;
   top: calc(100% + 8px);
   bottom: auto;
   right: 0;
-  min-width: 160px;
+  min-width: 170px;
   padding: 8px;
   border-radius: 12px;
   border: 1px solid rgba(255, 255, 255, 0.08);
-  background: #111215;
+  background: rgba(17, 18, 21, 0.95);
+  backdrop-filter: blur(12px);
   box-shadow: 0 18px 40px rgba(0, 0, 0, 0.42);
   z-index: 120;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-8px);
+  transition: opacity 160ms ease, transform 160ms ease, background-color 160ms ease;
+}
+
+.shot-planner-export:hover .shot-planner-export-menu,
+.shot-planner-export-dropdown:hover .shot-planner-export-menu {
+  opacity: 1;
   pointer-events: auto;
+  transform: translateY(0);
 }
 
 .shot-planner-export-item {

@@ -762,11 +762,20 @@ function AppContent() {
     localStorage.setItem("wp_recent_projects", JSON.stringify(next));
   }, []);
 
-  const handleSelectFolder = useCallback(async (targetTab?: "preproduction" | "shot-planner" | "mosaic-builder" | "media-workspace" | "clip-review" | "scene-blocks" | "contact" | "blocks" | "all") => {
+  const handleLoadFootage = useCallback(async (
+    targetTab?: "preproduction" | "shot-planner" | "mosaic-builder" | "media-workspace" | "clip-review" | "scene-blocks" | "contact" | "blocks" | "all",
+    mode: 'folder' | 'files' = 'folder'
+  ) => {
     const selected = await open({
-      directory: true,
-      multiple: false,
-      title: "Select Footage Folder",
+      directory: mode === 'folder',
+      multiple: mode === 'files',
+      title: mode === 'folder' ? "Select Footage Folder" : "Select Media Files",
+      filters: mode === 'files' ? [
+        {
+          name: "Media Files",
+          extensions: ["mp4", "mov", "mxf", "avi", "mkv", "r3d", "braw", "jpg", "jpeg", "png", "webp", "tiff", "heic"]
+        }
+      ] : undefined
     });
 
     if (!selected) return;
@@ -777,8 +786,16 @@ function AppContent() {
     if (targetTab) setPostScanTab(targetTab);
 
     try {
-      const result = await safeInvoke<ScanResult>("scan_folder", {
-        folderPath: selected,
+      // If mode is files, selected is string | string[]. We want to pass a string or handle the array.
+      // For now, let's pass a special prefix or iterate. 
+      // Actually, let's update scan_folder to handle multiple paths.
+      // But for now, if it's one path, just pass it.
+      
+      const paths = Array.isArray(selected) ? selected : [selected];
+      
+      // We'll call a new scan_media command instead of scan_folder
+      const result = await safeInvoke<ScanResult>("scan_media", {
+        paths,
         phase: targetPhase,
       });
 
@@ -787,14 +804,14 @@ function AppContent() {
 
       setPhaseState(targetPhase, {
         projectId: result.project_id,
-
         projectName: result.project_name,
         clips: result.clips.map((clip) => ({ clip, thumbnails: [] })),
         extracting: true,
         extractProgress: { done: 0, total: result.clip_count }
       });
 
-      addRecentProject(result.project_id, result.project_name, selected as string, targetPhase);
+      // Use the first path as the path for recent projects
+      addRecentProject(result.project_id, result.project_name, paths[0], targetPhase);
 
       safeInvoke("extract_thumbnails", { projectId: result.project_id }).catch(
         (e) => {
@@ -1421,7 +1438,7 @@ function AppContent() {
                   cacheKeyContext={thumbCacheContext}
                   onExportPdf={(options) => runExport("mosaic-pdf", options)}
                   onExportImage={(options) => runExport("mosaic-image", options)}
-                  onLoadFootage={() => handleSelectFolder("mosaic-builder")}
+                  onLoadFootage={() => handleLoadFootage("mosaic-builder")}
                   scanning={projectStates.pre.scanning || false}
                 />
               ) : activePreproductionApp === 'shot-planner' ? (
@@ -1514,10 +1531,23 @@ function AppContent() {
                             </div>
                           )}
                         </div>
-                        <button className="btn btn-secondary btn-sm" onClick={() => handleSelectFolder("shot-planner")} disabled={scanning}>
-                          {scanning ? <div className="spinner" /> : <FolderOpen size={14} />}
-                          <span>{scanning ? "Scanning..." : "Load Footage"}</span>
-                        </button>
+                         <div className="shot-planner-export-dropdown">
+                          <button className="btn btn-secondary btn-sm" onClick={() => handleLoadFootage("shot-planner", "folder")} disabled={scanning}>
+                            {scanning ? <div className="spinner" /> : <FolderOpen size={14} />}
+                            <span>{scanning ? "Scanning..." : "Load..."}</span>
+                            <ChevronDown size={12} style={{ marginLeft: '4px', opacity: 0.5 }} />
+                          </button>
+                          <div className="shot-planner-export-menu">
+                            <button type="button" className="shot-planner-export-item" onClick={() => handleLoadFootage("shot-planner", "folder")}>
+                              <FolderOpen size={14} />
+                              <span>Load Folder</span>
+                            </button>
+                            <button type="button" className="shot-planner-export-item" onClick={() => handleLoadFootage("shot-planner", "files")}>
+                              <Film size={14} />
+                              <span>Load File(s)</span>
+                            </button>
+                          </div>
+                        </div>
                       </div>
                     </div>
 
@@ -1583,7 +1613,7 @@ function AppContent() {
                       <p style={{ color: "var(--text-secondary)", maxWidth: "400px", margin: "0 auto var(--space-md)" }}>
                         Load reference clips to tag shot sizes, movement, and selections before the shoot.
                       </p>
-                      <button className="btn btn-secondary" onClick={() => handleSelectFolder("shot-planner")}>
+                      <button className="btn btn-secondary" onClick={() => handleLoadFootage("shot-planner")}>
                         <FolderOpen size={14} />
                         <span>Load References</span>
                       </button>
@@ -1637,7 +1667,7 @@ function AppContent() {
                         className="module-card premium-card"
                         onClick={() => {
                           if (projectStates.pre.projectId) setActivePreproductionApp('shot-planner');
-                          else handleSelectFolder('shot-planner');
+                          else handleLoadFootage('shot-planner');
                         }}
                       >
                         <div className="module-icon"><Camera size={20} strokeWidth={1.5} /></div>
@@ -1651,7 +1681,7 @@ function AppContent() {
                         className="module-card premium-card"
                         onClick={() => {
                           if (projectStates.pre.projectId) setActivePreproductionApp('mosaic-builder');
-                          else handleSelectFolder('mosaic-builder');
+                          else handleLoadFootage('mosaic-builder');
                         }}
                       >
                         <div className="module-icon"><LayoutGrid size={20} strokeWidth={1.5} /></div>
@@ -1852,7 +1882,7 @@ function AppContent() {
                         className="module-card premium-card"
                         onClick={() => {
                           if (projectId) setActiveMediaWorkspaceApp('clip-review');
-                          else handleSelectFolder("clip-review");
+                          else handleLoadFootage("clip-review");
                         }}
                       >
                         <div className="module-icon"><Camera size={20} strokeWidth={1.5} /></div>

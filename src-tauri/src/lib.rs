@@ -144,6 +144,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::scan_folder,
+            commands::scan_media,
             commands::list_project_roots,
             commands::add_project_root,
             commands::remove_project_root,

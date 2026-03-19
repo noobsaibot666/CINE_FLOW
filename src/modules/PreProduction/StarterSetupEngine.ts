@@ -96,7 +96,7 @@ export class StarterSetupEngine {
       label: "Shutter", 
       value, 
       action, 
-      tooltip: "Do not expose with shutter. Keep motion blur consistent.", 
+      tooltip, 
       icon 
     };
   }

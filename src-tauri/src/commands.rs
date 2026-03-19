@@ -119,6 +119,100 @@ pub async fn scan_folder(
 }
 
 #[tauri::command]
+pub async fn scan_media(
+    paths: Vec<String>,
+    phase: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<ScanResult, String> {
+    if paths.is_empty() {
+        return Err("No paths provided".into());
+    }
+
+    if paths.len() == 1 && std::path::Path::new(&paths[0]).is_dir() {
+        return scan_folder(paths[0].clone(), phase, state).await;
+    }
+
+    let perf_id = state
+        .perf_log
+        .start("scan_media", Some(format!("{} files", paths.len())));
+    let db = &state.db;
+
+    let first_path = Path::new(&paths[0]);
+    let parent = first_path
+        .parent()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|| "Unknown".to_string());
+    let parent_name = first_path
+        .parent()
+        .and_then(|p| p.file_name())
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "Selected Media".to_string());
+
+    let project_name = format!("Selected Files from {}", parent_name);
+    let project_id = hash_string(&format!("{}::files::{:?}", phase, paths));
+    let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+
+    let project = Project {
+        id: project_id.clone(),
+        root_path: parent.clone(),
+        name: project_name.clone(),
+        created_at: now.clone(),
+    };
+    db.upsert_project(&project)
+        .map_err(|e| format!("Failed to create project: {}", e))?;
+
+    let root = ProjectRoot {
+        id: hash_string(&format!("{}::{}", project_id, parent)),
+        project_id: project_id.clone(),
+        root_path: parent.clone(),
+        label: "Selected Files".to_string(),
+        created_at: now,
+    };
+    db.upsert_project_root(&root)
+        .map_err(|e| format!("Failed to create project root: {}", e))?;
+    db.keep_only_project_root_path(&project_id, &parent)
+        .map_err(|e| format!("Failed to sync project root: {}", e))?;
+
+    let mut clips: Vec<Clip> = Vec::new();
+    let mut seen_ids: Vec<String> = Vec::new();
+
+    for file_path in &paths {
+        if !std::path::Path::new(file_path).is_file() {
+            continue;
+        }
+
+        let rel_path = std::path::Path::new(file_path)
+            .strip_prefix(&root.root_path)
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| file_path.clone());
+
+        let clip_id = generate_clip_id(&root.id, &rel_path);
+        let existing = db.get_clip(&clip_id).ok().flatten();
+        let clip = build_clip_from_file(db, &project_id, &root, file_path, &rel_path, existing);
+
+        seen_ids.push(clip.id.clone());
+        if let Err(e) = db.upsert_clip(&clip) {
+            eprintln!("scan: failed to upsert clip {}: {}", clip.id, e);
+        }
+        clips.push(clip);
+    }
+
+    if let Err(e) = db.prune_project_clips(&project_id, &seen_ids) {
+        eprintln!("scan: prune project clips failed: {}", e);
+    }
+
+    let db_clips = db.get_clips(&project_id).unwrap_or(clips);
+    let result = ScanResult {
+        project_id,
+        project_name,
+        clip_count: db_clips.len(),
+        clips: db_clips,
+    };
+    state.perf_log.end(&perf_id, "ok", None);
+    Ok(result)
+}
+
+#[tauri::command]
 pub async fn list_project_roots(
     project_id: String,
     state: State<'_, Arc<AppState>>,
@@ -289,7 +383,9 @@ pub async fn extract_thumbnails(
             let cancel_flag_clone = cancel_flag.clone();
 
             let handle = tokio::spawn(async move {
-                if clip.status == "fail" || clip.duration_ms == 0 {
+                let is_image = thumbnail::is_image_file(&clip.file_path);
+
+                if clip.status == "fail" || (!is_image && clip.duration_ms == 0) {
                     let _ = app_inner.emit(
                         "thumbnail-progress",
                         ThumbnailProgress {
@@ -310,34 +406,23 @@ pub async fn extract_thumbnails(
                 let _ = state_inner.db.delete_thumbnails_for_clip(&clip.id);
                 let mut thumb_results: Vec<Thumbnail> = Vec::new();
 
-                for jump_seconds in jump_intervals {
-                    let timestamps =
-                        thumbnail::calculate_jump_timestamps(clip.duration_ms, jump_seconds);
-                    let clip_cache_dir = format!(
-                        "{}/thumbnails/{}/jump_{}",
-                        cache_dir_clone, clip.id, jump_seconds
-                    );
-                    std::fs::create_dir_all(&clip_cache_dir).ok();
-
-                    for (idx, &ts) in timestamps.iter().enumerate() {
-                        let thumb_ext = if Path::new(&clip.file_path)
-                            .extension()
-                            .map(|e| e.to_string_lossy().eq_ignore_ascii_case("braw"))
-                            .unwrap_or(false)
-                        {
-                            "png"
-                        } else {
-                            "jpg"
-                        };
-                        let output_path =
-                            format!("{}/thumb_{}.{}", clip_cache_dir, idx, thumb_ext);
+                if is_image {
+                    // For images: generate a single thumbnail per jump interval
+                    // (same image, just stored under each jump dir so the UI works)
+                    for jump_seconds in jump_intervals {
+                        let clip_cache_dir = format!(
+                            "{}/thumbnails/{}/jump_{}",
+                            cache_dir_clone, clip.id, jump_seconds
+                        );
+                        std::fs::create_dir_all(&clip_cache_dir).ok();
+                        let output_path = format!("{}/thumb_0.jpg", clip_cache_dir);
 
                         if Path::new(&output_path).exists() {
                             let thumb = Thumbnail {
                                 clip_id: clip.id.clone(),
                                 jump_seconds,
-                                index: idx as u32,
-                                timestamp_ms: ts,
+                                index: 0,
+                                timestamp_ms: 0,
                                 file_path: output_path.clone(),
                             };
                             let _ = state_inner.db.upsert_thumbnail(&thumb);
@@ -347,27 +432,18 @@ pub async fn extract_thumbnails(
 
                         let file_path = clip.file_path.clone();
                         let output_path_clone = output_path.clone();
-                        let duration_ms = clip.duration_ms;
-
-                        let cancel_flag_inner = cancel_flag_clone.clone();
                         let result = tokio::task::spawn_blocking(move || {
-                            thumbnail::extract_with_fallback(
-                                &file_path,
-                                &output_path_clone,
-                                ts,
-                                duration_ms,
-                                Some(&cancel_flag_inner),
-                            )
+                            thumbnail::extract_image_thumbnail(&file_path, &output_path_clone)
                         })
                         .await;
 
                         match result {
-                            Ok(Ok(actual_ts)) => {
+                            Ok(Ok(_)) => {
                                 let thumb = Thumbnail {
                                     clip_id: clip.id.clone(),
                                     jump_seconds,
-                                    index: idx as u32,
-                                    timestamp_ms: actual_ts,
+                                    index: 0,
+                                    timestamp_ms: 0,
                                     file_path: output_path,
                                 };
                                 let _ = state_inner.db.upsert_thumbnail(&thumb);
@@ -375,15 +451,95 @@ pub async fn extract_thumbnails(
                             }
                             Ok(Err(e)) => {
                                 eprintln!(
-                                    "Thumbnail extraction failed for clip {}: {}",
+                                    "Image thumbnail extraction failed for clip {}: {}",
                                     clip.file_path, e
                                 );
                             }
                             Err(e) => {
                                 eprintln!(
-                                    "Thumbnail extraction task panicked for clip {}: {}",
+                                    "Image thumbnail task panicked for clip {}: {}",
                                     clip.file_path, e
                                 );
+                            }
+                        }
+                    }
+                } else {
+                    // Video path: original logic
+                    for jump_seconds in jump_intervals {
+                        let timestamps =
+                            thumbnail::calculate_jump_timestamps(clip.duration_ms, jump_seconds);
+                        let clip_cache_dir = format!(
+                            "{}/thumbnails/{}/jump_{}",
+                            cache_dir_clone, clip.id, jump_seconds
+                        );
+                        std::fs::create_dir_all(&clip_cache_dir).ok();
+
+                        for (idx, &ts) in timestamps.iter().enumerate() {
+                            let thumb_ext = if Path::new(&clip.file_path)
+                                .extension()
+                                .map(|e| e.to_string_lossy().eq_ignore_ascii_case("braw"))
+                                .unwrap_or(false)
+                            {
+                                "png"
+                            } else {
+                                "jpg"
+                            };
+                            let output_path =
+                                format!("{}/thumb_{}.{}", clip_cache_dir, idx, thumb_ext);
+
+                            if Path::new(&output_path).exists() {
+                                let thumb = Thumbnail {
+                                    clip_id: clip.id.clone(),
+                                    jump_seconds,
+                                    index: idx as u32,
+                                    timestamp_ms: ts,
+                                    file_path: output_path.clone(),
+                                };
+                                let _ = state_inner.db.upsert_thumbnail(&thumb);
+                                thumb_results.push(thumb);
+                                continue;
+                            }
+
+                            let file_path = clip.file_path.clone();
+                            let output_path_clone = output_path.clone();
+                            let duration_ms = clip.duration_ms;
+
+                            let cancel_flag_inner = cancel_flag_clone.clone();
+                            let result = tokio::task::spawn_blocking(move || {
+                                thumbnail::extract_with_fallback(
+                                    &file_path,
+                                    &output_path_clone,
+                                    ts,
+                                    duration_ms,
+                                    Some(&cancel_flag_inner),
+                                )
+                            })
+                            .await;
+
+                            match result {
+                                Ok(Ok(actual_ts)) => {
+                                    let thumb = Thumbnail {
+                                        clip_id: clip.id.clone(),
+                                        jump_seconds,
+                                        index: idx as u32,
+                                        timestamp_ms: actual_ts,
+                                        file_path: output_path,
+                                    };
+                                    let _ = state_inner.db.upsert_thumbnail(&thumb);
+                                    thumb_results.push(thumb);
+                                }
+                                Ok(Err(e)) => {
+                                    eprintln!(
+                                        "Thumbnail extraction failed for clip {}: {}",
+                                        clip.file_path, e
+                                    );
+                                }
+                                Err(e) => {
+                                    eprintln!(
+                                        "Thumbnail extraction task panicked for clip {}: {}",
+                                        clip.file_path, e
+                                    );
+                                }
                             }
                         }
                     }

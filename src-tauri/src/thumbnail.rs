@@ -10,6 +10,22 @@ const MAX_WIDTH: u32 = 640;
 /// Luminance threshold for black frame rejection (0-255)
 const BLACK_THRESHOLD: f64 = 15.0;
 
+/// Image file extensions that need special thumbnail handling
+const IMAGE_EXTENSIONS: &[&str] = &[
+    "jpg", "jpeg", "png", "webp", "tiff", "tif", "bmp", "heic", "heif",
+];
+
+/// Check if a file path is a still image (not a video)
+pub fn is_image_file(input_path: &str) -> bool {
+    Path::new(input_path)
+        .extension()
+        .map(|e| {
+            let ext = e.to_string_lossy().to_lowercase();
+            IMAGE_EXTENSIONS.contains(&ext.as_str())
+        })
+        .unwrap_or(false)
+}
+
 /// Calculate fixed jump-based timestamps for a clip.
 pub fn calculate_jump_timestamps(duration_ms: u64, jump_seconds: u32) -> Vec<u64> {
     let duration_secs = duration_ms as f64 / 1000.0;
@@ -31,12 +47,57 @@ pub fn calculate_jump_timestamps(duration_ms: u64, jump_seconds: u32) -> Vec<u64
     timestamps
 }
 
+/// Extract a thumbnail from a still image file (resize only, no seek)
+pub fn extract_image_thumbnail(
+    input_path: &str,
+    output_path: &str,
+) -> Result<bool, String> {
+    // Ensure output directory exists
+    if let Some(parent) = Path::new(output_path).parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create thumbnail directory: {}", e))?;
+    }
+
+    let ffmpeg = crate::tools::find_executable("ffmpeg");
+    let status = Command::new(ffmpeg)
+        .args([
+            "-i",
+            input_path,
+            "-vframes",
+            "1",
+            "-vf",
+            &format!("scale={}:-1", MAX_WIDTH),
+            "-pix_fmt",
+            "yuvj420p",
+            "-q:v",
+            "6",
+            "-y",
+            output_path,
+        ])
+        .output()
+        .map_err(|e| format!("Failed to run ffmpeg for image thumbnail: {}", e))?;
+
+    if !status.status.success() {
+        return Err(format!(
+            "ffmpeg image thumbnail failed: {}",
+            String::from_utf8_lossy(&status.stderr)
+        ));
+    }
+
+    Ok(true)
+}
+
 /// Extract a single thumbnail from a video file at a given timestamp
 pub fn extract_thumbnail(
     input_path: &str,
     output_path: &str,
     timestamp_ms: u64,
 ) -> Result<bool, String> {
+    // For image files, use the dedicated image thumbnail extractor
+    if is_image_file(input_path) {
+        return extract_image_thumbnail(input_path, output_path);
+    }
+
     let ts_secs = timestamp_ms as f64 / 1000.0;
     let ts_str = format!("{:.3}", ts_secs);
 
@@ -211,7 +272,8 @@ fn is_black_frame(image_path: &str) -> bool {
     }
 }
 
-/// Try to extract a valid (non-black) thumbnail, with fallback to nearby timestamps
+/// Try to extract a valid (non-black) thumbnail, with fallback to nearby timestamps.
+/// For image files, this simply extracts the image thumbnail (no timestamp seeking).
 pub fn extract_with_fallback(
     input_path: &str,
     output_path: &str,
@@ -219,6 +281,12 @@ pub fn extract_with_fallback(
     duration_ms: u64,
     cancel_flag: Option<&std::sync::atomic::AtomicBool>,
 ) -> Result<u64, String> {
+    // For image files, just extract once — no timestamp seeking needed
+    if is_image_file(input_path) {
+        extract_image_thumbnail(input_path, output_path)?;
+        return Ok(0);
+    }
+
     // Try the target timestamp first
     match extract_thumbnail(input_path, output_path, target_ms) {
         Ok(true) => return Ok(target_ms),
