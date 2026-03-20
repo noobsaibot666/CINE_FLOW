@@ -154,6 +154,7 @@ pub fn run() {
             commands::extract_thumbnails,
             commands::get_project,
             commands::read_thumbnail,
+            commands::generate_frame_preview_image_proxy,
             commands::read_audio_preview,
             commands::save_image_data_url,
             commands::load_brand_profile,

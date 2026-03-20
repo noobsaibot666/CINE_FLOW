@@ -8,15 +8,24 @@ export interface FrameTransform {
     offsetY: number;
 }
 
+export interface FramePreviewMediaState {
+    transforms: {
+        [key in RatioType]?: FrameTransform;
+    };
+    videoTimeSeconds?: number;
+}
+
 export interface FramePreviewMedia {
     id: string;
     filename: string;
     file_path: string;
+    preview_path?: string;
     width: number;
     height: number;
     duration_ms: number;
     status: string;
     thumbnails: Thumbnail[];
+    thumbnail_src?: string;
     type: 'video' | 'image';
 }
 
@@ -25,12 +34,10 @@ export interface FramePreviewState {
     activeMediaId: string | null;
     selectedMediaIds: Set<string>;
     activeRatio: RatioType;
+    masterRatio: RatioType | null;
     visibleRatios: RatioType[]; // Max 4
-    
-    // Per-ratio independent transforms
-    frameTransforms: {
-        [key in RatioType]?: FrameTransform;
-    };
+    selectedRatioIds: RatioType[];
+    mediaStates: Record<string, FramePreviewMediaState>;
 }
 
 export const RATIO_VALUES: Record<RatioType, number> = {

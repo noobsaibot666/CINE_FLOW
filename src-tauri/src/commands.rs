@@ -622,6 +622,38 @@ pub async fn read_thumbnail(path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+pub async fn generate_frame_preview_image_proxy(
+    path: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<String, String> {
+    let metadata =
+        std::fs::metadata(&path).map_err(|e| format!("Failed to read media metadata: {}", e))?;
+    let modified = metadata
+        .modified()
+        .ok()
+        .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|value| value.as_secs())
+        .unwrap_or(0);
+    let signature = format!("{}::{}::{}", path, metadata.len(), modified);
+    let mut hasher = Sha256::new();
+    hasher.update(signature.as_bytes());
+    let hash = format!("{:x}", hasher.finalize());
+
+    let target_dir = Path::new(&state.cache_dir)
+        .join("frame_preview")
+        .join("stills");
+    std::fs::create_dir_all(&target_dir)
+        .map_err(|e| format!("Failed to create frame preview cache dir: {}", e))?;
+
+    let output_path = target_dir.join(format!("{}.jpg", hash));
+    if !output_path.exists() {
+        crate::thumbnail::extract_image_thumbnail(&path, &output_path.to_string_lossy())?;
+    }
+
+    Ok(output_path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
 pub async fn read_audio_preview(path: String) -> Result<String, String> {
     let bytes = std::fs::read(&path)
         .map_err(|e| format!("Failed to read audio preview at {}: {}", path, e))?;

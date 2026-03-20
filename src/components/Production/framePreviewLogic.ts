@@ -1,5 +1,26 @@
 import { useState, useCallback, useMemo } from 'react';
-import { FramePreviewMedia, FramePreviewState, RatioType, FrameTransform, INITIAL_TRANSFORM } from '../../types/framePreview';
+import { FramePreviewMedia, FramePreviewState, RatioType, FrameTransform, INITIAL_TRANSFORM, FramePreviewMediaState } from '../../types/framePreview';
+
+function buildDefaultMediaState(): FramePreviewMediaState {
+    return {
+        transforms: {
+            '16:9': { ...INITIAL_TRANSFORM }
+        },
+        videoTimeSeconds: 0
+    };
+}
+
+function addOrReplaceVisibleRatio(visibleRatios: RatioType[], nextRatio: RatioType, activeRatio: RatioType): RatioType[] {
+    if (visibleRatios.includes(nextRatio)) {
+        return visibleRatios;
+    }
+
+    if (visibleRatios.length < 3) {
+        return [...visibleRatios, nextRatio];
+    }
+
+    return visibleRatios.map((ratio) => (ratio === activeRatio ? nextRatio : ratio));
+}
 
 export function useFramePreview() {
     const [state, setState] = useState<FramePreviewState>({
@@ -7,10 +28,10 @@ export function useFramePreview() {
         activeMediaId: null,
         selectedMediaIds: new Set(),
         activeRatio: '16:9',
+        masterRatio: '16:9',
         visibleRatios: ['16:9'],
-        frameTransforms: {
-            '16:9': { ...INITIAL_TRANSFORM }
-        }
+        selectedRatioIds: ['16:9'],
+        mediaStates: {}
     });
 
     const activeMedia = useMemo(() => 
@@ -18,11 +39,28 @@ export function useFramePreview() {
     , [state.mediaList, state.activeMediaId]);
 
     const setMediaList = useCallback((media: FramePreviewMedia[]) => {
-        setState(prev => ({
-            ...prev,
-            mediaList: media,
-            activeMediaId: prev.activeMediaId || (media.length > 0 ? media[0].id : null)
-        }));
+        setState(prev => {
+            const nextMediaStates = { ...prev.mediaStates };
+
+            media.forEach(item => {
+                if (!nextMediaStates[item.id]) {
+                    nextMediaStates[item.id] = buildDefaultMediaState();
+                }
+            });
+
+            Object.keys(nextMediaStates).forEach(id => {
+                if (!media.some(item => item.id === id)) {
+                    delete nextMediaStates[id];
+                }
+            });
+
+            return {
+                ...prev,
+                mediaList: media,
+                activeMediaId: prev.activeMediaId || (media.length > 0 ? media[0].id : null),
+                mediaStates: nextMediaStates
+            };
+        });
     }, []);
 
     const setActiveMedia = useCallback((id: string) => {
@@ -43,14 +81,37 @@ export function useFramePreview() {
         });
     }, []);
 
-    const updateTransform = useCallback((ratio: RatioType, updates: Partial<FrameTransform>) => {
+    const updateTransform = useCallback((mediaId: string, ratio: RatioType, updates: Partial<FrameTransform>) => {
         setState(prev => {
-            const current = prev.frameTransforms[ratio] || { ...INITIAL_TRANSFORM };
+            const mediaState = prev.mediaStates[mediaId] || buildDefaultMediaState();
+            const current = mediaState.transforms[ratio] || { ...INITIAL_TRANSFORM };
             return {
                 ...prev,
-                frameTransforms: {
-                    ...prev.frameTransforms,
-                    [ratio]: { ...current, ...updates }
+                mediaStates: {
+                    ...prev.mediaStates,
+                    [mediaId]: {
+                        ...mediaState,
+                        transforms: {
+                            ...mediaState.transforms,
+                            [ratio]: { ...current, ...updates }
+                        }
+                    }
+                }
+            };
+        });
+    }, []);
+
+    const setVideoTime = useCallback((mediaId: string, timeSeconds: number) => {
+        setState(prev => {
+            const mediaState = prev.mediaStates[mediaId] || buildDefaultMediaState();
+            return {
+                ...prev,
+                mediaStates: {
+                    ...prev.mediaStates,
+                    [mediaId]: {
+                        ...mediaState,
+                        videoTimeSeconds: timeSeconds
+                    }
                 }
             };
         });
@@ -62,41 +123,112 @@ export function useFramePreview() {
             let nextVisible = [...prev.visibleRatios];
             
             if (isVisible) {
-                if (nextVisible.length > 1) {
-                    nextVisible = nextVisible.filter(r => r !== ratio);
-                }
+                nextVisible = nextVisible.filter(r => r !== ratio);
             } else {
-                if (nextVisible.length < 4) {
+                if (nextVisible.length < 3) {
                     nextVisible.push(ratio);
                 }
             }
 
-            const nextActive = nextVisible.includes(prev.activeRatio) 
-                ? prev.activeRatio 
-                : nextVisible[0];
-
-            // Initialize transform if new
-            const nextTransforms = { ...prev.frameTransforms };
-            if (!nextTransforms[ratio]) {
-                nextTransforms[ratio] = { ...INITIAL_TRANSFORM };
-            }
+            const nextActive = nextVisible.length === 0
+                ? prev.activeRatio
+                : (nextVisible.includes(prev.activeRatio) ? prev.activeRatio : nextVisible[0]);
+            const nextSelected = prev.selectedRatioIds.filter(item => nextVisible.includes(item));
 
             return {
                 ...prev,
                 visibleRatios: nextVisible,
                 activeRatio: nextActive,
-                frameTransforms: nextTransforms
+                masterRatio: nextVisible.length === 0
+                    ? null
+                    : (prev.masterRatio && nextVisible.includes(prev.masterRatio) ? prev.masterRatio : nextVisible[0]),
+                selectedRatioIds: nextVisible.length === 0 ? [] : (nextSelected.length > 0 ? nextSelected : [nextActive])
             };
         });
     }, []);
 
     const setActiveRatio = useCallback((ratio: RatioType) => {
-        setState(prev => ({ ...prev, activeRatio: ratio }));
+        setState(prev => ({
+            ...prev,
+            activeRatio: ratio,
+            selectedRatioIds: prev.selectedRatioIds.includes(ratio) ? prev.selectedRatioIds : [ratio]
+        }));
     }, []);
 
-    const resetTransform = useCallback((ratio: RatioType) => {
-        updateTransform(ratio, INITIAL_TRANSFORM);
+    const clickRatio = useCallback((ratio: RatioType, multi: boolean) => {
+        setState(prev => {
+            const isVisible = prev.visibleRatios.includes(ratio);
+            const visible = multi
+                ? addOrReplaceVisibleRatio(prev.visibleRatios, ratio, prev.activeRatio)
+                : prev.visibleRatios;
+            const selected = [...prev.selectedRatioIds];
+
+            if (multi) {
+                const selectedSet = new Set(selected);
+                if (selectedSet.has(ratio) && selectedSet.size > 1) {
+                    selectedSet.delete(ratio);
+                } else {
+                    selectedSet.add(ratio);
+                }
+
+                const nextSelected = Array.from(selectedSet).filter(item => visible.includes(item));
+                const nextActive = prev.visibleRatios.includes(ratio) || visible.includes(ratio) ? ratio : prev.activeRatio;
+
+                return {
+                    ...prev,
+                    activeRatio: nextActive,
+                    visibleRatios: Array.from(new Set(visible)),
+                    selectedRatioIds: nextSelected.length > 0 ? nextSelected : [nextActive]
+                };
+            }
+
+            if (prev.visibleRatios.length === 0) {
+                return {
+                    ...prev,
+                    activeRatio: ratio,
+                    masterRatio: ratio,
+                    visibleRatios: [ratio],
+                    selectedRatioIds: [ratio]
+                };
+            }
+
+            const nextVisible = isVisible
+                ? visible
+                : prev.visibleRatios.map((item) => (item === prev.activeRatio ? ratio : item));
+            const nextActive = ratio;
+
+            return {
+                ...prev,
+                activeRatio: nextActive,
+                visibleRatios: Array.from(new Set(nextVisible)),
+                selectedRatioIds: [nextActive]
+            };
+        });
+    }, []);
+
+    const resetTransform = useCallback((mediaId: string, ratio: RatioType) => {
+        updateTransform(mediaId, ratio, INITIAL_TRANSFORM);
     }, [updateTransform]);
+
+    const setMasterRatio = useCallback((ratio: RatioType | null) => {
+        setState(prev => {
+            if (ratio === null) {
+                return {
+                    ...prev,
+                    masterRatio: null
+                };
+            }
+
+            if (!prev.visibleRatios.includes(ratio)) {
+                return prev;
+            }
+
+            return {
+                ...prev,
+                masterRatio: prev.masterRatio === ratio ? null : ratio
+            };
+        });
+    }, []);
 
     return {
         state,
@@ -105,8 +237,11 @@ export function useFramePreview() {
         setActiveMedia,
         toggleMediaSelection,
         updateTransform,
+        setVideoTime,
         toggleRatio,
         setActiveRatio,
+        setMasterRatio,
+        clickRatio,
         resetTransform
     };
 }
