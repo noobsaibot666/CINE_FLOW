@@ -1119,6 +1119,13 @@ export const FramePreviewApp: React.FC<FramePreviewAppProps> = ({ project, onBac
 
   const selectedExportRatios = state.selectedRatioIds.filter((ratio) => state.visibleRatios.includes(ratio));
   const activeVideoTimeSeconds = activeMedia ? getSavedVideoTime(activeMedia.id) : 0;
+  const getExportViewport = useCallback((ratio: RatioType) => {
+    const renderedRect = renderedFrameRectMap[ratio];
+    return {
+      width: Math.max((renderedRect?.width ?? 0) - 24, 1),
+      height: Math.max((renderedRect?.height ?? 0) - 54, 1)
+    };
+  }, [renderedFrameRectMap]);
 
   const handleExportRatio = async (ratio: RatioType) => {
     if (!activeMedia) return;
@@ -1133,14 +1140,20 @@ export const FramePreviewApp: React.FC<FramePreviewAppProps> = ({ project, onBac
     setIsExporting(true);
 
     try {
+      const viewport = getExportViewport(ratio);
       await exportFrameToPath(filePath, {
         media: activeMedia,
         ratio,
         transform: getTransform(activeMedia.id, ratio),
         resolution: exportRes,
         format: exportFormat,
-        videoTimeSeconds: activeVideoTimeSeconds
+        videoTimeSeconds: activeVideoTimeSeconds,
+        previewViewportWidth: viewport.width,
+        previewViewportHeight: viewport.height
       });
+    } catch (error) {
+      console.error('Frame Preview export failed', error);
+      window.alert(`Export failed: ${error instanceof Error ? error.message : 'Unknown export error'}`);
     } finally {
       setIsExporting(false);
       setExportMenuOpen(false);
@@ -1162,15 +1175,21 @@ export const FramePreviewApp: React.FC<FramePreviewAppProps> = ({ project, onBac
 
     try {
       for (const ratio of selectedExportRatios) {
+        const viewport = getExportViewport(ratio);
         await exportFrameToPath(`${selectedDirectory}/${buildFrameExportFilename(activeMedia, ratio, exportFormat)}`, {
           media: activeMedia,
           ratio,
           transform: getTransform(activeMedia.id, ratio),
           resolution: exportRes,
           format: exportFormat,
-          videoTimeSeconds: activeVideoTimeSeconds
+          videoTimeSeconds: activeVideoTimeSeconds,
+          previewViewportWidth: viewport.width,
+          previewViewportHeight: viewport.height
         });
       }
+    } catch (error) {
+      console.error('Frame Preview batch export failed', error);
+      window.alert(`Export failed: ${error instanceof Error ? error.message : 'Unknown export error'}`);
     } finally {
       setIsExporting(false);
       setExportMenuOpen(false);

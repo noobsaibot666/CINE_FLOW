@@ -1,6 +1,5 @@
 import { toJpeg, toPng } from "html-to-image";
-import { mkdir, writeFile } from "@tauri-apps/plugin-fs";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { mkdir, readFile, writeFile } from "@tauri-apps/plugin-fs";
 import { FramePreviewMedia, FrameTransform, RatioType, RATIO_VALUES } from "../../types/framePreview";
 
 export type FramePreviewResolution = "720p" | "1080p" | "4k";
@@ -13,6 +12,8 @@ interface ExportFrameOptions {
   resolution: FramePreviewResolution;
   format: FramePreviewFormat;
   videoTimeSeconds?: number;
+  previewViewportWidth?: number;
+  previewViewportHeight?: number;
 }
 
 function getRenderableImagePath(media: FramePreviewMedia): string {
@@ -43,6 +44,49 @@ function pathStem(filename: string): string {
   return filename.replace(/\.[^.]+$/, "");
 }
 
+function getExtension(path: string): string {
+  const match = path.toLowerCase().match(/\.([^.\\/]+)$/);
+  return match?.[1] ?? "";
+}
+
+function getMimeType(path: string): string {
+  const extension = getExtension(path);
+  switch (extension) {
+    case "jpg":
+    case "jpeg":
+      return "image/jpeg";
+    case "png":
+      return "image/png";
+    case "webp":
+      return "image/webp";
+    case "gif":
+      return "image/gif";
+    case "bmp":
+      return "image/bmp";
+    case "svg":
+      return "image/svg+xml";
+    case "avif":
+      return "image/avif";
+    case "tif":
+    case "tiff":
+      return "image/tiff";
+    case "heic":
+      return "image/heic";
+    case "heif":
+      return "image/heif";
+    case "mp4":
+      return "video/mp4";
+    case "mov":
+      return "video/quicktime";
+    case "mkv":
+      return "video/x-matroska";
+    case "mxf":
+      return "application/mxf";
+    default:
+      return "application/octet-stream";
+  }
+}
+
 function normalizeDir(path: string): string {
   return path.replace(/[\\/]+$/, "");
 }
@@ -58,38 +102,61 @@ async function writeDataUrl(filePath: string, dataUrl: string): Promise<void> {
   await writeFile(filePath, bytes);
 }
 
+async function createObjectUrl(path: string): Promise<string> {
+  const bytes = await readFile(path);
+  const blob = new Blob([bytes], { type: getMimeType(path) });
+  return URL.createObjectURL(blob);
+}
+
 function mediaDrawRect(
   canvasWidth: number,
   canvasHeight: number,
   mediaWidth: number,
   mediaHeight: number,
-  transform: FrameTransform
+  transform: FrameTransform,
+  previewViewportWidth?: number,
+  previewViewportHeight?: number
 ) {
-  const coverScale = Math.max(canvasWidth / mediaWidth, canvasHeight / mediaHeight);
-  const finalWidth = mediaWidth * coverScale * transform.scale;
-  const finalHeight = mediaHeight * coverScale * transform.scale;
+  const containScale = Math.min(canvasWidth / mediaWidth, canvasHeight / mediaHeight);
+  const finalWidth = mediaWidth * containScale * transform.scale;
+  const finalHeight = mediaHeight * containScale * transform.scale;
+  const viewportWidth = Math.max(previewViewportWidth ?? canvasWidth, 1);
+  const viewportHeight = Math.max(previewViewportHeight ?? canvasHeight, 1);
+  const offsetScaleX = canvasWidth / viewportWidth;
+  const offsetScaleY = canvasHeight / viewportHeight;
 
   return {
-    x: (canvasWidth - finalWidth) / 2 + transform.offsetX,
-    y: (canvasHeight - finalHeight) / 2 + transform.offsetY,
+    x: (canvasWidth - finalWidth) / 2 + transform.offsetX * offsetScaleX,
+    y: (canvasHeight - finalHeight) / 2 + transform.offsetY * offsetScaleY,
     width: finalWidth,
     height: finalHeight
   };
 }
 
 async function loadImage(path: string): Promise<HTMLImageElement> {
-  const image = new Image();
-  image.decoding = "async";
-  image.src = convertFileSrc(path);
-  await image.decode();
-  return image;
+  const url = await createObjectUrl(path);
+  try {
+    const image = new Image();
+    image.decoding = "async";
+
+    await new Promise<void>((resolve, reject) => {
+      image.onload = () => resolve();
+      image.onerror = () => reject(new Error(`Unable to load image: ${path}`));
+      image.src = url;
+    });
+
+    return image;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
 }
 
 async function loadVideo(path: string, videoTimeSeconds = 0): Promise<HTMLVideoElement> {
+  const url = await createObjectUrl(path);
   const video = document.createElement("video");
   video.preload = "auto";
   video.muted = true;
-  video.src = convertFileSrc(path);
+  video.src = url;
 
   await new Promise<void>((resolve, reject) => {
     const onLoadedMetadata = () => resolve();
@@ -110,6 +177,8 @@ async function loadVideo(path: string, videoTimeSeconds = 0): Promise<HTMLVideoE
     video.currentTime = safeTime;
   });
 
+  const revoke = () => URL.revokeObjectURL(url);
+  (video as HTMLVideoElement & { __framePreviewCleanup?: () => void }).__framePreviewCleanup = revoke;
   return video;
 }
 
@@ -120,7 +189,7 @@ export function getExportDimensions(ratio: RatioType, resolution: FramePreviewRe
 }
 
 export async function exportFrameToDataUrl(options: ExportFrameOptions): Promise<string> {
-  const { media, ratio, transform, resolution, format, videoTimeSeconds } = options;
+  const { media, ratio, transform, resolution, format, videoTimeSeconds, previewViewportWidth, previewViewportHeight } = options;
   const { width, height } = getExportDimensions(ratio, resolution);
   const canvas = createCanvas(width, height);
   const context = canvas.getContext("2d");
@@ -138,12 +207,16 @@ export async function exportFrameToDataUrl(options: ExportFrameOptions): Promise
     ? await loadImage(getRenderableImagePath(media))
     : await loadVideo(media.file_path, videoTimeSeconds);
 
-  const draw = mediaDrawRect(width, height, media.width, media.height, transform);
-  context.drawImage(source, draw.x, draw.y, draw.width, draw.height);
+  try {
+    const draw = mediaDrawRect(width, height, media.width, media.height, transform, previewViewportWidth, previewViewportHeight);
+    context.drawImage(source, draw.x, draw.y, draw.width, draw.height);
 
-  return format === "jpg"
-    ? canvas.toDataURL("image/jpeg", 0.95)
-    : canvas.toDataURL("image/png");
+    return format === "jpg"
+      ? canvas.toDataURL("image/jpeg", 0.95)
+      : canvas.toDataURL("image/png");
+  } finally {
+    (source as HTMLVideoElement & { __framePreviewCleanup?: () => void }).__framePreviewCleanup?.();
+  }
 }
 
 export async function exportFrameToPath(filePath: string, options: ExportFrameOptions): Promise<void> {

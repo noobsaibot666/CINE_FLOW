@@ -241,7 +241,6 @@ export function DuplicateFinderApp() {
     <div className="duplicate-finder-container">
       <div className="duplicate-finder-header">
         <div className="header-left">
-          <div className="accent-badge">PRE-PRODUCTION</div>
           <h2>Duplicate File Finder</h2>
           <p>Recursive content-based scanning across multiple directories.</p>
         </div>
@@ -446,19 +445,6 @@ export function DuplicateFinderApp() {
           gap: 12px;
         }
 
-        .accent-badge {
-          background: var(--phase-preproduction-soft);
-          color: var(--phase-preproduction);
-          font-size: var(--inspector-label-size);
-          font-weight: var(--inspector-label-weight);
-          letter-spacing: var(--inspector-label-spacing);
-          padding: 4px 10px;
-          border-radius: var(--radius-sm);
-          width: fit-content;
-          margin-bottom: 12px;
-          text-transform: uppercase;
-          border: 1px solid var(--phase-preproduction-glow);
-        }
 
         .duplicate-finder-workspace {
           display: grid;

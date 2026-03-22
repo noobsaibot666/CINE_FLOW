@@ -6,7 +6,21 @@ function buildDefaultMediaState(): FramePreviewMediaState {
         transforms: {
             '16:9': { ...INITIAL_TRANSFORM }
         },
-        videoTimeSeconds: 0
+        videoTimeSeconds: 0,
+        hasCustomFraming: false
+    };
+}
+
+function cloneMediaState(state: FramePreviewMediaState): FramePreviewMediaState {
+    return {
+        transforms: Object.fromEntries(
+            Object.entries(state.transforms).map(([ratio, transform]) => [
+                ratio,
+                { ...(transform || INITIAL_TRANSFORM) }
+            ])
+        ) as FramePreviewMediaState['transforms'],
+        videoTimeSeconds: state.videoTimeSeconds ?? 0,
+        hasCustomFraming: true
     };
 }
 
@@ -41,10 +55,11 @@ export function useFramePreview() {
     const setMediaList = useCallback((media: FramePreviewMedia[]) => {
         setState(prev => {
             const nextMediaStates = { ...prev.mediaStates };
+            const templateState = prev.activeMediaId ? prev.mediaStates[prev.activeMediaId] : undefined;
 
             media.forEach(item => {
                 if (!nextMediaStates[item.id]) {
-                    nextMediaStates[item.id] = buildDefaultMediaState();
+                    nextMediaStates[item.id] = templateState ? cloneMediaState(templateState) : buildDefaultMediaState();
                 }
             });
 
@@ -64,7 +79,28 @@ export function useFramePreview() {
     }, []);
 
     const setActiveMedia = useCallback((id: string) => {
-        setState(prev => ({ ...prev, activeMediaId: id }));
+        setState(prev => {
+            const currentId = prev.activeMediaId;
+            if (currentId === id) {
+                return prev;
+            }
+
+            const nextMediaStates = { ...prev.mediaStates };
+            const currentState = currentId ? nextMediaStates[currentId] : undefined;
+            const targetState = nextMediaStates[id] || buildDefaultMediaState();
+
+            if (currentState && !targetState.hasCustomFraming) {
+                nextMediaStates[id] = cloneMediaState(currentState);
+            } else if (!nextMediaStates[id]) {
+                nextMediaStates[id] = targetState;
+            }
+
+            return {
+                ...prev,
+                activeMediaId: id,
+                mediaStates: nextMediaStates
+            };
+        });
     }, []);
 
     const toggleMediaSelection = useCallback((id: string, multi: boolean) => {
@@ -91,6 +127,7 @@ export function useFramePreview() {
                     ...prev.mediaStates,
                     [mediaId]: {
                         ...mediaState,
+                        hasCustomFraming: true,
                         transforms: {
                             ...mediaState.transforms,
                             [ratio]: { ...current, ...updates }
@@ -110,6 +147,7 @@ export function useFramePreview() {
                     ...prev.mediaStates,
                     [mediaId]: {
                         ...mediaState,
+                        hasCustomFraming: true,
                         videoTimeSeconds: timeSeconds
                     }
                 }

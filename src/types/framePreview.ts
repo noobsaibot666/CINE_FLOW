@@ -13,6 +13,7 @@ export interface FramePreviewMediaState {
         [key in RatioType]?: FrameTransform;
     };
     videoTimeSeconds?: number;
+    hasCustomFraming?: boolean;
 }
 
 export interface FramePreviewMedia {

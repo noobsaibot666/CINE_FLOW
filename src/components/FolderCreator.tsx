@@ -1,8 +1,9 @@
-import { useState, useCallback, useMemo, useRef } from "react";
-import { FolderTree, Plus, Trash2, RotateCcw, Download, Folder, FileType, ChevronRight, Hash, UploadCloud } from "lucide-react";
+import { useState, useCallback, useMemo, useRef, useEffect } from "react";
+import { FolderTree, Plus, Trash2, RotateCcw, Download, Folder, FileType, ChevronRight, ChevronDown, Hash, UploadCloud, FileJson, HardDrive, Archive, History } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { openPath } from "@tauri-apps/plugin-opener";
+import { writeTextFile } from "@tauri-apps/plugin-fs";
 
 interface FolderNode {
   id: string;
@@ -14,6 +15,7 @@ interface FolderNode {
 const MAX_STRUCTURE_DEPTH = 12;
 const MAX_STRUCTURE_NODES = 1000;
 const INVALID_NAME_CHARS = /[\/\\?%*:|"<>]/g;
+const LAST_STRUCTURE_KEY = "folder_creator_last_structure_v1";
 const CANONICAL_COUNT_LABELS = ["Main", "Primary", "Secondary"];
 
 function sanitizeNodeName(name: string) {
@@ -91,14 +93,116 @@ export function FolderCreator() {
   ]);
   const [creating, setCreating] = useState(false);
   const [creatingOnDisk, setCreatingOnDisk] = useState(false);
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const [collapsedNodes, setCollapsedNodes] = useState<Set<string>>(new Set());
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const exportMenuRef = useRef<HTMLDivElement>(null);
+
+  const projectPath = useMemo(() => {
+    return structure[0]?.name || "NOT_SET";
+  }, [structure]);
+
+  const getAllFolderIds = useCallback((nodes: FolderNode[], ids: string[] = []) => {
+    nodes.forEach(node => {
+      if (node.type === "folder") {
+        ids.push(node.id);
+        if (node.children) getAllFolderIds(node.children, ids);
+      }
+    });
+    return ids;
+  }, []);
+
+  // Close export menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(event.target as Node)) {
+        setExportMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  // Handle ESC to close menu
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setExportMenuOpen(false);
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
+  // Auto-dismiss messages
+  useEffect(() => {
+    if (statusMessage || errorMessage) {
+      const timer = setTimeout(() => {
+        setStatusMessage(null);
+        setErrorMessage(null);
+      }, 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [statusMessage, errorMessage]);
+
+  // Draft persistence (different from "Last Created" feature)
+  useEffect(() => {
+    const timeout = setTimeout(() => {
+      localStorage.setItem("folder_creator_draft_v1", JSON.stringify(structure));
+    }, 1000);
+    return () => clearTimeout(timeout);
+  }, [structure]);
+
+  // Load draft on mount
+  useEffect(() => {
+    const savedDraft = localStorage.getItem("folder_creator_draft_v1");
+    if (savedDraft) {
+      try {
+        const draft = JSON.parse(savedDraft);
+        if (Array.isArray(draft) && draft.length > 0) {
+          setStructure(draft);
+        }
+      } catch (e) {
+        console.warn("Failed to load draft", e);
+      }
+    }
+  }, []);
 
   const resetStructure = useCallback(() => {
-    setStructure([{ id: "root", name: "PROJECT_NAME", type: "folder", children: [] }]);
-    setErrorMessage(null);
-    setStatusMessage(null);
+    if (window.confirm("Are you sure you want to reset the entire structure? Any unsaved changes will be lost.")) {
+      setStructure([{ id: "root", name: "PROJECT_NAME", type: "folder", children: [] }]);
+      setErrorMessage(null);
+      setStatusMessage(null);
+    }
+  }, []);
+
+  const saveLastStructure = useCallback((nodes: FolderNode[]) => {
+    try {
+      localStorage.setItem(LAST_STRUCTURE_KEY, JSON.stringify(nodes));
+    } catch (err) {
+      console.warn("Failed to save last structure to localStorage", err);
+    }
+  }, []);
+
+  const restoreLastStructure = useCallback(() => {
+    try {
+      const saved = localStorage.getItem(LAST_STRUCTURE_KEY);
+      if (saved) {
+        const nodes = JSON.parse(saved) as FolderNode[];
+        if (Array.isArray(nodes) && nodes.length > 0) {
+          setStructure(nodes);
+          setErrorMessage(null);
+          setStatusMessage("Restored last created structure.");
+        } else {
+          setErrorMessage("No valid saved structure found.");
+        }
+      } else {
+        setErrorMessage("No previously created structure to restore.");
+      }
+    } catch (err) {
+      console.error("Failed to restore structure", err);
+      setErrorMessage("Failed to restore the last structure.");
+    }
   }, []);
 
   const addNode = useCallback((parentId: string, type: "folder" | "file") => {
@@ -151,6 +255,15 @@ export function FolderCreator() {
       });
     };
     setStructure(prev => updateStructure(prev));
+  }, []);
+
+  const toggleCollapse = useCallback((id: string) => {
+    setCollapsedNodes(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   }, []);
 
   const handleJSONUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -265,6 +378,7 @@ export function FolderCreator() {
       });
       if (dest) {
         await invoke("create_folder_zip", { structure, outputPath: dest });
+        saveLastStructure(structure);
         setStatusMessage(`ZIP saved to ${dest}`);
       }
     } catch (e) {
@@ -294,6 +408,7 @@ export function FolderCreator() {
         return;
       }
       await invoke("create_folder_structure", { structure, outputRoot: dest });
+      saveLastStructure(structure);
       setStatusMessage(`Folder structure created in ${dest}`);
       try {
         await openPath(dest);
@@ -305,6 +420,37 @@ export function FolderCreator() {
       setErrorMessage(`Create on disk failed: ${String(e)}`);
     } finally {
       setCreatingOnDisk(false);
+      setExportMenuOpen(false);
+    }
+  };
+
+  const handleExportJSON = async () => {
+    setErrorMessage(null);
+    setStatusMessage(null);
+    try {
+      const dest = await save({
+        filters: [{ name: "JSON File", extensions: ["json"] }],
+        defaultPath: "ProjectStructure.json"
+      });
+      if (dest) {
+        const content = JSON.stringify(structure, null, 2);
+        // We'll use a simple command to write a string to a file if available, 
+        // or just use tauri's fs if we knew the API. Since we have invoke for other things,
+        // let's assume we can use a generic write file command or add one.
+        // For now, I'll use the existing create_folder_zip logic which is complex,
+        // but maybe there's a simple string-to-file invoke? 
+        // Actually, let's use the same backend to handle JSON export if needed, 
+        // or just mock it with a console log for now if I'm unsure about the backend command.
+        // WAIT: The project likely has a way to save files. 
+        // Let's check if there's a 'write_text_file' command.
+        await writeTextFile(dest, content);
+        setStatusMessage(`JSON structure saved to ${dest}`);
+      }
+    } catch (e) {
+      console.error(e);
+      setErrorMessage(`JSON export failed: ${String(e)}`);
+    } finally {
+      setExportMenuOpen(false);
     }
   };
 
@@ -319,21 +465,24 @@ export function FolderCreator() {
           <div className="folder-node-drag-handle">
             <Hash size={12} opacity={0.3} />
           </div>
+          <div className="folder-node-chevron-wrap" onClick={() => node.type === "folder" && toggleCollapse(node.id)}>
+            {node.type === "folder" && node.children && node.children.length > 0 && (
+              collapsedNodes.has(node.id) ? <ChevronRight size={14} /> : <ChevronDown size={14} />
+            )}
+          </div>
           <div className={`folder-node-icon ${node.type === "folder" ? "folder-kind" : "file-kind"}`}>
             {node.type === "folder" ? <Folder size={18} fill="currentColor" fillOpacity={0.1} /> : <FileType size={18} />}
           </div>
           <div className="folder-node-content">
-            <div className="folder-node-title-row">
-              <input
-                className="folder-node-input"
-                value={node.name}
-                onChange={(e) => updateName(node.id, e.target.value)}
-                placeholder="Name..."
-                spellCheck={false}
-              />
-              {hierarchyLabel && <span className={`folder-node-tier ${depthClass}`}>{hierarchyLabel}</span>}
-            </div>
+            <input
+              className="folder-node-input"
+              value={node.name}
+              onChange={(e) => updateName(node.id, e.target.value)}
+              placeholder="Name..."
+              spellCheck={false}
+            />
           </div>
+          {hierarchyLabel && <span className={`folder-node-tier ${depthClass}`}>{hierarchyLabel}</span>}
           <div className="folder-node-actions">
             {node.type === "folder" && (
               <button className="btn-icon-sm" onClick={() => addNode(node.id, "folder")} title="Add Child Folder">
@@ -347,7 +496,7 @@ export function FolderCreator() {
             )}
           </div>
         </div>
-        {node.children && node.children.length > 0 && (
+        {node.children && node.children.length > 0 && !collapsedNodes.has(node.id) && (
           <div className="folder-node-children">
             {node.children.map(child => renderNode(child, depth + 1))}
           </div>
@@ -360,32 +509,100 @@ export function FolderCreator() {
     <div className="folder-creator-container">
       <div className="folder-creator-header">
         <div className="header-left">
-          <div className="accent-badge">VFX PIPELINE</div>
-          <h2>Project Structure Creator</h2>
-          <p>Build and export sophisticated directory hierarchies for macOS & Windows.</p>
+          <div className="title-block">
+            <h2>Project Structure<br />Creator</h2>
+          </div>
+          <p className="description">
+            Build and export sophisticated directory<br />
+            hierarchies for macOS & Windows.
+          </p>
         </div>
+
         <div className="header-right">
-          <input
-            type="file"
-            accept=".json"
-            ref={fileInputRef}
-            onChange={handleJSONUpload}
-            style={{ display: 'none' }}
-          />
-          <button className="btn btn-secondary btn-glass" onClick={() => fileInputRef.current?.click()}>
-            <UploadCloud size={16} /> Import JSON
-          </button>
-          <button className="btn btn-secondary btn-glass" onClick={resetStructure}>
-            <RotateCcw size={16} /> Reset
-          </button>
-          <button className="btn btn-secondary btn-glass" onClick={handleCreateOnDisk} disabled={creating || creatingOnDisk}>
-            {creatingOnDisk ? <div className="spinner" /> : <Folder size={16} />}
-            <span>{creatingOnDisk ? "Creating..." : "Create on disk"}</span>
-          </button>
-          <button className="btn btn-primary btn-glow" onClick={handleCreate} disabled={creating || creatingOnDisk}>
-            {creating ? <div className="spinner" /> : <Download size={16} />}
-            <span>{creating ? "Packaging ZIP..." : "Export structure"}</span>
-          </button>
+          <div className="flex items-center gap-3">
+            <input
+              type="file"
+              accept=".json"
+              ref={fileInputRef}
+              onChange={handleJSONUpload}
+              style={{ display: 'none' }}
+            />
+            <button
+              className="btn btn-secondary btn-glass"
+              onClick={() => fileInputRef.current?.click()}
+              title="Import structure from JSON"
+            >
+              <UploadCloud size={16} />
+              <span>Import JSON</span>
+            </button>
+
+            <button
+              className="btn btn-secondary btn-glass"
+              onClick={restoreLastStructure}
+              disabled={!localStorage.getItem(LAST_STRUCTURE_KEY)}
+              title="Restore last exported structure"
+            >
+              <History size={16} />
+              <span>Restore</span>
+            </button>
+
+            {/* Consolidated Export Button */}
+            <div className="relative" ref={exportMenuRef}>
+              <button
+                className="btn btn-primary btn-glow"
+                onClick={() => setExportMenuOpen(!exportMenuOpen)}
+                disabled={creating || creatingOnDisk}
+              >
+                {creating || creatingOnDisk ? <div className="spinner-sm" /> : <Download size={16} />}
+                <span>Export</span>
+                <ChevronDown size={14} className={`transition-transform duration-200 ${exportMenuOpen ? 'rotate-180' : ''}`} />
+              </button>
+
+              {exportMenuOpen && (
+                <div className="export-menu">
+                  <button
+                    className="menu-item"
+                    onClick={() => { handleCreate(); setExportMenuOpen(false); }}
+                  >
+                    <Archive size={16} className="text-white/40" />
+                    <div className="menu-item-text">
+                      <span className="menu-item-title">Structure (ZIP)</span>
+                      <span className="menu-item-desc">Download as ZIP archive</span>
+                    </div>
+                  </button>
+                  <button
+                    className="menu-item"
+                    onClick={handleExportJSON}
+                  >
+                    <FileJson size={16} className="text-white/40" />
+                    <div className="menu-item-text">
+                      <span className="menu-item-title">JSON Schema</span>
+                      <span className="menu-item-desc">Export as schema file</span>
+                    </div>
+                  </button>
+                  <div className="menu-divider" />
+                  <button
+                    className="menu-item"
+                    onClick={handleCreateOnDisk}
+                  >
+                    <HardDrive size={16} className="text-blue-400" />
+                    <div className="menu-item-text">
+                      <span className="menu-item-title text-white">Create on disk</span>
+                      <span className="menu-item-desc">Generate folders locally</span>
+                    </div>
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <button
+              className="btn btn-icon-only btn-secondary btn-glass"
+              onClick={resetStructure}
+              title="Reset structure"
+            >
+              <RotateCcw size={18} />
+            </button>
+          </div>
         </div>
       </div>
 
@@ -393,7 +610,11 @@ export function FolderCreator() {
         <div className={`folder-creator-status ${errorMessage ? "error" : "success"}`} style={{
           background: errorMessage ? "rgba(239, 68, 68, 0.1)" : "rgba(125, 211, 252, 0.05)",
           border: `1px solid ${errorMessage ? "rgba(239, 68, 68, 0.2)" : "rgba(125, 211, 252, 0.1)"}`,
-          color: errorMessage ? "var(--status-red)" : "var(--phase-preproduction)"
+          color: errorMessage ? "var(--status-red)" : "var(--phase-preproduction)",
+          marginBottom: '18px',
+          padding: '12px 14px',
+          borderRadius: 'var(--radius-md)',
+          fontSize: '0.92rem'
         }}>
           {errorMessage || statusMessage}
         </div>
@@ -401,9 +622,33 @@ export function FolderCreator() {
 
       <div className="folder-creator-workspace">
         <div className="workspace-section segment">
-          <div className="segment-header">
-            <FolderTree size={16} />
-            <span style={{ fontSize: "var(--inspector-label-size)", fontWeight: "var(--inspector-label-weight)", letterSpacing: "var(--inspector-label-spacing)", color: "var(--inspector-label-color)", textTransform: "uppercase" }}>Visual Builder</span>
+          <div className="builder-header">
+            <div className="header-meta">
+              <div className="section-title">
+                <FolderTree size={14} className="text-blue-400/60" />
+                <span>STRUCTURE BUILDER</span>
+              </div>
+              <div className="header-actions">
+                <button
+                  className="action-link"
+                  onClick={() => setCollapsedNodes(new Set(getAllFolderIds(structure)))}
+                >
+                  Collapse All
+                </button>
+                <div className="divider" />
+                <button
+                  className="action-link"
+                  onClick={() => setCollapsedNodes(new Set())}
+                >
+                  Expand All
+                </button>
+              </div>
+            </div>
+            <div className="metadata-row">
+              <Hash size={12} className="text-white/20" />
+              <span className="metadata-label">PROJECT PATH:</span>
+              <span className="metadata-value">{projectPath || "/not-set"}</span>
+            </div>
           </div>
           <div className="visual-preview premium-scroll" style={{ background: "rgba(0,0,0,0.2)", border: "var(--inspector-border)", borderRadius: "var(--radius-md)" }}>
             {structure.map(node => renderNode(node))}
@@ -452,34 +697,43 @@ export function FolderCreator() {
           display: flex;
           justify-content: space-between;
           align-items: flex-end;
-          margin-bottom: 32px;
+          margin-bottom: 24px;
         }
 
-        .accent-badge {
-            background: var(--phase-preproduction-soft);
-            color: var(--phase-preproduction);
-            font-size: var(--inspector-label-size);
-            font-weight: var(--inspector-label-weight);
-            letter-spacing: var(--inspector-label-spacing);
-            padding: 4px 10px;
-            border-radius: var(--radius-sm);
-            width: fit-content;
-            margin-bottom: 12px;
-            text-transform: uppercase;
-            border: 1px solid var(--phase-preproduction-glow);
+        .header-left {
+          display: flex;
+          align-items: center;
+          gap: 24px;
         }
+
 
         .folder-creator-header h2 {
           margin: 0;
-          font-size: 1.75rem;
-          font-weight: 700;
-          letter-spacing: -0.02em;
+          font-size: 2rem;
+          font-weight: 600;
+          letter-spacing: -0.01em;
+          line-height: 1.05;
+          color: #fff;
         }
 
-        .folder-creator-header p {
-          margin: 8px 0 0;
-          color: var(--text-secondary);
-          font-size: 0.95rem;
+        .folder-creator-header .description {
+          margin: 0;
+          color: var(--text-muted);
+          font-size: 0.9rem;
+          max-width: 320px;
+          line-height: 1.4;
+          font-weight: 400;
+          padding-left: 24px;
+          margin-left: 10px;
+          border-left: 1px solid rgba(255, 255, 255, 0.08);
+          align-self: flex-end;
+          padding-bottom: 2px;
+        }
+
+        .header-right {
+          display: flex;
+          align-items: center;
+          gap: 12px;
         }
 
         .folder-creator-workspace {
@@ -558,6 +812,14 @@ export function FolderCreator() {
 
         .folder-node-icon.folder-kind {
           color: var(--phase-preproduction);
+        }
+
+        .depth-primary .folder-node-icon.folder-kind {
+          color: #3b82f6; /* More distinct medium blue */
+        }
+
+        .depth-secondary .folder-node-icon.folder-kind {
+          color: #4f46e5; /* More distinct indigo-blue for secondary levels */
         }
 
         .folder-node-icon.file-kind {
@@ -639,6 +901,80 @@ export function FolderCreator() {
             border: 1px solid rgba(255,255,255,0.04);
         }
 
+        .builder-header {
+          padding: 24px;
+          border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+          display: flex;
+          flex-direction: column;
+          gap: 16px;
+        }
+
+        .header-meta {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+        }
+
+        .header-actions {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+        }
+
+        .action-link {
+          background: none;
+          border: none;
+          color: var(--text-muted);
+          font-size: 10px;
+          font-weight: 700;
+          letter-spacing: 0.05em;
+          text-transform: uppercase;
+          cursor: pointer;
+          transition: color 0.2s;
+        }
+
+        .action-link:hover {
+          color: var(--phase-preproduction);
+        }
+
+        .divider {
+          width: 1px;
+          height: 10px;
+          background: rgba(255, 255, 255, 0.1);
+        }
+
+        .section-title {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          font-size: 11px;
+          font-weight: 800;
+          letter-spacing: 0.15em;
+          color: var(--text-muted);
+          text-transform: uppercase;
+        }
+
+        .metadata-row {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+
+        .metadata-label {
+          font-size: 10px;
+          font-weight: 700;
+          letter-spacing: 0.05em;
+          color: var(--text-muted);
+          text-transform: uppercase;
+        }
+
+        .metadata-value {
+          font-size: 10px;
+          font-weight: 500;
+          color: var(--text-primary);
+          opacity: 0.8;
+        }
+
         .path-list {
             display: flex;
             flex-direction: column;
@@ -678,6 +1014,72 @@ export function FolderCreator() {
         .premium-scroll::-webkit-scrollbar-thumb {
             background: rgba(255,255,255,0.05);
             border-radius: 10px;
+        }
+
+        .spinner-sm {
+          width: 14px;
+          height: 14px;
+          border: 2px solid rgba(0, 0, 0, 0.1);
+          border-top: 2px solid currentColor;
+          border-radius: 50%;
+          animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
+        }
+
+        /* Collapsible Styles */
+        .folder-node-chevron-wrap {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          width: 24px;
+          height: 24px;
+          cursor: pointer;
+          color: var(--text-muted);
+          transition: color 0.2s;
+          border-radius: 4px;
+        }
+
+        .folder-node-chevron-wrap:hover {
+          color: #fff;
+          background: rgba(255, 255, 255, 0.05);
+        }
+
+        @media (max-width: 1200px) {
+          .folder-creator-header {
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 32px;
+          }
+          .header-left-cluster {
+             width: 100%;
+             gap: 20px;
+             flex-wrap: wrap;
+          }
+          .folder-creator-header h2 {
+            font-size: 3rem;
+          }
+          .header-right-tools {
+            width: 100%;
+            justify-content: flex-start;
+          }
+        }
+
+        @media (max-width: 600px) {
+          .folder-creator-header h2 {
+            font-size: 2.2rem;
+          }
+          .header-description {
+            border-left: none;
+            padding-left: 0;
+            max-width: 100%;
+          }
+          .header-left-cluster {
+            gap: 24px;
+          }
         }
       `}</style>
     </div>
