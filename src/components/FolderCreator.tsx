@@ -1,5 +1,5 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from "react";
-import { FolderTree, Plus, Trash2, RotateCcw, Download, Folder, FileType, ChevronRight, ChevronDown, Hash, UploadCloud, FileJson, HardDrive, Archive, History } from "lucide-react";
+import { FolderTree, Plus, Trash2, RotateCcw, Download, Folder, FileType, ChevronRight, ChevronDown, Hash, UploadCloud, FileJson, HardDrive, Archive, History, Save } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { openPath } from "@tauri-apps/plugin-opener";
@@ -134,6 +134,13 @@ export function FolderCreator() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
+  const [hasLastStructure, setHasLastStructure] = useState(false);
+
+  // Initialize persistence state
+  useEffect(() => {
+    setHasLastStructure(!!localStorage.getItem(LAST_STRUCTURE_KEY));
+  }, []);
+
   // Auto-dismiss messages
   useEffect(() => {
     if (statusMessage || errorMessage) {
@@ -179,6 +186,7 @@ export function FolderCreator() {
   const saveLastStructure = useCallback((nodes: FolderNode[]) => {
     try {
       localStorage.setItem(LAST_STRUCTURE_KEY, JSON.stringify(nodes));
+      setHasLastStructure(true);
     } catch (err) {
       console.warn("Failed to save last structure to localStorage", err);
     }
@@ -192,18 +200,23 @@ export function FolderCreator() {
         if (Array.isArray(nodes) && nodes.length > 0) {
           setStructure(nodes);
           setErrorMessage(null);
-          setStatusMessage("Restored last created structure.");
+          setStatusMessage("Restored last saved structure.");
         } else {
           setErrorMessage("No valid saved structure found.");
         }
       } else {
-        setErrorMessage("No previously created structure to restore.");
+        setErrorMessage("No previously saved structure to restore.");
       }
     } catch (err) {
       console.error("Failed to restore structure", err);
       setErrorMessage("Failed to restore the last structure.");
     }
   }, []);
+
+  const handleManualSave = useCallback(() => {
+    saveLastStructure(structure);
+    setStatusMessage("Current structure saved to memory.");
+  }, [structure, saveLastStructure]);
 
   const addNode = useCallback((parentId: string, type: "folder" | "file") => {
     const updateStructure = (nodes: FolderNode[]): FolderNode[] => {
@@ -444,6 +457,7 @@ export function FolderCreator() {
         // WAIT: The project likely has a way to save files. 
         // Let's check if there's a 'write_text_file' command.
         await writeTextFile(dest, content);
+        saveLastStructure(structure);
         setStatusMessage(`JSON structure saved to ${dest}`);
       }
     } catch (e) {
@@ -512,10 +526,6 @@ export function FolderCreator() {
           <div className="title-block">
             <h2>Project Structure<br />Creator</h2>
           </div>
-          <p className="description">
-            Build and export sophisticated directory<br />
-            hierarchies for macOS & Windows.
-          </p>
         </div>
 
         <div className="header-right">
@@ -538,9 +548,18 @@ export function FolderCreator() {
 
             <button
               className="btn btn-secondary btn-glass"
+              onClick={handleManualSave}
+              title="Save current structure to memory"
+            >
+              <Save size={16} />
+              <span>Save</span>
+            </button>
+
+            <button
+              className="btn btn-secondary btn-glass"
               onClick={restoreLastStructure}
-              disabled={!localStorage.getItem(LAST_STRUCTURE_KEY)}
-              title="Restore last exported structure"
+              disabled={!hasLastStructure}
+              title="Restore last exported or saved structure"
             >
               <History size={16} />
               <span>Restore</span>
@@ -899,6 +918,64 @@ export function FolderCreator() {
             background: rgba(255,255,255,0.02);
             backdrop-filter: blur(10px);
             border: 1px solid rgba(255,255,255,0.04);
+        }
+
+        .export-menu {
+          position: absolute;
+          top: calc(100% + 8px);
+          right: 0;
+          width: 240px;
+          background: #1a1a1f;
+          border: 1px solid rgba(255, 255, 255, 0.08);
+          border-radius: var(--radius-md);
+          box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+          z-index: 1000;
+          overflow: hidden;
+          animation: menuSlideDown 0.2s ease;
+        }
+
+        @keyframes menuSlideDown {
+          from { opacity: 0; transform: translateY(-10px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+
+        .menu-item {
+          width: 100%;
+          display: flex;
+          align-items: center;
+          gap: 14px;
+          padding: 12px 16px;
+          background: transparent;
+          border: none;
+          text-align: left;
+          cursor: pointer;
+          transition: background 0.2s;
+        }
+
+        .menu-item:hover {
+          background: rgba(255, 255, 255, 0.03);
+        }
+
+        .menu-item-text {
+          display: flex;
+          flex-direction: column;
+        }
+
+        .menu-item-title {
+          font-size: 0.85rem;
+          font-weight: 600;
+          color: rgba(255, 255, 255, 0.9);
+        }
+
+        .menu-item-desc {
+          font-size: 0.75rem;
+          color: var(--text-muted);
+        }
+
+        .menu-divider {
+          height: 1px;
+          background: rgba(255, 255, 255, 0.05);
+          margin: 4px 0;
         }
 
         .builder-header {
