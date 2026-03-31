@@ -15,6 +15,54 @@ pub struct FolderNode {
     pub children: Option<Vec<FolderNode>>,
 }
 
+pub fn scan_disk_to_structure(path: &Path) -> Result<Vec<FolderNode>, String> {
+    let mut node_count = 0usize;
+    scan_disk_recursive(path, 1, &mut node_count)
+}
+
+fn scan_disk_recursive(
+    path: &Path,
+    depth: usize,
+    node_count: &mut usize,
+) -> Result<Vec<FolderNode>, String> {
+    if depth > MAX_STRUCTURE_DEPTH {
+        return Ok(vec![]); // Stop recursion at limit
+    }
+
+    let mut nodes = Vec::new();
+    let entries = std::fs::read_dir(path).map_err(|e| format!("Failed to read directory {}: {}", path.display(), e))?;
+
+    for entry in entries {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let entry_path = entry.path();
+        if !entry_path.is_dir() {
+            continue;
+        }
+
+        let name = entry.file_name().to_string_lossy().to_string();
+
+        // Skip hidden files/folders (starting with .)
+        if name.starts_with('.') {
+            continue;
+        }
+
+        *node_count += 1;
+        if *node_count > MAX_STRUCTURE_NODES {
+            break; // Stop scanning if we hit the node limit
+        }
+
+        let children = Some(scan_disk_recursive(&entry_path, depth + 1, node_count)?);
+
+        nodes.push(FolderNode {
+            name,
+            r#type: "folder".to_string(),
+            children,
+        });
+    }
+
+    Ok(nodes)
+}
+
 pub fn create_zip_from_structure(
     structure: Vec<FolderNode>,
     output_path: &str,

@@ -1,6 +1,7 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from "react";
 import { FolderTree, Plus, Trash2, RotateCcw, Download, Folder, FileType, ChevronRight, ChevronDown, Hash, UploadCloud, FileJson, HardDrive, Archive, History, Save } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { writeTextFile } from "@tauri-apps/plugin-fs";
@@ -97,6 +98,7 @@ export function FolderCreator() {
   const [collapsedNodes, setCollapsedNodes] = useState<Set<string>>(new Set());
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const exportMenuRef = useRef<HTMLDivElement>(null);
 
@@ -151,6 +153,60 @@ export function FolderCreator() {
       return () => clearTimeout(timer);
     }
   }, [statusMessage, errorMessage]);
+
+  const mapImportedNodes = useCallback((nodes: any[]): FolderNode[] => {
+    return nodes.map(node => ({
+      id: Math.random().toString(36).substring(2, 11),
+      name: node.name,
+      type: node.type as "folder" | "file",
+      children: node.children ? mapImportedNodes(node.children) : (node.type === "folder" ? [] : undefined)
+    }));
+  }, []);
+
+  // Tauri Drag & Drop handling
+  useEffect(() => {
+    const unlistenDrop = getCurrentWindow().listen<{ paths: string[] }>("tauri://drag-drop", async (event) => {
+      setIsDragging(false);
+      const paths = event.payload.paths;
+      if (paths.length > 0) {
+        const folderPath = paths[0];
+        try {
+          const importedContent: any[] = await invoke("import_folder_structure", { folderPath });
+          const folderName = folderPath.split(/[\\\/]/).pop() || "ROOT";
+          const newStructure: FolderNode[] = [{
+            id: "root",
+            name: folderName,
+            type: "folder",
+            children: mapImportedNodes(importedContent)
+          }];
+          setStructure(newStructure);
+          setStatusMessage(`Imported structure from "${folderName}"`);
+        } catch (err) {
+          console.error("Import failed", err);
+          setErrorMessage(`Failed to import folder structure: ${err}`);
+        }
+      }
+    });
+
+    const unlistenEnter = getCurrentWindow().listen("tauri://drag-enter", () => {
+      setIsDragging(true);
+    });
+
+    const unlistenOver = getCurrentWindow().listen("tauri://drag-over", () => {
+      setIsDragging(true);
+    });
+
+    const unlistenLeave = getCurrentWindow().listen("tauri://drag-leave", () => {
+      setIsDragging(false);
+    });
+
+    return () => {
+      unlistenDrop.then(fn => fn());
+      unlistenEnter.then(fn => fn());
+      unlistenOver.then(fn => fn());
+      unlistenLeave.then(fn => fn());
+    };
+  }, [mapImportedNodes]);
 
   // Draft persistence (different from "Last Created" feature)
   useEffect(() => {
@@ -447,15 +503,6 @@ export function FolderCreator() {
       });
       if (dest) {
         const content = JSON.stringify(structure, null, 2);
-        // We'll use a simple command to write a string to a file if available, 
-        // or just use tauri's fs if we knew the API. Since we have invoke for other things,
-        // let's assume we can use a generic write file command or add one.
-        // For now, I'll use the existing create_folder_zip logic which is complex,
-        // but maybe there's a simple string-to-file invoke? 
-        // Actually, let's use the same backend to handle JSON export if needed, 
-        // or just mock it with a console log for now if I'm unsure about the backend command.
-        // WAIT: The project likely has a way to save files. 
-        // Let's check if there's a 'write_text_file' command.
         await writeTextFile(dest, content);
         saveLastStructure(structure);
         setStatusMessage(`JSON structure saved to ${dest}`);
@@ -521,10 +568,46 @@ export function FolderCreator() {
 
   return (
     <div className="folder-creator-container">
+      {/* Drag Overlay */}
+      {isDragging && (
+        <div className="drag-overlay" style={{
+          position: 'absolute',
+          inset: 0,
+          zIndex: 1000,
+          background: 'rgba(59, 130, 246, 0.15)',
+          backdropFilter: 'blur(8px)',
+          border: '2px dashed var(--phase-preproduction)',
+          borderRadius: 'var(--radius-lg)',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          pointerEvents: 'none',
+          animation: 'pulse 2s infinite'
+        }}>
+          <div style={{
+            background: 'rgba(15, 23, 42, 0.95)',
+            padding: '32px 48px',
+            borderRadius: '24px',
+            border: '1px solid rgba(59, 130, 246, 0.4)',
+            textAlign: 'center',
+            boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.7)'
+          }}>
+            <UploadCloud size={64} style={{ color: 'var(--phase-preproduction)', margin: '0 auto 16px' }} />
+            <h3 style={{ fontSize: '1.5rem', fontWeight: 700, color: '#f8fafc', marginBottom: '8px' }}>
+              Import Folder Structure
+            </h3>
+            <p style={{ color: '#94a3b8', fontSize: '1rem' }}>
+              Drop folder to rebuild hierarchy automatically
+            </p>
+          </div>
+        </div>
+      )}
+
       <div className="folder-creator-header">
         <div className="header-left">
           <div className="title-block">
-            <h2>Project Structure<br />Creator</h2>
+            <h2>Project Structure Creator</h2>
           </div>
         </div>
 
@@ -537,13 +620,45 @@ export function FolderCreator() {
               onChange={handleJSONUpload}
               style={{ display: 'none' }}
             />
+            
             <button
               className="btn btn-secondary btn-glass"
               onClick={() => fileInputRef.current?.click()}
               title="Import structure from JSON"
             >
-              <UploadCloud size={16} />
+              <FileJson size={16} />
               <span>Import JSON</span>
+            </button>
+
+            <button
+              className="btn btn-secondary btn-glass"
+              onClick={async () => {
+                try {
+                  const selected = await open({
+                    directory: true,
+                    multiple: false,
+                    title: "Select Folder to Import Structure"
+                  });
+                  if (selected && typeof selected === 'string') {
+                    const importedContent: any[] = await invoke("import_folder_structure", { folderPath: selected });
+                    const folderName = selected.split(/[\\\/]/).pop() || "ROOT";
+                    const newStructure: FolderNode[] = [{
+                      id: "root",
+                      name: folderName,
+                      type: "folder",
+                      children: mapImportedNodes(importedContent)
+                    }];
+                    setStructure(newStructure);
+                    setStatusMessage(`Imported structure from "${folderName}"`);
+                  }
+                } catch (err) {
+                  setErrorMessage(`Failed to import folder: ${err}`);
+                }
+              }}
+              title="Import from Local Folder"
+            >
+              <HardDrive size={16} />
+              <span>Import Folder</span>
             </button>
 
             <button
@@ -564,6 +679,8 @@ export function FolderCreator() {
               <History size={16} />
               <span>Restore</span>
             </button>
+
+            <div className="vertical-divider" />
 
             {/* Consolidated Export Button */}
             <div className="relative" ref={exportMenuRef}>
@@ -705,6 +822,7 @@ export function FolderCreator() {
           height: calc(100vh - 180px);
           display: flex;
           flex-direction: column;
+          position: relative;
         }
 
         @keyframes fadeInFolderCreator {

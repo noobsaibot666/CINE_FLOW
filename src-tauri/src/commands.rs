@@ -6306,6 +6306,16 @@ pub struct DuplicateScanResult {
 }
 
 #[tauri::command]
+pub async fn import_folder_structure(folder_path: String) -> Result<Vec<crate::folders::FolderNode>, String> {
+    let path = std::path::Path::new(&folder_path);
+    if !path.is_dir() {
+        return Err("Path is not a directory".to_string());
+    }
+
+    crate::folders::scan_disk_to_structure(path)
+}
+
+#[tauri::command]
 pub async fn scan_duplicates(
     paths: Vec<String>,
     app: tauri::AppHandle,
