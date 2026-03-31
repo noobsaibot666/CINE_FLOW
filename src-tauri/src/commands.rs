@@ -59,7 +59,9 @@ pub struct ShotListBundle {
 pub struct AppState {
     pub db: Database,
     pub cache_dir: String,
+    #[allow(dead_code)]
     pub app_data_dir: std::path::PathBuf,
+    #[allow(dead_code)]
     pub db_path: std::path::PathBuf,
     pub job_manager: Arc<crate::jobs::JobManager>,
     pub perf_log: crate::perf::PerfLog,
