@@ -24,11 +24,6 @@ interface ShotListExportPayload {
   clientName?: string;
 }
 
-const PREPROD_ACCENT = "#38bdf8";
-const PREPROD_ACCENT_SOFT = "#f0f9ff";
-const EXPORT_TEXT = "#111827";
-const EXPORT_MUTED = "#4b5563";
-const EXPORT_BORDER = "#e2e8f0";
 const EXPORT_HEADER_BG = "#0f1115";
 const iconCache = new Map<string, Promise<string>>();
 const CAMERA_SETUP_DELIMITER = "__SLCAM__";
@@ -43,7 +38,7 @@ function sectionItems(
     .sort((a, b) => a.sort_order - b.sort_order);
 }
 
-async function getIconDataUrl(iconName: string, size = 56, color = PREPROD_ACCENT): Promise<string> {
+async function getIconDataUrl(iconName: string, size = 56, color = "#38bdf8"): Promise<string> {
   const cacheKey = `${iconName}:${size}:${color}`;
   if (!iconCache.has(cacheKey)) {
     iconCache.set(
@@ -70,13 +65,18 @@ async function getIconDataUrl(iconName: string, size = 56, color = PREPROD_ACCEN
           const dataUrl = await new Promise<string>((resolve, reject) => {
             image.onload = () => {
               const canvas = document.createElement("canvas");
-              canvas.width = size;
-              canvas.height = size;
+              const dpr = window.devicePixelRatio || 2;
+              const scaledSize = size * dpr;
+              canvas.width = scaledSize;
+              canvas.height = scaledSize;
               const ctx = canvas.getContext("2d");
               if (!ctx) {
                 URL.revokeObjectURL(url);
                 return reject(new Error("Canvas context unavailable"));
               }
+              ctx.imageSmoothingEnabled = true;
+              ctx.imageSmoothingQuality = "high";
+              ctx.scale(dpr, dpr);
               ctx.drawImage(image, 0, 0, size, size);
               const result = canvas.toDataURL("image/png");
               URL.revokeObjectURL(url);
@@ -151,10 +151,9 @@ function formatEquipmentItemMetaForExport(item: ShotListEquipmentItem) {
     .join(" • ");
 }
 
-const EXPORT_PAGE_WIDTH = 1600;
-const EXPORT_PAGE_HEIGHT = 900;
-const EXPORT_MARGIN_X = 56;
-const EXPORT_ROW_CARD_HEIGHT = 88;
+const EXPORT_PAGE_WIDTH = 3508; // A4 @ 300 DPI
+const EXPORT_PAGE_HEIGHT = 2480;
+const EXPORT_MARGIN_X = 120;
 
 function sanitizeFileStem(value: string) {
   const cleaned = value.trim().replace(/[<>:"/\\|?*\u0000-\u001F]+/g, "_").replace(/\s+/g, "_");
@@ -170,7 +169,7 @@ function drawBrandMark(ctx: CanvasRenderingContext2D, x: number, y: number) {
   roundRect(ctx, x + 25, y + 8, 7, 24, 3, true, false);
 }
 
-function drawMetaChip(
+function drawMetaInfoChip(
   ctx: CanvasRenderingContext2D,
   x: number,
   y: number,
@@ -179,16 +178,16 @@ function drawMetaChip(
   value: string,
   accent: string = "#38bdf8"
 ) {
-  ctx.fillStyle = "rgba(255,255,255,0.06)";
-  roundRect(ctx, x, y, width, 46, 14, true, false);
+  ctx.fillStyle = "rgba(0,0,0,0.03)";
+  roundRect(ctx, x, y, width, 72, 14, true, false);
   ctx.fillStyle = accent;
-  roundRect(ctx, x + 14, y + 15, 8, 16, 4, true, false);
-  ctx.fillStyle = "rgba(255,255,255,0.6)";
-  ctx.font = "700 10px Inter, system-ui, sans-serif";
-  ctx.fillText(label.toUpperCase(), x + 30, y + 18);
-  ctx.fillStyle = "#ffffff";
-  ctx.font = "700 13px Inter, system-ui, sans-serif";
-  ctx.fillText(value, x + 30, y + 34);
+  roundRect(ctx, x + 16, y + 20, 8, 32, 4, true, false);
+  ctx.fillStyle = "#6b7280";
+  ctx.font = "800 12px Inter, system-ui, sans-serif";
+  ctx.fillText(label.toUpperCase(), x + 34, y + 28);
+  ctx.fillStyle = "#111827";
+  ctx.font = "700 20px Inter, system-ui, sans-serif";
+  ctx.fillText(value, x + 34, y + 54);
 }
 
 async function drawBrantedHeader(
@@ -219,10 +218,10 @@ async function drawBrantedHeader(
   const chipGap = 16;
   let chipX = width - margin - (pageLabel ? chipWidth * 2 + chipGap : chipWidth) - 32;
 
-  drawMetaChip(ctx, chipX, 64, chipWidth, "DAY SHEET", payload.project.day_label || "Day 1");
+  drawMetaInfoChip(ctx, chipX, 64, chipWidth, "DAY SHEET", payload.project.day_label || "Day 1");
   chipX += chipWidth + chipGap;
   if (pageLabel) {
-    drawMetaChip(ctx, chipX, 64, chipWidth, "PROGRESS", pageLabel, "#a855f7");
+    drawMetaInfoChip(ctx, chipX, 64, chipWidth, "PROGRESS", pageLabel, "#a855f7");
     chipX += chipWidth + chipGap;
   }
 }
@@ -238,7 +237,10 @@ async function createExportPage(
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("Shot list export canvas unavailable");
 
-  ctx.fillStyle = "#f8f9fb";
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+
+  ctx.fillStyle = "#ffffff";
   ctx.fillRect(0, 0, EXPORT_PAGE_WIDTH, EXPORT_PAGE_HEIGHT);
   await drawBrantedHeader(ctx, payload, title, pageLabel);
   return { canvas, ctx };
@@ -254,39 +256,64 @@ async function renderRowsCanvasPage(
 ): Promise<HTMLCanvasElement> {
   const { canvas, ctx } = await createExportPage(payload, "Production Shot List", `Sheet ${pageIndex + 1}/${totalPages}`);
 
-  let y = 232;
-  for (const row of pageRows) {
+  const rowsPerPage = 5;
+  const rowHeight = (EXPORT_PAGE_HEIGHT - 320 - 120) / rowsPerPage;
+  let y = 240;
+
+  for (let i = 0; i < pageRows.length; i += 1) {
+    const row = pageRows[i];
+    const rowY = y + i * rowHeight;
+    const rowWidth = EXPORT_PAGE_WIDTH - EXPORT_MARGIN_X * 2;
+
+    // Row Background (Clean & Premium)
     ctx.fillStyle = "#ffffff";
-    ctx.strokeStyle = EXPORT_BORDER;
-    ctx.lineWidth = 1;
-    roundRect(ctx, EXPORT_MARGIN_X, y, EXPORT_PAGE_WIDTH - EXPORT_MARGIN_X * 2, EXPORT_ROW_CARD_HEIGHT, 20, true, true);
+    roundRect(ctx, EXPORT_MARGIN_X, rowY, rowWidth, rowHeight - 20, 24, true, false);
+    
+    // Border
+    ctx.strokeStyle = "rgba(0,0,0,0.06)";
+    ctx.lineWidth = 2;
+    roundRect(ctx, EXPORT_MARGIN_X, rowY, rowWidth, rowHeight - 20, 24, false, true);
 
-    const icon = await getIconDataUrl(row.capture_type, 66);
-    const img = await loadImage(icon);
-    ctx.drawImage(img, EXPORT_MARGIN_X + 24, y + 11, 42, 42);
-
-    ctx.fillStyle = EXPORT_TEXT;
-    ctx.font = "800 20px Inter, system-ui, sans-serif";
-    ctx.fillText(row.shot_number || "—", EXPORT_MARGIN_X + 88, y + 32);
-    ctx.font = "700 17px Inter, system-ui, sans-serif";
-    ctx.fillText(trimText(ctx, row.scene_setup || "—", 280), EXPORT_MARGIN_X + 132, y + 32);
-
-    ctx.fillStyle = EXPORT_MUTED;
-    ctx.font = "500 15px Inter, system-ui, sans-serif";
-    ctx.fillText(trimText(ctx, row.description || "—", 560), EXPORT_MARGIN_X + 88, y + 58);
-
-    ctx.fillStyle = EXPORT_TEXT;
-    ctx.font = "600 16px Inter, system-ui, sans-serif";
-    ctx.fillText(trimText(ctx, formatCameraSetupsForExport(row.camera_lens), 320), 880, y + 36);
+    // Sidebar Accent (Lavender for Shot List)
     ctx.fillStyle = "#6366f1";
-    ctx.font = "700 15px Inter, system-ui, sans-serif";
-    ctx.fillText(trimText(ctx, (row.movement || "STATIC").toUpperCase(), 140), 1220, y + 36);
-    ctx.fillStyle = EXPORT_MUTED;
-    ctx.font = "500 15px Inter, system-ui, sans-serif";
-    ctx.fillText(trimText(ctx, formatLocationTimingForExport(row.location_time), 220), 1380, y + 36);
+    roundRect(ctx, EXPORT_MARGIN_X + 16, rowY + 16, 6, rowHeight - 52, 3, true, false);
 
-    drawCanvasPill(ctx, (row.status || "planned").toUpperCase(), EXPORT_PAGE_WIDTH - EXPORT_MARGIN_X - 146, y + 26);
-    y += EXPORT_ROW_CARD_HEIGHT + 16;
+    // Number + Icon Group
+    const labelX = EXPORT_MARGIN_X + 48;
+    ctx.fillStyle = "#0f1115";
+    ctx.font = "800 32px Inter, system-ui, sans-serif";
+    ctx.fillText(`${row.sort_order}`.padStart(2, "0"), labelX, rowY + 70);
+
+    // Capture Type Icon
+    const iconDataUrl = await getIconDataUrl(row.capture_type === "photo" ? "Camera" : "Video", 88, "#6366f1");
+    const iconImg = await loadImage(iconDataUrl);
+    ctx.drawImage(iconImg, labelX + 72, rowY + 34, 72, 72);
+
+    // Shot Number / Scene Setup
+    ctx.fillStyle = "#111827";
+    ctx.font = "800 34px Inter, system-ui, sans-serif";
+    const title = `${row.shot_number || "SHOT"} ${row.scene_setup ? `— ${row.scene_setup}` : ""}`;
+    ctx.fillText(trimText(ctx, title, 1000), labelX + 168, rowY + 68);
+
+    // Description
+    ctx.fillStyle = "#4b5563";
+    ctx.font = "500 22px Inter, system-ui, sans-serif";
+    const desc = row.description || "No specific instructions provided for this shot setup.";
+    ctx.fillText(trimText(ctx, desc, 1200), labelX + 168, rowY + 104);
+
+    // Metadata Chips (Right Aligned)
+    let metaX = EXPORT_PAGE_WIDTH - EXPORT_MARGIN_X - 1000;
+
+    // Movement Chip
+    drawMetaInfoChip(ctx, metaX, rowY + 34, 300, "MOVEMENT", (row.movement || "Stationary").toUpperCase(), "#6366f1");
+    metaX += 320;
+
+    // Cam Setup Chip
+    drawMetaInfoChip(ctx, metaX, rowY + 34, 380, "EQUIPMENT", trimText(ctx, formatCameraSetupsForExport(row.camera_lens || ""), 220), "#a855f7");
+    metaX += 400;
+
+    // Location Chip
+    drawMetaInfoChip(ctx, metaX, rowY + 34, 280, "LOCATION / TIME", formatLocationTimingForExport(row.location_time || ""), "#14b8a6");
   }
 
   drawFooter(
@@ -313,56 +340,68 @@ async function renderEquipmentCanvasPages(payload: ShotListExportPayload): Promi
   while (cardIndex < cards.length) {
     const { canvas, ctx } = await createExportPage(payload, "Equipment Inventory", `Pack ${pages.length + 1}`);
 
-    let y = 232;
+    let y = 260;
     let column = 0;
     let rowHeight = 0;
-    const cardWidth = (EXPORT_PAGE_WIDTH - EXPORT_MARGIN_X * 2 - 24) / 2;
-    const xPositions = [EXPORT_MARGIN_X, EXPORT_MARGIN_X + cardWidth + 24];
+    const gap = 48;
+    const cardWidth = (EXPORT_PAGE_WIDTH - EXPORT_MARGIN_X * 2 - gap) / 2;
+    const xPositions = [EXPORT_MARGIN_X, EXPORT_MARGIN_X + cardWidth + gap];
 
     while (cardIndex < cards.length) {
       const { section, items } = cards[cardIndex];
-      const cardHeight = Math.max(164, 94 + items.length * 52);
-      if (column === 0 && y + cardHeight > EXPORT_PAGE_HEIGHT - 64) break;
+      const itemsHeight = items.length * 72;
+      const cardHeight = Math.max(340, 160 + itemsHeight);
+      
+      // If the card is too tall for this column or page
+      if (column === 0 && y + cardHeight > EXPORT_PAGE_HEIGHT - 120) break;
+      if (column === 1 && y + cardHeight > EXPORT_PAGE_HEIGHT - 120) break;
 
       const x = xPositions[column];
+      
+      // Card Container
       ctx.fillStyle = "#ffffff";
-      ctx.strokeStyle = EXPORT_BORDER;
-      ctx.lineWidth = 1;
-      roundRect(ctx, x, y, cardWidth, cardHeight, 28, true, true);
+      roundRect(ctx, x, y, cardWidth, cardHeight, 32, true, false);
+      ctx.strokeStyle = "rgba(0,0,0,0.06)";
+      ctx.lineWidth = 2;
+      roundRect(ctx, x, y, cardWidth, cardHeight, 32, false, true);
 
-      // Section Header within Card
-      ctx.fillStyle = "#f1f5f9";
-      roundRect(ctx, x + 8, y + 8, cardWidth - 16, 68, 20, true, false);
+      // Section Header (Dark/Premium)
+      ctx.fillStyle = "#0f1115";
+      roundRect(ctx, x + 16, y + 16, cardWidth - 32, 110, 24, true, false);
 
-      const sectionIcon = await loadImage(await getIconDataUrl(section.icon_name, 64));
-      ctx.drawImage(sectionIcon, x + 20, y + 16, 52, 52);
-      ctx.fillStyle = EXPORT_TEXT;
-      ctx.font = "800 24px Inter, system-ui, sans-serif";
-      ctx.fillText(section.section_name, x + 86, y + 44);
-      ctx.fillStyle = EXPORT_MUTED;
-      ctx.font = "600 14px Inter, system-ui, sans-serif";
-      ctx.fillText(`${items.length} items logged`, x + 86, y + 66);
+      const sectionIcon = await loadImage(await getIconDataUrl(section.icon_name, 80, "#ffffff"));
+      ctx.drawImage(sectionIcon, x + 36, y + 31, 80, 80);
+      
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "800 32px Inter, system-ui, sans-serif";
+      ctx.fillText(section.section_name.toUpperCase(), x + 136, y + 68);
+      
+      ctx.fillStyle = "rgba(255,255,255,0.5)";
+      ctx.font = "600 18px Inter, system-ui, sans-serif";
+      ctx.fillText(`${items.length} ITEMS LOGGED`, x + 136, y + 100);
 
-      let itemY = y + 86;
+      let itemY = y + 146;
       for (const item of items) {
-        ctx.fillStyle = "transparent";
-        ctx.strokeStyle = "#f1f5f9";
-        ctx.lineWidth = 1;
-        roundRect(ctx, x + 12, itemY, cardWidth - 24, 44, 16, false, true);
+        // Item Row
+        ctx.fillStyle = "rgba(0,0,0,0.02)";
+        roundRect(ctx, x + 16, itemY, cardWidth - 32, 60, 16, true, false);
 
-        const itemIcon = await loadImage(await getIconDataUrl(item.icon_name, 52, "#6366f1"));
-        ctx.drawImage(itemIcon, x + 18, itemY + 4, 36, 36);
+        const itemIcon = await loadImage(await getIconDataUrl(item.icon_name, 56, "#6366f1"));
+        ctx.drawImage(itemIcon, x + 24, itemY + 12, 36, 36);
 
-        ctx.fillStyle = EXPORT_TEXT;
-        ctx.font = "700 17px Inter, system-ui, sans-serif";
-        ctx.fillText(trimText(ctx, item.item_name || "Unnamed item", cardWidth - 140), x + 64, itemY + 20);
-        ctx.fillStyle = EXPORT_MUTED;
-        ctx.font = "500 12px Inter, system-ui, sans-serif";
-        ctx.fillText(trimText(ctx, formatEquipmentItemMetaForExport(item) || item.item_type || "Gear item", cardWidth - 140), x + 64, itemY + 36);
-        itemY += 50;
+        ctx.fillStyle = "#111827";
+        ctx.font = "700 22px Inter, system-ui, sans-serif";
+        ctx.fillText(trimText(ctx, item.item_name || "Gear", cardWidth - 180), x + 76, itemY + 28);
+        
+        ctx.fillStyle = "#6b7280";
+        ctx.font = "500 16px Inter, system-ui, sans-serif";
+        const meta = formatEquipmentItemMetaForExport(item) || item.item_type || "Item";
+        ctx.fillText(trimText(ctx, meta, cardWidth - 180), x + 76, itemY + 48);
+        
+        itemY += 72;
       }
 
-      rowHeight = Math.max(rowHeight, cardHeight + 18);
+      rowHeight = Math.max(rowHeight, cardHeight + gap);
       if (column === 1) {
         column = 0;
         y += rowHeight;
@@ -391,8 +430,13 @@ async function renderEquipmentCanvasPages(payload: ShotListExportPayload): Promi
 }
 
 async function buildShotListExportPages(payload: ShotListExportPayload): Promise<HTMLCanvasElement[]> {
+  // Ensure fonts are loaded before starting expensive canvas operations
+  if (typeof document !== "undefined") {
+    await document.fonts.ready;
+  }
+  
   const pages: HTMLCanvasElement[] = [];
-  const rowsPerPage = 6;
+  const rowsPerPage = 5;
   const rowPages: ShotListRow[][] = [];
   for (let index = 0; index < payload.rows.length; index += rowsPerPage) {
     rowPages.push(payload.rows.slice(index, index + rowsPerPage));
@@ -416,10 +460,16 @@ export async function exportShotListPdf(payload: ShotListExportPayload): Promise
   if (!filePath) return false;
 
   const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+  doc.setProperties({
+    title: `${payload.project.title} - Shot List`,
+    subject: "Shot List & Equipment Inventory",
+    author: payload.brandName || "Wrap Preview",
+    creator: "Wrap Preview",
+  });
   const pages = await buildShotListExportPages(payload);
   for (let index = 0; index < pages.length; index += 1) {
     if (index > 0) doc.addPage();
-    const pageDataUrl = pages[index].toDataURL("image/jpeg", 0.92);
+    const pageDataUrl = pages[index].toDataURL("image/jpeg", 1.0);
     doc.addImage(pageDataUrl, "JPEG", 0, 0, 297, 210);
   }
 
@@ -453,7 +503,7 @@ export async function exportShotListImage(payload: ShotListExportPayload): Promi
     canvas.toBlob((nextBlob) => {
       if (nextBlob) resolve(nextBlob);
       else reject(new Error("Shot list image export failed to create a blob"));
-    }, "image/jpeg", 0.92);
+    }, "image/jpeg", 1.0);
   });
   await writeFile(filePath, new Uint8Array(await blob.arrayBuffer()));
   return true;
@@ -481,17 +531,6 @@ function roundRect(
   if (stroke) ctx.stroke();
 }
 
-function drawCanvasPill(ctx: CanvasRenderingContext2D, label: string, x: number, y: number) {
-  const textWidth = ctx.measureText(label).width;
-  const width = Math.max(92, textWidth + 32);
-  ctx.fillStyle = PREPROD_ACCENT_SOFT;
-  roundRect(ctx, x, y, width, 36, 14, true, false);
-  ctx.fillStyle = "#0369a1";
-  ctx.font = "800 12px Inter, system-ui, sans-serif";
-  ctx.textAlign = "center";
-  ctx.fillText(label, x + width / 2, y + 22);
-  ctx.textAlign = "left";
-}
 
 function trimText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number) {
   const clean = text || "—";
@@ -505,6 +544,8 @@ function trimText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number)
 
 async function loadImage(dataUrl: string): Promise<HTMLImageElement> {
   const image = new Image();
+  image.decoding = "sync";
+  image.crossOrigin = "anonymous";
   image.src = dataUrl;
   await new Promise<void>((resolve, reject) => {
     image.onload = () => resolve();
