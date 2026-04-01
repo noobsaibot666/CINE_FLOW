@@ -26,6 +26,9 @@ import {
   Ruler,
   CircleDot,
   X,
+  HardDrive,
+  Clock3,
+  AudioLines,
 } from "lucide-react";
 import { ClipList } from "./components/ClipList";
 import { PrintLayout } from "./components/PrintLayout";
@@ -123,7 +126,7 @@ function AppContent() {
     return match ? decodeURIComponent(match[1]) : null;
   });
   const [othersMenuOpen, setOthersMenuOpen] = useState(false);
-  const [activeMicroApp, setActiveMicroApp] = useState<"crop-factor" | null>(null);
+  const [activeMicroApp, setActiveMicroApp] = useState<"crop-factor" | "video-file-size" | null>(null);
   const isShotPlannerActive = activeTab === "preproduction" && activePreproductionApp === "shot-planner";
 
   useEffect(() => {
@@ -1429,8 +1432,21 @@ function AppContent() {
                         >
                           <span className="menu-item-icon"><Calculator size={16} /></span>
                           <span className="menu-item-copy">
-                            <span className="menu-item-label">Crop Factor Calculator</span>
-                            <small>Sensor and lens equivalence reference</small>
+                            <span className="menu-item-label">Crop Factor</span>
+                            <small>Lens equivalence</small>
+                          </span>
+                        </button>
+                        <button
+                          className="dropdown-item menu-item others-menu-item"
+                          onClick={() => {
+                            setOthersMenuOpen(false);
+                            setActiveMicroApp("video-file-size");
+                          }}
+                        >
+                          <span className="menu-item-icon"><HardDrive size={16} /></span>
+                          <span className="menu-item-copy">
+                            <span className="menu-item-label">File Size</span>
+                            <small>Storage estimate</small>
                           </span>
                         </button>
                       </div>
@@ -2187,6 +2203,11 @@ function AppContent() {
               <CropFactorCalculator />
             </MicroAppModal>
           )}
+          {activeMicroApp === "video-file-size" && (
+            <MicroAppModal title="Video File Size Calculator" onClose={() => setActiveMicroApp(null)}>
+              <VideoFileSizeCalculator />
+            </MicroAppModal>
+          )}
         </>
       )}
     </div>
@@ -2248,6 +2269,169 @@ const SENSOR_PRESETS = {
 
 const COMMON_FOCALS = [8, 10, 12, 14, 16, 18, 24, 35, 50, 85, 135, 200];
 const COMMON_APERTURES = [1.4, 2, 2.8, 4, 5.6, 8, 11];
+const COMMON_AUDIO_BITRATES = [128, 256, 320, 512];
+const VIDEO_FILE_SIZE_PRESETS = [
+  {
+    brand: 'Sony',
+    camera: 'FX3',
+    codec: 'XAVC S-I 4K',
+    resolution: '3840×2160',
+    frameRate: '24p',
+    videoMbps: 240,
+    source: 'Sony Help Guide',
+    profile: 'S-Log3',
+  },
+  {
+    brand: 'Sony',
+    camera: 'FX3',
+    codec: 'XAVC S-I 4K',
+    resolution: '3840×2160',
+    frameRate: '60p',
+    videoMbps: 600,
+    source: 'Sony Help Guide',
+    profile: 'S-Log3',
+  },
+  {
+    brand: 'Sony',
+    camera: 'FX3',
+    codec: 'XAVC S-I 4K',
+    resolution: '3840×2160',
+    frameRate: '120p',
+    videoMbps: 1200,
+    source: 'Sony Help Guide',
+    profile: 'S-Log3',
+  },
+  {
+    brand: 'Sony',
+    camera: 'FX3',
+    codec: 'XAVC S-I 4K',
+    resolution: '3840×2160',
+    frameRate: '24p',
+    videoMbps: 100,
+    source: 'Sony Help Guide',
+    profile: 'S-Log3',
+  },
+  {
+    brand: 'Canon',
+    camera: 'C70',
+    codec: 'XF-AVC Intra',
+    resolution: '4K',
+    frameRate: '60p',
+    videoMbps: 600,
+    source: 'Canon USA',
+    profile: 'Canon Log 2 / 3',
+  },
+  {
+    brand: 'Sony',
+    camera: 'FX3',
+    codec: 'XAVC S 4K',
+    resolution: '3840×2160',
+    frameRate: '60p',
+    videoMbps: 200,
+    source: 'Sony Help Guide',
+    profile: 'S-Log3',
+  },
+  {
+    brand: 'Sony',
+    camera: 'FX3',
+    codec: 'XAVC S 4K',
+    resolution: '3840×2160',
+    frameRate: '120p',
+    videoMbps: 280,
+    source: 'Sony Help Guide',
+    profile: 'S-Log3',
+  },
+  {
+    brand: 'Blackmagic',
+    camera: 'Cinema Camera 6K',
+    codec: 'Blackmagic RAW 5:1',
+    resolution: '6K',
+    frameRate: '24p',
+    videoMbps: 192,
+    source: 'Blackmagic Tech Specs',
+    profile: 'Film / Extended Video',
+  },
+  {
+    brand: 'Nikon',
+    camera: 'Z8',
+    codec: 'N-RAW HQ',
+    resolution: '8256×4644',
+    frameRate: '24p',
+    videoMbps: 2780,
+    source: 'Nikon Online Manual',
+    profile: 'RAW',
+  },
+  {
+    brand: 'Nikon',
+    camera: 'Z8',
+    codec: 'N-RAW HQ',
+    resolution: '8256×4644',
+    frameRate: '30p',
+    videoMbps: 3470,
+    source: 'Nikon Online Manual',
+    profile: 'RAW',
+  },
+  {
+    brand: 'Nikon',
+    camera: 'Z8',
+    codec: 'N-RAW HQ',
+    resolution: '8256×4644',
+    frameRate: '60p',
+    videoMbps: 5780,
+    source: 'Nikon Online Manual',
+    profile: 'RAW',
+  },
+  {
+    brand: 'Nikon',
+    camera: 'Z8',
+    codec: 'N-RAW HQ',
+    resolution: '4128×2322',
+    frameRate: '24p',
+    videoMbps: 700,
+    source: 'Nikon Online Manual',
+    profile: 'RAW',
+  },
+  {
+    brand: 'Nikon',
+    camera: 'Z8',
+    codec: 'N-RAW HQ',
+    resolution: '4128×2322',
+    frameRate: '60p',
+    videoMbps: 1740,
+    source: 'Nikon Online Manual',
+    profile: 'RAW',
+  },
+  {
+    brand: 'Nikon',
+    camera: 'Z8',
+    codec: 'N-RAW HQ',
+    resolution: '4128×2322',
+    frameRate: '120p',
+    videoMbps: 3480,
+    source: 'Nikon Online Manual',
+    profile: 'RAW',
+  },
+  {
+    brand: 'Nikon',
+    camera: 'Z8',
+    codec: 'ProRes 422 HQ',
+    resolution: '3840×2160',
+    frameRate: '24p',
+    videoMbps: 705,
+    source: 'Apple ProRes target rate + Nikon support',
+    profile: 'N-Log',
+  },
+  {
+    brand: 'Nikon',
+    camera: 'Z8',
+    codec: 'ProRes 422 HQ',
+    resolution: '3840×2160',
+    frameRate: '60p',
+    videoMbps: 1763,
+    source: 'Apple ProRes target rate + Nikon support',
+    profile: 'N-Log',
+  },
+] as const;
 
 function MicroAppModal({
   title,
@@ -2425,6 +2609,222 @@ function CropFactorCalculator() {
         <div className="crop-factor-result-card">
           <span className="crop-factor-result-label">Equivalent Aperture</span>
           <strong>{equivalentAperture ? `f/${equivalentAperture.toFixed(1)}` : "—"}</strong>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function VideoFileSizeCalculator() {
+  const [brand, setBrand] = useState<string>(VIDEO_FILE_SIZE_PRESETS[0].brand);
+  const [camera, setCamera] = useState<string>(VIDEO_FILE_SIZE_PRESETS[0].camera);
+  const [codec, setCodec] = useState<string>(VIDEO_FILE_SIZE_PRESETS[0].codec);
+  const [resolution, setResolution] = useState<string>(VIDEO_FILE_SIZE_PRESETS[0].resolution);
+  const [frameRate, setFrameRate] = useState<string>(VIDEO_FILE_SIZE_PRESETS[0].frameRate);
+  const [audioBitrate, setAudioBitrate] = useState("256");
+  const [hours, setHours] = useState("0");
+  const [minutes, setMinutes] = useState("10");
+  const [seconds, setSeconds] = useState("0");
+
+  const brandOptions: string[] = Array.from(new Set(VIDEO_FILE_SIZE_PRESETS.map((preset) => preset.brand)));
+  const cameraOptions: string[] = Array.from(new Set(VIDEO_FILE_SIZE_PRESETS.filter((preset) => preset.brand === brand).map((preset) => preset.camera)));
+  const codecOptions: string[] = Array.from(new Set(VIDEO_FILE_SIZE_PRESETS.filter((preset) => preset.brand === brand && preset.camera === camera).map((preset) => preset.codec)));
+  const resolutionOptions: string[] = Array.from(new Set(VIDEO_FILE_SIZE_PRESETS.filter((preset) => preset.brand === brand && preset.camera === camera && preset.codec === codec).map((preset) => preset.resolution)));
+  const frameRateOptions: string[] = Array.from(new Set(VIDEO_FILE_SIZE_PRESETS.filter((preset) => preset.brand === brand && preset.camera === camera && preset.codec === codec && preset.resolution === resolution).map((preset) => preset.frameRate)));
+
+  useEffect(() => {
+    if (!cameraOptions.includes(camera)) {
+      setCamera(cameraOptions[0] ?? "");
+    }
+  }, [camera, cameraOptions]);
+
+  useEffect(() => {
+    if (!codecOptions.includes(codec)) {
+      setCodec(codecOptions[0] ?? "");
+    }
+  }, [codec, codecOptions]);
+
+  useEffect(() => {
+    if (!resolutionOptions.includes(resolution)) {
+      setResolution(resolutionOptions[0] ?? "");
+    }
+  }, [resolution, resolutionOptions]);
+
+  useEffect(() => {
+    if (!frameRateOptions.includes(frameRate)) {
+      setFrameRate(frameRateOptions[0] ?? "");
+    }
+  }, [frameRate, frameRateOptions]);
+
+  const selectedPreset = VIDEO_FILE_SIZE_PRESETS.find((preset) =>
+    preset.brand === brand &&
+    preset.camera === camera &&
+    preset.codec === codec &&
+    preset.resolution === resolution &&
+    preset.frameRate === frameRate
+  ) ?? VIDEO_FILE_SIZE_PRESETS[0];
+
+  const videoMbps = selectedPreset.videoMbps;
+  const audioKbps = Number(audioBitrate) || 0;
+  const durationSeconds = (Number(hours) || 0) * 3600 + (Number(minutes) || 0) * 60 + (Number(seconds) || 0);
+  const totalMbps = videoMbps + audioKbps / 1000;
+  const totalMegabits = totalMbps * durationSeconds;
+  const totalMegabytes = totalMegabits / 8;
+  const totalGigabytes = totalMegabytes / 1024;
+  const totalTerabytes = totalGigabytes / 1024;
+
+  return (
+    <div className="micro-tool-app">
+      <div className="micro-tool-inputs">
+        <div className="micro-tool-field">
+          <label className="crop-factor-label"><span>Brand</span></label>
+          <select value={brand} onChange={(event) => setBrand(event.target.value)} className="crop-factor-input micro-tool-select">
+            {brandOptions.map((option) => (
+              <option key={option} value={option}>{option}</option>
+            ))}
+          </select>
+        </div>
+
+        <div className="micro-tool-field">
+          <label className="crop-factor-label"><Camera size={14} /><span>Camera</span></label>
+          <select value={camera} onChange={(event) => setCamera(event.target.value)} className="crop-factor-input micro-tool-select">
+            {cameraOptions.map((option) => (
+              <option key={option} value={option}>{option}</option>
+            ))}
+          </select>
+        </div>
+
+        <div className="micro-tool-field">
+          <label className="crop-factor-label"><HardDrive size={14} /><span>Codec</span></label>
+          <select value={codec} onChange={(event) => setCodec(event.target.value)} className="crop-factor-input micro-tool-select">
+            {codecOptions.map((option) => (
+              <option key={option} value={option}>{option}</option>
+            ))}
+          </select>
+        </div>
+
+        <div className="micro-tool-field">
+          <label className="crop-factor-label"><span>Resolution</span></label>
+          <select value={resolution} onChange={(event) => setResolution(event.target.value)} className="crop-factor-input micro-tool-select">
+            {resolutionOptions.map((option) => (
+              <option key={option} value={option}>{option}</option>
+            ))}
+          </select>
+        </div>
+
+        <div className="micro-tool-field">
+          <label className="crop-factor-label"><span>Frame Rate</span></label>
+          <select value={frameRate} onChange={(event) => setFrameRate(event.target.value)} className="crop-factor-input micro-tool-select">
+            {frameRateOptions.map((option) => (
+              <option key={option} value={option}>{option}</option>
+            ))}
+          </select>
+          <div className="micro-tool-source-note">Preset bitrate from {selectedPreset.source}</div>
+        </div>
+
+        <div className="micro-tool-field">
+          <label className="crop-factor-label"><span>Profile</span></label>
+          <div className="micro-tool-readout">{selectedPreset.profile}</div>
+          <div className="micro-tool-source-note">Profile reference only, does not change file size.</div>
+        </div>
+
+        <div className="micro-tool-field">
+          <label className="crop-factor-label">
+            <HardDrive size={14} />
+            <span>Video Bitrate</span>
+          </label>
+          <div className="micro-tool-readout">{videoMbps.toFixed(0)} Mbps</div>
+        </div>
+
+        <div className="micro-tool-field">
+          <label className="crop-factor-label">
+            <AudioLines size={14} />
+            <span>Audio Bitrate (kbps)</span>
+          </label>
+          <input
+            type="number"
+            min="0"
+            step="1"
+            value={audioBitrate}
+            onChange={(event) => setAudioBitrate(event.target.value)}
+            className="crop-factor-input"
+            placeholder="256"
+          />
+          <div className="crop-factor-inline-note">Common</div>
+          <div className="crop-factor-chip-row compact">
+            {COMMON_AUDIO_BITRATES.map((value) => (
+              <button
+                key={value}
+                type="button"
+                className={`crop-factor-chip ${Number(audioBitrate) === value ? "active" : ""}`}
+                onClick={() => setAudioBitrate(String(value))}
+              >
+                <span>{value} kbps</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="micro-tool-field">
+          <label className="crop-factor-label">
+            <Clock3 size={14} />
+            <span>Duration</span>
+          </label>
+          <div className="duration-input-row">
+            <input
+              type="number"
+              min="0"
+              step="1"
+              value={hours}
+              onChange={(event) => setHours(event.target.value)}
+              className="crop-factor-input"
+              placeholder="0"
+            />
+            <input
+              type="number"
+              min="0"
+              step="1"
+              value={minutes}
+              onChange={(event) => setMinutes(event.target.value)}
+              className="crop-factor-input"
+              placeholder="10"
+            />
+            <input
+              type="number"
+              min="0"
+              step="1"
+              value={seconds}
+              onChange={(event) => setSeconds(event.target.value)}
+              className="crop-factor-input"
+              placeholder="0"
+            />
+          </div>
+          <div className="duration-input-labels">
+            <span>Hours</span>
+            <span>Minutes</span>
+            <span>Seconds</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="micro-tool-results">
+        <div className="crop-factor-result-card">
+          <span className="crop-factor-result-label">Total Bitrate</span>
+          <strong>{totalMbps ? `${totalMbps.toFixed(3)} Mbps` : "—"}</strong>
+        </div>
+        <div className="crop-factor-result-card">
+          <span className="crop-factor-result-label">Estimated Size</span>
+          <strong>
+            {totalGigabytes >= 1
+              ? `${totalGigabytes.toFixed(2)} GB`
+              : totalMegabytes
+                ? `${totalMegabytes.toFixed(0)} MB`
+                : "—"}
+          </strong>
+        </div>
+        <div className="crop-factor-result-card">
+          <span className="crop-factor-result-label">Large Media</span>
+          <strong>{totalTerabytes >= 1 ? `${totalTerabytes.toFixed(2)} TB` : "Below 1 TB"}</strong>
         </div>
       </div>
     </div>

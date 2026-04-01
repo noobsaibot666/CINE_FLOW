@@ -3655,9 +3655,9 @@ body {
 .others-menu-item {
   width: 100%;
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 12px;
-  padding: 12px;
+  padding: 10px 12px;
   border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.02);
@@ -3674,20 +3674,23 @@ body {
 
 .menu-item-copy {
   display: grid;
-  gap: 4px;
+  gap: 2px;
   text-align: left;
+  min-width: 0;
+  flex: 1;
 }
 
 .menu-item-copy .menu-item-label {
-  font-size: 0.9rem;
+  font-size: 0.86rem;
   font-weight: 600;
   color: var(--text-primary);
+  line-height: 1.2;
 }
 
 .menu-item-copy small {
   color: var(--text-muted);
-  font-size: 0.78rem;
-  line-height: 1.45;
+  font-size: 0.72rem;
+  line-height: 1.25;
 }
 
 .microapp-backdrop {
@@ -3911,6 +3914,73 @@ body {
   gap: 18px;
 }
 
+.micro-tool-app {
+  display: grid;
+  gap: 24px;
+}
+
+.micro-tool-inputs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.micro-tool-field {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  padding: 18px;
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.micro-tool-select {
+  appearance: none;
+}
+
+.micro-tool-readout {
+  min-height: 46px;
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(165, 146, 255, 0.18);
+  background: rgba(165, 146, 255, 0.06);
+  color: #d2c6ff;
+  font-size: 0.96rem;
+  font-weight: 600;
+}
+
+.micro-tool-source-note {
+  font-size: 0.7rem;
+  line-height: 1.35;
+  color: var(--text-muted);
+}
+
+.duration-input-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.duration-input-labels {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.micro-tool-results {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+}
+
 .crop-factor-result-card {
   display: grid;
   gap: 8px;
@@ -4093,7 +4163,14 @@ body {
   }
 
   .crop-factor-inputs,
-  .crop-factor-results {
+  .crop-factor-results,
+  .micro-tool-inputs,
+  .micro-tool-results {
+    grid-template-columns: 1fr;
+  }
+
+  .duration-input-row,
+  .duration-input-labels {
     grid-template-columns: 1fr;
   }
 }
