@@ -2398,10 +2398,10 @@ const TRANSFER_DESTINATION_PRESETS = [
   { label: "NAS over 10 GbE", value: 9.4, unit: "Gbps", note: "real network throughput" },
 ] as const;
 const TRANSFER_NETWORK_REFERENCE = [
-  { label: "100 MbE", value: 95, unit: "Mbps", throughput: "~12 MB/s", interface: "100 MbE", destination: "NAS over 100 MbE" },
-  { label: "1 GbE", value: 940, unit: "Mbps", throughput: "~118 MB/s", interface: "1 GbE", destination: "NAS over 1 GbE" },
-  { label: "2.5 GbE", value: 2.35, unit: "Gbps", throughput: "~294 MB/s", interface: "2.5 GbE", destination: "NAS over 2.5 GbE" },
   { label: "10 GbE", value: 9.4, unit: "Gbps", throughput: "~1175 MB/s", interface: "10 GbE", destination: "NAS over 10 GbE" },
+  { label: "2.5 GbE", value: 2.35, unit: "Gbps", throughput: "~294 MB/s", interface: "2.5 GbE", destination: "NAS over 2.5 GbE" },
+  { label: "1 GbE", value: 940, unit: "Mbps", throughput: "~118 MB/s", interface: "1 GbE", destination: "NAS over 1 GbE" },
+  { label: "100 MbE", value: 95, unit: "Mbps", throughput: "~12 MB/s", interface: "100 MbE", destination: "NAS over 100 MbE" },
 ] as const;
 type VideoFileSizePreset = {
   brand: string;
@@ -4670,6 +4670,18 @@ function TransferTimeCalculator({ resetNonce = 0 }: { resetNonce?: number }) {
     return parts.join(" ");
   };
 
+  const formatDurationCompact = (seconds: number) => {
+    if (!Number.isFinite(seconds) || seconds <= 0) return "—";
+    const days = Math.floor(seconds / 86_400);
+    const hours = Math.floor((seconds % 86_400) / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const secs = Math.round(seconds % 60);
+    if (days > 0) return `${days}d ${hours}h`;
+    if (hours > 0) return `${hours}h ${minutes}m`;
+    if (minutes > 0) return `${minutes}m ${secs}s`;
+    return `${secs}s`;
+  };
+
   useEffect(() => {
     setSizeValue("256");
     setSizeUnit("GB");
@@ -4801,7 +4813,7 @@ function TransferTimeCalculator({ resetNonce = 0 }: { resetNonce?: number }) {
               >
                 <strong>{entry.label}</strong>
                 <span>{entry.throughput}</span>
-                <small>{formatDuration(computeTransferSeconds(entry.value * (TRANSFER_SPEED_UNITS.find((unit) => unit.label === entry.unit)?.bytesPerSecond ?? 0)))}</small>
+                <small>{formatDurationCompact(computeTransferSeconds(entry.value * (TRANSFER_SPEED_UNITS.find((unit) => unit.label === entry.unit)?.bytesPerSecond ?? 0)))}</small>
               </button>
             ))}
           </div>
