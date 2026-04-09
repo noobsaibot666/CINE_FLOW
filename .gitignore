@@ -28,6 +28,10 @@ src-tauri/bin/*
 docs/bin/*
 !docs/bin/.gitkeep
 
+# Exclude manual staging folders
+WIN/
+MacOS/
+
 # Exclude large graphic assets if needed
 *.dmg
 *.zip

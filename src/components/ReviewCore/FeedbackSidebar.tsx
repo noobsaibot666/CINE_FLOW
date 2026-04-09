@@ -126,7 +126,7 @@ export const FeedbackSidebar: React.FC<FeedbackSidebarProps> = ({
                 <Virtuoso
                     style={{ height: "100%" }}
                     data={filteredComments}
-                    itemContent={(_index, comment) => {
+                    itemContent={(_index: number, comment: any) => {
                         const isSelected = selectedCommentId === comment.id;
                         const initials = getReviewerInitials(comment.author_name);
                         const color = getReviewerColor(comment.author_name);

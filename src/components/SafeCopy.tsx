@@ -639,7 +639,7 @@ export function SafeCopy({ projectId, onJobCreated, onError }: SafeCopyProps) {
                     <th>Details</th>
                   </tr>
                 )}
-                itemContent={(_index, item) => (
+                itemContent={(_index: number, item: any) => (
                   <>
                     <td className="status-cell">
                       {item.status === "OK" ? <CheckCircle size={14} className="ok" /> :

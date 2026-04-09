@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { X, CirclePause, Trash2, CheckCircle2, AlertTriangle, Loader2, Clock } from "lucide-react";
+import { X, Pause, Trash2, CheckCircle2, AlertTriangle, Loader2, Clock } from "lucide-react";
 import { JobInfo } from "../types";
 import { useState } from "react";
 
@@ -30,7 +30,7 @@ function StatusIcon({ status }: { status: string }) {
     case "queued":
       return <Clock size={14} className="status-icon-queued" />;
     case "cancelled":
-      return <CirclePause size={14} className="status-icon-cancelled" />;
+      return <Pause size={14} className="status-icon-cancelled" />;
     default:
       return null;
   }
@@ -78,7 +78,7 @@ function JobSection({
               {job.error && <div className="job-error-banner"><AlertTriangle size={12} /> {job.error}</div>}
               {job.status === "running" && (
                 <button className="btn btn-secondary btn-sm job-cancel-btn" onClick={() => cancelJob(job.id)}>
-                  <CirclePause size={14} /> Cancel
+                  <Pause size={14} /> Cancel
                 </button>
               )}
             </div>

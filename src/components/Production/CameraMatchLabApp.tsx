@@ -1,5 +1,5 @@
 import React, { startTransition, useEffect, useMemo, useRef, useState } from "react";
-import { ChartColumn, ChevronDown, CircleHelp, Download, FolderOpen, Gauge, ImageIcon, Maximize2, Palette, Pipette, RefreshCw, Trash2, Waves } from "lucide-react";
+import { BarChart3, ChevronDown, HelpCircle, Download, FolderOpen, Gauge, ImageIcon, Maximize2, Palette, Pipette, RefreshCw, Trash2, Waves } from "lucide-react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import {
   CalibrationChartDetection,
@@ -1318,7 +1318,7 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                               toneStyle={previewToneStyle}
                             />
                             <PreviewModeButton
-                              icon={<ChartColumn size={14} />}
+                              icon={<BarChart3 size={14} />}
                               active={signalPreviewMode === "scope"}
                               onClick={() => setSignalPreviewModeBySlot((prev) => ({ ...prev, [slot]: "scope" }))}
                               label="RGB parade preview"
@@ -1437,7 +1437,7 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                                 title="Read left to right. Start with exposure, then white balance and tint, then refine highlights, midtones, and shadows."
                                 aria-label="Signal read guidance"
                               >
-                                <CircleHelp size={14} />
+                                <HelpCircle size={14} />
                               </span>
                             </div>
                           </div>

@@ -279,7 +279,7 @@ export const ClipList = memo(function ClipList({
                     <GroupedVirtuoso
                         ref={virtuosoRef}
                         groupCounts={groupCounts}
-                        groupContent={(index) => {
+                        groupContent={(index: number) => {
                             if (groups.length === 0) return null;
                             return (
                                 <div className="clip-shot-group-header" style={{ background: 'var(--color-bg-page)', zIndex: 10 }}>
@@ -287,7 +287,7 @@ export const ClipList = memo(function ClipList({
                                 </div>
                             );
                         }}
-                        itemContent={(index) => {
+                        itemContent={(index: number) => {
                             const item = clips[index];
                             return (
                                 <div

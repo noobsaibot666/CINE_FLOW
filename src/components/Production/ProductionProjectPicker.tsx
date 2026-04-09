@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { BriefcaseBusiness, ChevronRight, Plus, UserRound, X } from "lucide-react";
+import { Briefcase, ChevronRight, Plus, UserRound, X } from "lucide-react";
 import { ProductionProject } from "../../types";
 import { invokeGuarded } from "../../utils/tauri";
 
@@ -100,7 +100,7 @@ export function ProductionProjectPicker({
                   <button key={project.id} type="button" onClick={() => void handleOpen(project)} style={listRowStyle}>
                     <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
                       <div style={rowIconStyle}>
-                        <BriefcaseBusiness size={16} />
+                        <Briefcase size={16} />
                       </div>
                       <div style={{ textAlign: "left" }}>
                         <div style={{ fontWeight: 700, color: "var(--text-primary)" }}>{project.name}</div>

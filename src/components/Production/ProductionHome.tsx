@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { ArrowRight, BarChart3, BriefcaseBusiness, Camera, Maximize2, Minus, Plus, ShieldCheck, SlidersHorizontal, X } from "lucide-react";
+import { ArrowRight, BarChart3, Briefcase, Camera, Maximize2, Minus, Plus, ShieldCheck, SlidersHorizontal, X } from "lucide-react";
 import { ProductionProject } from "../../types";
 import { invokeGuarded } from "../../utils/tauri";
 
@@ -198,7 +198,7 @@ function ProjectsCard({
   return (
     <div className="module-card premium-card module-launcher-card production-project-card" style={projectsCardStyle}>
       <div className="module-icon">
-        <BriefcaseBusiness size={22} strokeWidth={1.35} />
+        <Briefcase size={22} strokeWidth={1.35} />
       </div>
       <div className="module-info" style={projectsInfoStyle}>
         <h2>Project Manager</h2>

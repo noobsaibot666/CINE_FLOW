@@ -9,7 +9,7 @@ import {
   Download,
   FolderOpen,
   HelpCircle,
-  LoaderCircle,
+  Loader2,
   Minus,
   Plus,
   Save,
@@ -1299,7 +1299,7 @@ export default function ShotList({ appVersion }: ShotListProps) {
     return (
       <div className="shot-list-shell">
         <div className="shot-list-loading premium-card">
-          <LoaderCircle className="shot-list-spinner" size={22} />
+          <Loader2 className="shot-list-spinner" size={22} />
           <span>Loading Shot List…</span>
         </div>
       </div>

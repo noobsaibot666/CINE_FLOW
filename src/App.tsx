@@ -9,7 +9,7 @@ import {
   ShieldCheck,
   ArrowRight,
   Boxes,
-  BriefcaseBusiness,
+  Briefcase,
   MoreHorizontal,
   FileDown,
   ChevronDown,
@@ -1400,7 +1400,7 @@ function AppContent() {
                     setActiveProductionApp(null);
                   }}
                 >
-                  <BriefcaseBusiness size={14} /> Post-production
+                  <Briefcase size={14} /> Post-production
                 </button>
               </nav>
             )}
@@ -1508,7 +1508,7 @@ function AppContent() {
 
                 <button className={`btn btn-jobs jobs-state-${jobHudState}`} onClick={() => setJobsOpen(true)}>
                   <div className="jobs-indicator-content">
-                    <BriefcaseBusiness size={16} />
+                    <Briefcase size={16} />
                     <span className="jobs-label">
                       {(scanning || extracting) ? (scanning ? "Scanning…" : `Extracting ${extractProgress.done}/${extractProgress.total}`) : (
                         runningJobs > 0 ? `Running ${runningJobs}` : failedJobs > 0 ? `Errors ${failedJobs}` : "Jobs"
@@ -2157,7 +2157,7 @@ function AppContent() {
                         setActiveMediaWorkspaceApp(null);
                       }}
                     >
-                      <div className="module-icon"><BriefcaseBusiness size={22} strokeWidth={1.35} /></div>
+                      <div className="module-icon"><Briefcase size={22} strokeWidth={1.35} /></div>
                       <div className="module-info">
                         <span className="module-label">Post-Production</span>
                         <h2>Post-Production</h2>

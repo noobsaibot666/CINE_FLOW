@@ -105,7 +105,7 @@ export const AssetLibrary: React.FC<AssetLibraryProps> = ({
                     <Virtuoso
                         style={{ height: "100%" }}
                         data={filteredAssets}
-                        itemContent={(_index, asset) => {
+                        itemContent={(_index: number, asset: any) => {
                             const isActive = selectedAssetId === asset.id;
                             return (
                                 <div

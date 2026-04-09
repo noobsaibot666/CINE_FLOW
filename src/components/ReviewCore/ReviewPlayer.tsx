@@ -60,11 +60,11 @@ export const ReviewPlayer: React.FC<ReviewPlayerProps> = ({
         <div className="flex-1 flex flex-col min-h-0 bg-black/40 relative overflow-hidden">
             {/* Video Content Area */}
             <div
-                ref={videoStageRef}
+                ref={videoStageRef as any}
                 className="flex-1 relative flex items-center justify-center overflow-hidden bg-black select-none pointer-events-auto"
             >
                 <video
-                    ref={videoRef}
+                    ref={videoRef as any}
                     className="max-w-full max-h-full block outline-none ring-0 shadow-2xl"
                     playsInline
                     crossOrigin="anonymous"
