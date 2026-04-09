@@ -1,3 +1,9 @@
+/*
+ * (c) 2026 Alan Alves. All rights reserved.
+ * CineFlow Suite — Professional Production to Post Hub
+ * hello@expose-u.com | https://alan-design.com/
+ */
+
 use crate::audio;
 use crate::clustering;
 use crate::db::{
@@ -11,6 +17,8 @@ use crate::db::{
 };
 use crate::ffprobe;
 use crate::jobs::{JobInfo, JobStatus};
+#[cfg(target_os = "macos")]
+use crate::mac_bookmarks;
 use crate::production::{self, CameraProfile, LookPreset};
 use crate::production_match_lab::{
     aggregate_frames, analysis_timeout, analyze_frame, build_cache_dir, build_frame_timestamps,
@@ -96,11 +104,17 @@ pub async fn scan_folder(
     let project_id = hash_string(&format!("{}::{}", phase, folder_path));
     let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
+    #[cfg(target_os = "macos")]
+    let bookmark = mac_bookmarks::create_secure_bookmark(&folder_path).ok();
+    #[cfg(not(target_os = "macos"))]
+    let bookmark = None;
+
     let project = Project {
         id: project_id.clone(),
         root_path: folder_path.clone(),
         name: project_name.clone(),
         created_at: now,
+        bookmark: bookmark.clone(),
     };
 
     db.upsert_project(&project)
@@ -111,6 +125,7 @@ pub async fn scan_folder(
         root_path: folder_path.clone(),
         label: "Root 01".to_string(),
         created_at: chrono::Utc::now().to_rfc3339(),
+        bookmark,
     };
     db.upsert_project_root(&initial_root)
         .map_err(|e| format!("Failed to create initial project root: {}", e))?;
@@ -163,11 +178,17 @@ pub async fn scan_media(
     let project_id = hash_string(&format!("{}::files::{:?}", phase, paths));
     let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
+    #[cfg(target_os = "macos")]
+    let bookmark = mac_bookmarks::create_secure_bookmark(&parent).ok();
+    #[cfg(not(target_os = "macos"))]
+    let bookmark = None;
+
     let project = Project {
         id: project_id.clone(),
         root_path: parent.clone(),
         name: project_name.clone(),
         created_at: now.clone(),
+        bookmark: bookmark.clone(),
     };
     db.upsert_project(&project)
         .map_err(|e| format!("Failed to create project: {}", e))?;
@@ -178,6 +199,7 @@ pub async fn scan_media(
         root_path: parent.clone(),
         label: "Selected Files".to_string(),
         created_at: now,
+        bookmark,
     };
     db.upsert_project_root(&root)
         .map_err(|e| format!("Failed to create project root: {}", e))?;
@@ -241,12 +263,18 @@ pub async fn add_project_root(
     label: Option<String>,
     state: State<'_, Arc<AppState>>,
 ) -> Result<ProjectRoot, String> {
+    #[cfg(target_os = "macos")]
+    let bookmark = mac_bookmarks::create_secure_bookmark(&root_path).ok();
+    #[cfg(not(target_os = "macos"))]
+    let bookmark = None;
+
     let root = ProjectRoot {
         id: hash_string(&format!("{}::{}", project_id, root_path)),
         project_id,
         root_path,
         label: label.unwrap_or_else(|| "Root".to_string()),
         created_at: chrono::Utc::now().to_rfc3339(),
+        bookmark,
     };
     state
         .db
@@ -2862,6 +2890,7 @@ pub async fn review_core_create_project(
             root_path: format!("review-core://{}", project_id),
             name: safe_name.clone(),
             created_at: now.clone(),
+            bookmark: None,
         })
         .map_err(|e| e.to_string())?;
 
@@ -4179,6 +4208,11 @@ fn rescan_project_internal(
     let mut clips: Vec<Clip> = Vec::new();
     let mut seen_ids: Vec<String> = Vec::new();
     for root in roots {
+        #[cfg(target_os = "macos")]
+        let _bookmark_guard = root.bookmark.as_ref().and_then(|data| {
+            mac_bookmarks::start_accessing_bookmark(data).ok()
+        });
+
         let files = scanner::scan_folder(&root.root_path, cancel_flag);
         for file_path in files {
             let rel_path = std::path::Path::new(&file_path)
@@ -5990,6 +6024,7 @@ mod tests {
             root_path: "/tmp".to_string(),
             name: "P".to_string(),
             created_at: "2026-01-01".to_string(),
+            bookmark: None,
         })
         .unwrap();
         db.upsert_clip(&sample_clip(project_id, "c1", 5, "pick"))
@@ -6035,6 +6070,7 @@ mod tests {
             root_path: "/tmp".to_string(),
             name: "P".to_string(),
             created_at: "2026-01-01".to_string(),
+            bookmark: None,
         })
         .unwrap();
         db.create_asset(&Asset {
@@ -6153,6 +6189,7 @@ mod tests {
             root_path: "/tmp".to_string(),
             name: "P".to_string(),
             created_at: "2026-01-01".to_string(),
+            bookmark: None,
         })
         .unwrap();
         db.create_asset(&Asset {
@@ -6218,6 +6255,7 @@ mod tests {
             root_path: "/tmp".to_string(),
             name: "P".to_string(),
             created_at: "2026-01-01".to_string(),
+            bookmark: None,
         })
         .unwrap();
         db.create_review_core_share_link(&ReviewCoreShareLink {
@@ -6249,6 +6287,7 @@ mod tests {
             root_path: "/tmp".to_string(),
             name: "P".to_string(),
             created_at: "2026-01-01".to_string(),
+            bookmark: None,
         })
         .unwrap();
         let link = ReviewCoreShareLink {

@@ -2,60 +2,50 @@
 
 This document tracks all visual and written assets required for the macOS App Store and Microsoft Windows Store.
 
----
-
-## 🖋️ Marketing Copy (Professional & High-End)
-
-Use this high-impact copy during the onboarding of your store pages.
-
-### **Product Name:** 
-CineFlow Suite
-
-### **One-Line Pitch:** 
-The high-performance production brain for modern filmmakers.
-
-### **Short Description:** 
-CineFlow Suite is a professional-grade ecosystem designed for Directors, DPs, and Editors. From technical pre-production and on-set verification to post-production ingest, CineFlow Suite protects your vision and streamlines your media workflow.
-
-### **Key Value Propositions:**
-1. **Absolute Truth:** Professional media verification and safe-copy tools that ensure your footage is protected from set to suite.
-2. **Technical Precision:** Precision-engineered modules for lens math, depth-of-field planning, and equipment management.
-3. **Infinite Review:** Zero-latency review core with native LUT support and frame-accurate metadata extraction.
-4. **Local-First Privacy:** All processing happens on your machine. Your media never leaves your sight.
+## 📁 Suggested Folder Structure
+- `assets/store/`
+    - `macOS/`
+        - `icons/` (AppIcon.icns, master_1024.png)
+        - `screenshots/` (01_Dashboard.png, 02_ReviewCore.png, 03_MatchLab.png, 04_ShotList.png)
+    - `windows/`
+        - `icons/` (StoreLogo.png, Square150x150.png, etc.)
+        - `screenshots/` (01_WindowsMain.png, etc.)
 
 ---
 
-## 🖼️ Visual Assets: macOS App Store
+## 🍎 macOS App Store Requirements
 
-| Asset Name | Required Size | Notes |
-| :--- | :--- | :--- |
-| **App Icon** | 1024 x 1024 | Handled via `src-tauri/icons/icon.icns` |
-| **Screenshots (Primary)** | 1280 x 800 | Minimum required. High-res recommended (2880 x 1800). |
-| **Screenshots (Secondary)** | 1440 x 900 | For Retina displays. |
-| **Promotional Image** | 3000 x 3000 | Used for featuring on the App Store. |
-| **App Preview (Video)** | 1920 x 1080 | 30s max. Highly recommended for CineFlow. |
+### 1. App Icon
+- **Master Image:** 1024 x 1024 px (PNG, no transparency)
+- **Bundle Format:** `.icns` file (automatically managed by Tauri from `icons/` folder)
 
----
-
-## 🖼️ Visual Assets: Windows Store
-
-| Asset Name | Required Size | Notes |
-| :--- | :--- | :--- |
-| **App Icon (Square)** | 300 x 300 | Primary store listing icon. |
-| **Small Square Logo** | 71 x 71 | Used for Windows Start menu. |
-| **Wide Logo/Banner** | 620 x 300 | Displayed in search results and collections. |
-| **Store Logo** | 50 x 50 | Minimal logo for badge placement. |
-| **High-Res Screenshots** | 1920 x 1080 | Or 3840 x 2160 (4K) for modern high-DPI displays. |
+### 2. Screenshots (Min 3, Max 10)
+- **Primary Size:** 2560 x 1600 px (16:10 aspect ratio)
+- **Alternative:** 1280 x 800 px
+- **Target Context:**
+    - **Dashboard**: Showing the Creative Suite high-level view.
+    - **Review Core**: Demonstrating BRAW/RED playback and annotations.
+    - **Match Lab**: Highlighting AI shot matching and LUT analysis.
+    - **Shot List**: Displaying the high-contrast gear tracking.
 
 ---
 
-## ✅ Final Pre-Submission Task List
+## 🪟 Microsoft Store Requirements
 
-- [ ] **Generate Final Build:** Run `npm run tauri build` on both Mac and Windows.
-- [ ] **Screenshot Capture:** Target each main module:
-    - *Home*: The overall high-level dashboard.
-    - *Production*: Frame Preview & Match Lab (displaying LUTs).
-    - *Review*: The multi-camera grid layout.
-    - *Pre-Prod*: The professional Shot List view.
-- [ ] **Version Matching:** Ensure `tauri.conf.json` version matches your App Store Connect draft.
-- [ ] **Privacy Link:** Use the `/docs/appstore/PRIVACY_POLICY.md` content for the required Privacy URL.
+### 1. App Icons (MSIX Style)
+- **Store Logo:** 50 x 50 px
+- **Square 150x150 Logo:** 150 x 150 px
+- **Square 44x44 Logo:** 44 x 44 px (for Taskbar)
+- **Wide 310x150 Logo:** 310 x 150 px
+
+### 2. Screenshots
+- **Size:** 1920 x 1080 px (16:9 aspect ratio)
+- **Requirement:** At least 1 screenshot is mandatory; 4-6 recommended for conversion.
+
+---
+
+## ✅ Final Developer Certification
+- [x] **Privacy Policy:** Hosted at `index.html` (GitHub Pages)
+- [x] **Pricing Strategy:** Defined (v1 purchase, v2 50% discount)
+- [ ] **Release Build:** Run `npm run tauri build` to generate signed final installers.
+- [ ] **Version Sync:** Ensure `tauri.conf.json` matches store listing.

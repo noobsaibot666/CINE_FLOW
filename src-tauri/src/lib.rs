@@ -1,3 +1,9 @@
+/*
+ * (c) 2026 Alan Alves. All rights reserved.
+ * CineFlow Suite — Professional Production to Post Hub
+ * hello@expose-u.com | https://alan-design.com/
+ */
+
 mod audio;
 mod clustering;
 mod commands;
@@ -16,6 +22,9 @@ mod scanner;
 mod thumbnail;
 mod tools;
 mod verification;
+
+#[cfg(target_os = "macos")]
+pub(crate) mod mac_bookmarks;
 
 use commands::AppState;
 use std::sync::Arc;

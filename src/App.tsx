@@ -1,3 +1,9 @@
+/*
+ * (c) 2026 Alan Alves. All rights reserved.
+ * CineFlow Suite — Professional Production to Post Hub
+ * hello@expose-u.com | https://alan-design.com/
+ */
+
 import { Component, ReactNode, useState, useEffect, useCallback, useRef, useMemo, lazy, Suspense } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";

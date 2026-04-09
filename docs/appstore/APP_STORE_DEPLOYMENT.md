@@ -1,4 +1,24 @@
-# Apple App Store Deployment Checklist
+# App Store Submission & Metadata (macOS)
+
+## 🎯 Marketing Metadata
+
+- **App Name:** CineFlow Suite: Preview & Prep
+- **Subtitle:** Professional Creative Suite for Filmmakers & Photographers
+- **Category:** Video (Primary), Photo & Video (Secondary)
+- **Alt Category:** Productivity
+
+### Store Description
+**CineFlow Suite** is an all-in-one professional toolkit designed specifically for **Filmmakers, Photographers, Art Directors, and Cinematographers**. Built for high-stakes production environments, CineFlow empowers you to work **better, faster, and with surgical accuracy**.
+
+Whether you are on-set, in the field, or at your workstation, CineFlow provides a unified suite of micro-apps tailored for visual storytellers:
+- **Review Core:** Real-time playback and precision annotation for BRAW, RED, and HLS.
+- **Match Lab:** AI-powered shot matching and look analysis for visual consistency.
+- **Shot List:** Rapid gear management and high-contrast shot tracking.
+- **Micro-Tools:** A growing collection of specialized utilities for technical prep.
+
+Stop context-switching between dozens of disjointed tools. Elevate your production workflow with the power of a modern, local-first Creative Suite.
+
+---
 
 ## 🛡️ Sidecars & Sandboxing (CRITICAL)
 
@@ -47,7 +67,7 @@ Follow these steps to submit **CineFlow Suite** to the macOS App Store.
 
 ## 2. Certificates & Identifiers
 
-- [ ] Create a **Bundle ID** in [Developer Portal](https://developer.apple.com/account/resources/identifiers/list): `com.alanalves.wrappreview`.
+- [ ] Create a **Bundle ID** in [Developer Portal](https://developer.apple.com/account/resources/identifiers/list): `com.cineflow.suite`.
 - [ ] Create **Mac App Distribution** and **Mac Installer Distribution** certificates.
 - [ ] Ensure `entitlements.plist` contains the required sandbox keys.
 
@@ -74,7 +94,7 @@ The output will be in `src-tauri/target/release/bundle/macos/`.
 Tauri's build process usually handles notarization, but you can verify manually:
 
 ```bash
-xcrun altool --notarize-app --primary-bundle-id "com.alanalves.wrappreview" --username "YOUR_APPLE_ID" --password "YOUR_APP_SPECIFIC_PASSWORD" --file "path/to/your.pkg"
+xcrun altool --notarize-app --primary-bundle-id "com.cineflow.suite" --username "YOUR_APPLE_ID" --password "YOUR_APP_SPECIFIC_PASSWORD" --file "path/to/your.pkg"
 ```
 
 ## 6. Upload & Review

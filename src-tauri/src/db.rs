@@ -16,6 +16,7 @@ pub struct Project {
     pub root_path: String,
     pub name: String,
     pub created_at: String,
+    pub bookmark: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,6 +26,7 @@ pub struct ProjectRoot {
     pub root_path: String,
     pub label: String,
     pub created_at: String,
+    pub bookmark: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1235,6 +1237,21 @@ impl Database {
                     [],
                 )?;
             }
+
+            // macOS Sandboxing: Add bookmark support
+            let mut project_stmt = conn.prepare("PRAGMA table_info(projects)")?;
+            let project_cols: Vec<String> = project_stmt.query_map([], |row| row.get(1))?
+                .filter_map(|r| r.ok()).collect();
+            if !project_cols.contains(&"bookmark".to_string()) {
+                conn.execute("ALTER TABLE projects ADD COLUMN bookmark BLOB", [])?;
+            }
+
+            let mut root_stmt = conn.prepare("PRAGMA table_info(project_roots)")?;
+            let root_cols: Vec<String> = root_stmt.query_map([], |row| row.get(1))?
+                .filter_map(|r| r.ok()).collect();
+            if !root_cols.contains(&"bookmark".to_string()) {
+                conn.execute("ALTER TABLE project_roots ADD COLUMN bookmark BLOB", [])?;
+            }
         }
 
         Ok(db)
@@ -1274,7 +1291,8 @@ impl Database {
                 id TEXT PRIMARY KEY,
                 root_path TEXT NOT NULL,
                 name TEXT NOT NULL,
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                bookmark BLOB
             );
 
             CREATE TABLE IF NOT EXISTS clips (
@@ -1326,6 +1344,7 @@ impl Database {
                 root_path TEXT NOT NULL,
                 label TEXT NOT NULL,
                 created_at TEXT NOT NULL,
+                bookmark BLOB,
                 UNIQUE(project_id, root_path),
                 FOREIGN KEY(project_id) REFERENCES projects(id)
             );
@@ -1750,8 +1769,19 @@ impl Database {
     pub fn upsert_project(&self, project: &Project) -> SqlResult<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT OR REPLACE INTO projects (id, root_path, name, created_at) VALUES (?1, ?2, ?3, ?4)",
-            params![project.id, project.root_path, project.name, project.created_at],
+            "INSERT INTO projects (id, root_path, name, created_at, bookmark)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(id) DO UPDATE SET
+                root_path = excluded.root_path,
+                name = excluded.name,
+                bookmark = excluded.bookmark",
+            params![
+                project.id,
+                project.root_path,
+                project.name,
+                project.created_at,
+                project.bookmark
+            ],
         )?;
         Ok(())
     }
@@ -2606,14 +2636,16 @@ impl Database {
 
     pub fn get_project(&self, id: &str) -> SqlResult<Option<Project>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt =
-            conn.prepare("SELECT id, root_path, name, created_at FROM projects WHERE id = ?1")?;
+        let mut stmt = conn.prepare(
+            "SELECT id, root_path, name, created_at, bookmark FROM projects WHERE id = ?1",
+        )?;
         let mut rows = stmt.query_map(params![id], |row| {
             Ok(Project {
                 id: row.get(0)?,
                 root_path: row.get(1)?,
                 name: row.get(2)?,
                 created_at: row.get(3)?,
+                bookmark: row.get(4)?,
             })
         })?;
         match rows.next() {
@@ -2696,7 +2728,7 @@ impl Database {
     pub fn list_project_roots(&self, project_id: &str) -> SqlResult<Vec<ProjectRoot>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, project_id, root_path, label, created_at
+            "SELECT id, project_id, root_path, label, created_at, bookmark
              FROM project_roots
              WHERE project_id = ?1
              ORDER BY created_at ASC, root_path ASC",
@@ -2709,6 +2741,7 @@ impl Database {
                     root_path: row.get(2)?,
                     label: row.get(3)?,
                     created_at: row.get(4)?,
+                    bookmark: row.get(5)?,
                 })
             })?
             .filter_map(|r| r.ok())
@@ -2721,19 +2754,20 @@ impl Database {
         // Avoid relying on a UNIQUE(project_id, root_path) migration in legacy DBs.
         // First try to update an existing row, then insert if nothing changed.
         let updated = conn.execute(
-            "UPDATE project_roots SET label = ?1 WHERE project_id = ?2 AND root_path = ?3",
-            params![root.label, root.project_id, root.root_path],
+            "UPDATE project_roots SET label = ?1, bookmark = ?2 WHERE project_id = ?3 AND root_path = ?4",
+            params![root.label, root.bookmark, root.project_id, root.root_path],
         )?;
         if updated == 0 {
             conn.execute(
-                "INSERT OR IGNORE INTO project_roots (id, project_id, root_path, label, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                "INSERT OR IGNORE INTO project_roots (id, project_id, root_path, label, created_at, bookmark)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![
                     root.id,
                     root.project_id,
                     root.root_path,
                     root.label,
-                    root.created_at
+                    root.created_at,
+                    root.bookmark
                 ],
             )?;
         }

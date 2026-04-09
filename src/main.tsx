@@ -1,3 +1,9 @@
+/*
+ * (c) 2026 Alan Alves. All rights reserved.
+ * CineFlow Suite — Professional Production to Post Hub
+ * hello@expose-u.com | https://alan-design.com/
+ */
+
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
