@@ -1,5 +1,5 @@
 import { save } from "@tauri-apps/plugin-dialog";
-import { jsPDF } from "jspdf";
+
 import { Clip, Thumbnail } from "../types";
 import { drawFooter, drawHeader } from "./ExportBranding";
 import { formatDuration, formatCodecLabel, getAudioBadge } from "./clipMetadata";
@@ -174,6 +174,7 @@ export async function exportPdf(options: ExportOptions): Promise<boolean> {
   });
   if (!filePath) return false;
 
+  const { jsPDF } = await import("jspdf");
   const pdf = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
   const pageW = 297;
   const pageH = 210;
@@ -595,6 +596,7 @@ export async function exportMosaicPdf(options: ExportOptions): Promise<boolean> 
     return false;
   }
 
+  const { jsPDF } = await import("jspdf");
   const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: [210, 210] });
   const pageW = 210;
   const pageH = 210;

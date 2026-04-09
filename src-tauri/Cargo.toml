@@ -39,4 +39,8 @@ image = { version = "0.24", features = ["png", "jpeg"] }
 bcrypt = "0.15"
 rand = "0.8"
 trash = "5"
-opencv = { version = "0.92", default-features = false, features = ["clang-runtime", "imgcodecs", "imgproc"] }
+opencv = { version = "0.92", optional = true, default-features = false, features = ["clang-runtime", "imgcodecs", "imgproc"] }
+
+[features]
+default = []
+calibration = ["dep:opencv"]

@@ -1,30 +1,54 @@
+#[cfg(feature = "calibration")]
 use opencv::core::{
     self, Mat, Point, Point2f, Rect, RotatedRect, Scalar, Size, Size2f, Vec3b, Vector, BORDER_REPLICATE,
 };
+#[cfg(feature = "calibration")]
 use opencv::imgcodecs;
+#[cfg(feature = "calibration")]
 use opencv::imgproc;
+#[cfg(feature = "calibration")]
 use opencv::prelude::*;
-use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
-use std::cmp::Ordering;
-use std::path::{Path, PathBuf};
 
+#[cfg(not(feature = "calibration"))]
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MatStub;
+use serde::{Deserialize, Serialize};
+#[cfg(feature = "calibration")]
+use sha2::{Digest, Sha256};
+#[cfg(feature = "calibration")]
+use std::cmp::Ordering;
+use std::path::Path;
+#[cfg(feature = "calibration")]
+use std::path::PathBuf;
+
+#[cfg(feature = "calibration")]
 const PATCH_COLUMNS: usize = 6;
+#[cfg(feature = "calibration")]
 const PATCH_ROWS: usize = 4;
+#[cfg(feature = "calibration")]
 const TOTAL_PATCHES: usize = PATCH_COLUMNS * PATCH_ROWS;
+#[cfg(feature = "calibration")]
 const NORMALIZED_WIDTH: i32 = 600;
+#[cfg(feature = "calibration")]
 const NORMALIZED_HEIGHT: i32 = 400;
+#[cfg(feature = "calibration")]
 const TARGET_ASPECT_RATIO: f64 = 1.5;
+#[cfg(feature = "calibration")]
 const MIN_AREA_RATIO: f64 = 0.04;
+#[cfg(feature = "calibration")]
 const NEUTRAL_PATCHES: [usize; 6] = [18, 19, 20, 21, 22, 23];
+#[cfg(feature = "calibration")]
 const SKIN_PATCHES: [usize; 3] = [0, 1, 8];
 
+#[cfg(feature = "calibration")]
 #[derive(Debug, Clone, Copy)]
 enum DetectionMode {
     Edges,
     DarkMask,
 }
 
+#[cfg(feature = "calibration")]
 #[derive(Debug, Clone, Copy)]
 struct DetectionAttemptConfig {
     mode: DetectionMode,
@@ -42,6 +66,7 @@ struct DetectionAttemptConfig {
     dilate_iterations: i32,
 }
 
+#[cfg(feature = "calibration")]
 #[derive(Debug, Clone, Default)]
 struct DetectionDebugInfo {
     detection_attempts: usize,
@@ -52,6 +77,7 @@ struct DetectionDebugInfo {
     fallback_used: bool,
 }
 
+#[cfg(feature = "calibration")]
 #[derive(Debug, Clone, Copy)]
 struct CandidateGeometry {
     area: f64,
@@ -62,6 +88,7 @@ struct CandidateGeometry {
     center_y: f64,
 }
 
+#[cfg(feature = "calibration")]
 struct CropContext {
     detection_frame: Mat,
     offset: Option<Point2f>,
@@ -150,12 +177,14 @@ pub struct CalibrationTransform {
     pub mean_delta_e_after: f64,
 }
 
+#[cfg(feature = "calibration")]
 #[derive(Debug, Clone, Copy)]
 struct SpyderReferencePatch {
     patch_index: usize,
     reference_rgb: [u8; 3],
 }
 
+#[cfg(feature = "calibration")]
 const SPYDERCHECKR_REFERENCE: [SpyderReferencePatch; TOTAL_PATCHES] = [
     SpyderReferencePatch { patch_index: 0, reference_rgb: [115, 82, 68] },
     SpyderReferencePatch { patch_index: 1, reference_rgb: [194, 150, 130] },
@@ -183,6 +212,7 @@ const SPYDERCHECKR_REFERENCE: [SpyderReferencePatch; TOTAL_PATCHES] = [
     SpyderReferencePatch { patch_index: 23, reference_rgb: [52, 52, 52] },
 ];
 
+#[cfg(feature = "calibration")]
 pub fn detect_spydercheckr(
     cache_root: &Path,
     project_id: &str,
@@ -331,6 +361,19 @@ pub fn detect_spydercheckr(
     })
 }
 
+#[cfg(not(feature = "calibration"))]
+pub fn detect_spydercheckr(
+    _cache_root: &Path,
+    _project_id: &str,
+    _slot: &str,
+    _frame_path: &Path,
+    _crop_rect: Option<&CalibrationCropRectNormalized>,
+    _manual_corners: Option<&[CalibrationPoint]>,
+) -> Result<CalibrationChartDetection, String> {
+    Err("SpyderCHECKR detection is currently only supported on macOS. OpenCV is required for this feature on Windows.".to_string())
+}
+
+#[cfg(feature = "calibration")]
 pub fn generate_calibration_transform(
     cache_root: &Path,
     project_id: &str,
@@ -406,6 +449,20 @@ pub fn generate_calibration_transform(
     Ok(updated)
 }
 
+#[cfg(not(feature = "calibration"))]
+pub fn generate_calibration_transform(
+    _cache_root: &Path,
+    _project_id: &str,
+    _slot: &str,
+    _hero_slot: &str,
+    _source_frame_path: &Path,
+    _source_calibration: &CalibrationChartDetection,
+    _target_calibration: Option<&CalibrationChartDetection>,
+) -> Result<CalibrationChartDetection, String> {
+    Err("Calibration transform generation is currently only supported on macOS.".to_string())
+}
+
+#[cfg(feature = "calibration")]
 fn build_corrected_preview_path(
     cache_root: &Path,
     project_id: &str,
@@ -427,6 +484,7 @@ fn build_corrected_preview_path(
     path.to_string_lossy().to_string()
 }
 
+#[cfg(feature = "calibration")]
 fn build_transform_preview_path(cache_root: &Path, project_id: &str, slot: &str) -> String {
     cache_root
         .join("production")
@@ -440,12 +498,14 @@ fn build_transform_preview_path(cache_root: &Path, project_id: &str, slot: &str)
         .to_string()
 }
 
+#[cfg(feature = "calibration")]
 fn build_transform_preview_tmp_path(path: &str) -> PathBuf {
     let target = PathBuf::from(path);
     let parent = target.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
     parent.join("transform_preview.tmp.jpg")
 }
 
+#[cfg(feature = "calibration")]
 fn build_lut_path(cache_root: &Path, project_id: &str, slot: &str, hero_slot: &str) -> String {
     cache_root
         .join("production")
@@ -459,6 +519,7 @@ fn build_lut_path(cache_root: &Path, project_id: &str, slot: &str, hero_slot: &s
         .to_string()
 }
 
+#[cfg(feature = "calibration")]
 fn mean_delta_for_patch_group(patches: &[CalibrationPatchSample], patch_indexes: &[usize]) -> f64 {
     let mut values = Vec::new();
     for patch_index in patch_indexes {
@@ -472,6 +533,7 @@ fn mean_delta_for_patch_group(patches: &[CalibrationPatchSample], patch_indexes:
     values.iter().sum::<f64>() / values.len() as f64
 }
 
+#[cfg(feature = "calibration")]
 fn compute_chart_area_ratio(corners: &[Point2f; 4], frame_width: f64, frame_height: f64) -> f64 {
     let mut area = 0.0;
     for index in 0..4 {
@@ -482,6 +544,7 @@ fn compute_chart_area_ratio(corners: &[Point2f; 4], frame_width: f64, frame_heig
     (area.abs() * 0.5 / (frame_width * frame_height)).clamp(0.0, 1.0)
 }
 
+#[cfg(feature = "calibration")]
 fn compute_chart_skew_score(corners: &[Point2f; 4]) -> f64 {
     let top = distance(corners[0], corners[1]);
     let right = distance(corners[1], corners[2]);
@@ -500,6 +563,7 @@ fn compute_chart_skew_score(corners: &[Point2f; 4]) -> f64 {
     ((horizontal_delta + vertical_delta) * 0.5).clamp(0.0, 1.0)
 }
 
+#[cfg(feature = "calibration")]
 fn count_clipped_patches(patches: &[CalibrationPatchSample]) -> u32 {
     NEUTRAL_PATCHES
         .iter()
@@ -508,6 +572,7 @@ fn count_clipped_patches(patches: &[CalibrationPatchSample]) -> u32 {
         .count() as u32
 }
 
+#[cfg(feature = "calibration")]
 fn count_crushed_patches(patches: &[CalibrationPatchSample]) -> u32 {
     [21usize, 22, 23]
         .iter()
@@ -516,6 +581,7 @@ fn count_crushed_patches(patches: &[CalibrationPatchSample]) -> u32 {
         .count() as u32
 }
 
+#[cfg(feature = "calibration")]
 fn compute_lighting_uniformity_score(patches: &[CalibrationPatchSample]) -> f64 {
     let values = NEUTRAL_PATCHES
         .iter()
@@ -540,6 +606,7 @@ fn compute_lighting_uniformity_score(patches: &[CalibrationPatchSample]) -> f64 
     (1.0 - (variance.sqrt() / mean).clamp(0.0, 1.0)).clamp(0.0, 1.0)
 }
 
+#[cfg(feature = "calibration")]
 fn build_chart_quality_warnings(
     chart_area_ratio: f64,
     chart_skew_score: f64,
@@ -566,6 +633,7 @@ fn build_chart_quality_warnings(
     warnings
 }
 
+#[cfg(feature = "calibration")]
 fn compute_transform_quality_flag(mean_delta_before: f64, mean_delta_after: f64) -> Option<String> {
     if mean_delta_after > mean_delta_before + 0.1 {
         return Some("Calibration made the match worse. Capture a new reference.".to_string());
@@ -580,6 +648,7 @@ fn compute_transform_quality_flag(mean_delta_before: f64, mean_delta_after: f64)
     None
 }
 
+#[cfg(feature = "calibration")]
 fn compute_calibration_quality(
     mean_delta_before: f64,
     mean_delta_after: f64,
@@ -619,6 +688,7 @@ fn compute_calibration_quality(
     (clamped, level.to_string())
 }
 
+#[cfg(feature = "calibration")]
 fn compute_exposure_offset(patches: &[CalibrationPatchSample]) -> f64 {
     let neutral_measured = mean_luma_for_group(patches, &NEUTRAL_PATCHES, false);
     let neutral_reference = mean_luma_for_group(patches, &NEUTRAL_PATCHES, true);
@@ -628,6 +698,7 @@ fn compute_exposure_offset(patches: &[CalibrationPatchSample]) -> f64 {
     (neutral_reference / neutral_measured).log2().clamp(-2.0, 2.0)
 }
 
+#[cfg(feature = "calibration")]
 fn compute_wb_shift(patches: &[CalibrationPatchSample]) -> i32 {
     let (measured_red, measured_blue) = mean_rb_for_group(patches, &NEUTRAL_PATCHES, false);
     let (reference_red, reference_blue) = mean_rb_for_group(patches, &NEUTRAL_PATCHES, true);
@@ -636,12 +707,14 @@ fn compute_wb_shift(patches: &[CalibrationPatchSample]) -> i32 {
     (((reference_delta - measured_delta) * 5200.0) as i32).clamp(-2000, 2000)
 }
 
+#[cfg(feature = "calibration")]
 fn compute_tint_shift(patches: &[CalibrationPatchSample]) -> i32 {
     let measured = mean_tint_for_group(patches, &NEUTRAL_PATCHES, false);
     let reference = mean_tint_for_group(patches, &NEUTRAL_PATCHES, true);
     (((reference - measured) * 32.0) as i32).clamp(-12, 12)
 }
 
+#[cfg(feature = "calibration")]
 fn mean_luma_for_group(patches: &[CalibrationPatchSample], patch_indexes: &[usize], reference: bool) -> f64 {
     let mut values = Vec::new();
     for patch_index in patch_indexes {
@@ -660,6 +733,7 @@ fn mean_luma_for_group(patches: &[CalibrationPatchSample], patch_indexes: &[usiz
     values.iter().sum::<f64>() / values.len() as f64
 }
 
+#[cfg(feature = "calibration")]
 fn mean_rb_for_group(patches: &[CalibrationPatchSample], patch_indexes: &[usize], reference: bool) -> (f64, f64) {
     let mut red = Vec::new();
     let mut blue = Vec::new();
@@ -680,6 +754,7 @@ fn mean_rb_for_group(patches: &[CalibrationPatchSample], patch_indexes: &[usize]
     )
 }
 
+#[cfg(feature = "calibration")]
 fn mean_tint_for_group(patches: &[CalibrationPatchSample], patch_indexes: &[usize], reference: bool) -> f64 {
     let mut values = Vec::new();
     for patch_index in patch_indexes {
@@ -699,6 +774,7 @@ fn mean_tint_for_group(patches: &[CalibrationPatchSample], patch_indexes: &[usiz
     values.iter().sum::<f64>() / values.len() as f64
 }
 
+#[cfg(feature = "calibration")]
 fn relative_luma(rgb: [u8; 3]) -> f64 {
     let red = rgb[0] as f64 / 255.0;
     let green = rgb[1] as f64 / 255.0;
@@ -706,6 +782,7 @@ fn relative_luma(rgb: [u8; 3]) -> f64 {
     0.2126 * red + 0.7152 * green + 0.0722 * blue
 }
 
+#[cfg(feature = "calibration")]
 fn generate_corrected_preview(
     frame_path: &Path,
     corrected_preview_path: &str,
@@ -748,6 +825,8 @@ fn generate_corrected_preview(
     Ok(())
 }
 
+
+#[cfg(feature = "calibration")]
 fn solve_transform(
     source_patches: &[CalibrationPatchSample],
     target_patch_rgbs: &[[u8; 3]],
@@ -807,6 +886,7 @@ fn solve_transform(
     })
 }
 
+#[cfg(feature = "calibration")]
 fn compute_mean_delta_to_target(
     source_patches: &[CalibrationPatchSample],
     target_patch_rgbs: &[[u8; 3]],
@@ -823,6 +903,7 @@ fn compute_mean_delta_to_target(
     Ok(total / source_patches.len() as f64)
 }
 
+#[cfg(feature = "calibration")]
 fn precondition_rgb(
     rgb: [u8; 3],
     exposure_scalar: f64,
@@ -836,10 +917,12 @@ fn precondition_rgb(
     ]
 }
 
+#[cfg(feature = "calibration")]
 fn rgb_to_unit(rgb: [u8; 3]) -> [f64; 3] {
     [rgb[0] as f64 / 255.0, rgb[1] as f64 / 255.0, rgb[2] as f64 / 255.0]
 }
 
+#[cfg(feature = "calibration")]
 fn invert_3x3(matrix: [[f64; 3]; 3]) -> Option<[[f64; 3]; 3]> {
     let det =
         matrix[0][0] * (matrix[1][1] * matrix[2][2] - matrix[1][2] * matrix[2][1]) -
@@ -868,6 +951,7 @@ fn invert_3x3(matrix: [[f64; 3]; 3]) -> Option<[[f64; 3]; 3]> {
     ])
 }
 
+#[cfg(feature = "calibration")]
 fn multiply_3x3(a: [[f64; 3]; 3], b: [[f64; 3]; 3]) -> [[f64; 3]; 3] {
     let mut out = [[0.0; 3]; 3];
     for row in 0..3 {
@@ -878,6 +962,7 @@ fn multiply_3x3(a: [[f64; 3]; 3], b: [[f64; 3]; 3]) -> [[f64; 3]; 3] {
     out
 }
 
+#[cfg(feature = "calibration")]
 fn apply_transform_to_rgb(
     rgb: [u8; 3],
     exposure_scalar: f64,
@@ -902,6 +987,7 @@ fn apply_transform_to_rgb(
     ]
 }
 
+#[cfg(feature = "calibration")]
 fn generate_transform_preview(
     frame_path: &Path,
     preview_path: &str,
@@ -933,6 +1019,7 @@ fn generate_transform_preview(
     Ok(())
 }
 
+#[cfg(feature = "calibration")]
 fn write_cube_lut(lut_path: &str, transform: &CalibrationTransform, cube_size: u32) -> Result<(), String> {
     let path = PathBuf::from(lut_path);
     if let Some(parent) = path.parent() {
@@ -974,6 +1061,8 @@ fn write_cube_lut(lut_path: &str, transform: &CalibrationTransform, cube_size: u
     Ok(())
 }
 
+
+#[cfg(feature = "calibration")]
 pub fn render_calibration_overlay_preview(
     frame_path: &Path,
     calibration: &CalibrationChartDetection,
@@ -1016,6 +1105,16 @@ pub fn render_calibration_overlay_preview(
     Ok(())
 }
 
+#[cfg(not(feature = "calibration"))]
+pub fn render_calibration_overlay_preview(
+    _frame_path: &Path,
+    _calibration: &CalibrationChartDetection,
+    _output_path: &Path,
+) -> Result<(), String> {
+    Err("Calibration overlay rendering is currently only supported on macOS.".to_string())
+}
+
+#[cfg(feature = "calibration")]
 fn draw_line(
     image: &mut image::RgbImage,
     start: (i32, i32),
@@ -1046,6 +1145,7 @@ fn draw_line(
     }
 }
 
+#[cfg(feature = "calibration")]
 fn draw_circle(
     image: &mut image::RgbImage,
     center: (i32, i32),
@@ -1061,6 +1161,7 @@ fn draw_circle(
     }
 }
 
+#[cfg(feature = "calibration")]
 fn put_pixel_safe(image: &mut image::RgbImage, x: i32, y: i32, color: image::Rgb<u8>) {
     if x < 0 || y < 0 {
         return;
@@ -1072,6 +1173,7 @@ fn put_pixel_safe(image: &mut image::RgbImage, x: i32, y: i32, color: image::Rgb
     image.put_pixel(x, y, color);
 }
 
+#[cfg(feature = "calibration")]
 fn delta_color_rgb(delta: f64) -> image::Rgb<u8> {
     if delta <= 2.0 {
         image::Rgb([52, 211, 153])
@@ -1082,6 +1184,7 @@ fn delta_color_rgb(delta: f64) -> image::Rgb<u8> {
     }
 }
 
+#[cfg(feature = "calibration")]
 fn detect_chart_corners(frame: &Mat) -> Result<([Point2f; 4], DetectionDebugInfo), String> {
     let mut gray = Mat::default();
     imgproc::cvt_color(
@@ -1282,6 +1385,7 @@ fn detect_chart_corners(frame: &Mat) -> Result<([Point2f; 4], DetectionDebugInfo
     Err(format_detection_failure(&debug, best_failure_candidate))
 }
 
+#[cfg(feature = "calibration")]
 fn score_candidate(geometry: &CandidateGeometry, frame_width: i32, frame_height: i32) -> f64 {
     let area_score = geometry.area_ratio.clamp(0.0, 1.0);
     let ratio_penalty = (geometry.aspect_ratio - TARGET_ASPECT_RATIO).abs();
@@ -1295,6 +1399,7 @@ fn score_candidate(geometry: &CandidateGeometry, frame_width: i32, frame_height:
         + (1.0 - (dx + dy).clamp(0.0, 1.0)) * 0.08
 }
 
+#[cfg(feature = "calibration")]
 fn score_candidate_with_bias(
     geometry: &CandidateGeometry,
     frame_width: i32,
@@ -1310,6 +1415,7 @@ fn score_candidate_with_bias(
     score
 }
 
+#[cfg(feature = "calibration")]
 fn prepare_detection_frame(gray: &Mat, attempt: &DetectionAttemptConfig) -> opencv::Result<Mat> {
     let mut working = gray.clone();
     let gray_max_dimension = gray.cols().max(gray.rows()).max(1) as f64;
@@ -1348,6 +1454,7 @@ fn prepare_detection_frame(gray: &Mat, attempt: &DetectionAttemptConfig) -> open
     Ok(blurred)
 }
 
+#[cfg(feature = "calibration")]
 fn build_detection_map(prepared: &Mat, attempt: &DetectionAttemptConfig) -> opencv::Result<Mat> {
     match attempt.mode {
         DetectionMode::Edges => {
@@ -1359,6 +1466,7 @@ fn build_detection_map(prepared: &Mat, attempt: &DetectionAttemptConfig) -> open
     }
 }
 
+#[cfg(feature = "calibration")]
 fn postprocess_edges(edges: &Mat, attempt: &DetectionAttemptConfig) -> opencv::Result<Mat> {
     let mut refined = edges.clone();
     if attempt.close_kernel > 1 {
@@ -1401,6 +1509,7 @@ fn postprocess_edges(edges: &Mat, attempt: &DetectionAttemptConfig) -> opencv::R
     Ok(refined)
 }
 
+#[cfg(feature = "calibration")]
 fn build_dark_mask(prepared: &Mat, attempt: &DetectionAttemptConfig) -> opencv::Result<Mat> {
     let mut thresholded = Mat::default();
     imgproc::threshold(
@@ -1464,6 +1573,8 @@ fn build_dark_mask(prepared: &Mat, attempt: &DetectionAttemptConfig) -> opencv::
     Ok(opened)
 }
 
+
+#[cfg(feature = "calibration")]
 fn update_best_candidate_debug(
     debug: &mut DetectionDebugInfo,
     geometry: &CandidateGeometry,
@@ -1480,6 +1591,7 @@ fn update_best_candidate_debug(
     }
 }
 
+#[cfg(feature = "calibration")]
 fn format_detection_failure(
     debug: &DetectionDebugInfo,
     best_failure_candidate: Option<(f64, f64, f64)>,
@@ -1504,6 +1616,7 @@ fn format_detection_failure(
     )
 }
 
+#[cfg(feature = "calibration")]
 fn build_crop_context(
     frame: &Mat,
     crop_rect: Option<&CalibrationCropRectNormalized>,
@@ -1539,6 +1652,7 @@ fn build_crop_context(
     })
 }
 
+#[cfg(feature = "calibration")]
 fn resolve_manual_corners(
     corners: &[CalibrationPoint],
     frame_width: f64,
@@ -1556,6 +1670,9 @@ fn resolve_manual_corners(
     order_quad_points(&points)
 }
 
+#[cfg(feature = "calibration")]
+
+#[cfg(feature = "calibration")]
 fn compute_manual_aspect_ratio(corners: &[Point2f; 4]) -> f64 {
     let width_a = distance(corners[0], corners[1]);
     let width_b = distance(corners[2], corners[3]);
@@ -1564,6 +1681,7 @@ fn compute_manual_aspect_ratio(corners: &[Point2f; 4]) -> f64 {
     ((width_a + width_b) * 0.5 / ((height_a + height_b) * 0.5).max(1.0)).max(1.0)
 }
 
+#[cfg(feature = "calibration")]
 fn extract_candidate_quad(
     contour: &Vector<Point>,
     frame_area: f64,
@@ -1623,6 +1741,7 @@ fn extract_candidate_quad(
     Ok(Some((ordered, geometry)))
 }
 
+#[cfg(feature = "calibration")]
 fn normalized_rotated_size(size: &Size2f) -> Size2f {
     if size.width >= size.height {
         *size
@@ -1631,6 +1750,7 @@ fn normalized_rotated_size(size: &Size2f) -> Size2f {
     }
 }
 
+#[cfg(feature = "calibration")]
 fn rotated_rect_points(rect: &RotatedRect) -> Result<[Point2f; 4], String> {
     let mut points = Mat::default();
     imgproc::box_points(*rect, &mut points)
@@ -1648,6 +1768,7 @@ fn rotated_rect_points(rect: &RotatedRect) -> Result<[Point2f; 4], String> {
     order_quad_points(&corners)
 }
 
+#[cfg(feature = "calibration")]
 fn order_quad_points(points: &Vector<Point>) -> Result<[Point2f; 4], String> {
     let mut corners = points
         .iter()
@@ -1675,6 +1796,7 @@ fn order_quad_points(points: &Vector<Point>) -> Result<[Point2f; 4], String> {
     Ok([top_left, top_right, bottom_right, bottom_left])
 }
 
+#[cfg(feature = "calibration")]
 fn normalize_chart(frame: &Mat, corners: &[Point2f; 4]) -> Result<Mat, String> {
     let mut src = Vector::<Point2f>::new();
     for corner in corners {
@@ -1705,6 +1827,7 @@ fn normalize_chart(frame: &Mat, corners: &[Point2f; 4]) -> Result<Mat, String> {
     Ok(normalized)
 }
 
+#[cfg(feature = "calibration")]
 pub fn sample_patch_colors(normalized_chart: &Mat) -> Result<Vec<CalibrationPatchSample>, String> {
     let mut patch_samples = Vec::with_capacity(TOTAL_PATCHES);
     let patch_width = NORMALIZED_WIDTH as f64 / PATCH_COLUMNS as f64;
@@ -1748,10 +1871,12 @@ pub fn sample_patch_colors(normalized_chart: &Mat) -> Result<Vec<CalibrationPatc
     Ok(patch_samples)
 }
 
+#[cfg(feature = "calibration")]
 pub fn compute_patch_delta(measured_lab: [f64; 3], reference_lab: [f64; 3]) -> f64 {
     delta_e_2000(measured_lab, reference_lab)
 }
 
+#[cfg(feature = "calibration")]
 fn mean_bgr(roi: &impl core::ToInputArray) -> Result<[u8; 3], String> {
     let mean = core::mean(roi, &core::no_array())
         .map_err(|error| format!("Failed computing patch mean: {}", error))?;
@@ -1762,6 +1887,7 @@ fn mean_bgr(roi: &impl core::ToInputArray) -> Result<[u8; 3], String> {
     ])
 }
 
+#[cfg(feature = "calibration")]
 fn median_bgr(roi: &impl core::MatTraitConst) -> Result<[u8; 3], String> {
     let rows = roi.rows();
     let cols = roi.cols();
@@ -1781,11 +1907,13 @@ fn median_bgr(roi: &impl core::MatTraitConst) -> Result<[u8; 3], String> {
     Ok([median_u8(&mut blue), median_u8(&mut green), median_u8(&mut red)])
 }
 
+#[cfg(feature = "calibration")]
 fn median_u8(values: &mut [u8]) -> u8 {
     values.sort_unstable();
     values[values.len() / 2]
 }
 
+#[cfg(feature = "calibration")]
 fn bgr_to_lab(bgr: [u8; 3]) -> Result<[f64; 3], String> {
     let pixel = Mat::from_slice_2d(&[[Vec3b::from([bgr[0], bgr[1], bgr[2]])]])
         .map_err(|error| format!("Failed building BGR patch mat: {}", error))?;
@@ -1808,10 +1936,15 @@ fn bgr_to_lab(bgr: [u8; 3]) -> Result<[f64; 3], String> {
     ])
 }
 
+
+
+
+#[cfg(feature = "calibration")]
 fn rgb_to_lab(rgb: [u8; 3]) -> Result<[f64; 3], String> {
     bgr_to_lab([rgb[2], rgb[1], rgb[0]])
 }
 
+#[cfg(feature = "calibration")]
 fn delta_e_2000(a: [f64; 3], b: [f64; 3]) -> f64 {
     let (l1, a1, b1) = (a[0], a[1], a[2]);
     let (l2, a2, b2) = (b[0], b[1], b[2]);
@@ -1867,6 +2000,7 @@ fn delta_e_2000(a: [f64; 3], b: [f64; 3]) -> f64 {
         .sqrt()
 }
 
+#[cfg(feature = "calibration")]
 fn hue_angle(b: f64, a: f64) -> f64 {
     let mut angle = radians_to_degrees(b.atan2(a));
     if angle < 0.0 {
@@ -1875,14 +2009,18 @@ fn hue_angle(b: f64, a: f64) -> f64 {
     angle
 }
 
+#[cfg(feature = "calibration")]
 fn degrees_to_radians(value: f64) -> f64 {
     value * std::f64::consts::PI / 180.0
 }
 
+#[cfg(feature = "calibration")]
 fn radians_to_degrees(value: f64) -> f64 {
     value * 180.0 / std::f64::consts::PI
 }
 
+
+#[cfg(feature = "calibration")]
 fn score_detection(corners: &[Point2f; 4], frame_width: f64, frame_height: f64) -> f64 {
     let width_a = distance(corners[0], corners[1]);
     let width_b = distance(corners[2], corners[3]);
@@ -1896,12 +2034,15 @@ fn score_detection(corners: &[Point2f; 4], frame_width: f64, frame_height: f64) 
     (1.0 - (ratio - TARGET_ASPECT_RATIO).abs().min(1.0)) * 0.4 + area_ratio.clamp(0.0, 1.0) * 0.6
 }
 
+#[cfg(feature = "calibration")]
 fn distance(a: Point2f, b: Point2f) -> f64 {
     let dx = a.x as f64 - b.x as f64;
     let dy = a.y as f64 - b.y as f64;
     (dx * dx + dy * dy).sqrt()
 }
 
+
+#[cfg(feature = "calibration")]
 fn polygon_area(corners: &[Point2f; 4]) -> f64 {
     let mut area = 0.0;
     for index in 0..4 {

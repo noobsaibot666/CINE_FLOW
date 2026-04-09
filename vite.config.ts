@@ -25,13 +25,34 @@ export default defineConfig(async () => ({
     },
   },
   build: {
-    // Increased limit for the suite instead of complex chunking, ensuring maximum stability
-    chunkSizeWarningLimit: 3000,
+    // Optimized for better caching and smaller main bundle
+    chunkSizeWarningLimit: 1000,
     rollupOptions: {
       output: {
-        // Automatic chunking is safer for the initial app-store release to avoid circular dependencies
-        manualChunks: undefined 
-      }
-    }
-  }
+        manualChunks(id) {
+          if (id.includes("node_modules")) {
+            if (id.includes("react-dom") || id.includes("react/")) {
+              return "vendor-react";
+            }
+            if (id.includes("framer-motion")) {
+              return "vendor-ui";
+            }
+            if (id.includes("recharts")) {
+              return "vendor-charts";
+            }
+            if (id.includes("lucide-react")) {
+              return "vendor-icons";
+            }
+            if (id.includes("@tauri-apps")) {
+              return "vendor-tauri";
+            }
+            if (id.includes("@dnd-kit")) {
+              return "vendor-dnd";
+            }
+            return "vendor";
+          }
+        },
+      },
+    },
+  },
 }));

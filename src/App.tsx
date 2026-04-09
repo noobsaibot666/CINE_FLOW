@@ -1,4 +1,4 @@
-import { Component, ReactNode, useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { Component, ReactNode, useState, useEffect, useCallback, useRef, useMemo, lazy, Suspense } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
@@ -35,19 +35,20 @@ import {
   Minimize,
   Eye,
 } from "lucide-react";
-import { ClipList } from "./components/ClipList";
-import { PrintLayout } from "./components/PrintLayout";
-import { SafeCopy } from "./components/SafeCopy";
-import { ExportPanel } from "./components/ExportPanel";
-import { BlocksView } from "./components/BlocksView";
-import { JobsPanel } from "./components/JobsPanel";
-import { AboutPanel } from "./components/AboutPanel";
-import { FolderCreator } from "./components/FolderCreator";
-import { ReviewCore } from "./components/ReviewCore";
-import { MosaicBuilder } from "./components/MosaicBuilder";
-import { DuplicateFinderApp } from "./components/DuplicateFinderApp";
-import StarterSetup from "./components/PreProduction/StarterSetup";
-import ShotList from "./components/PreProduction/ShotList";
+// Lazy-loaded components
+const ClipList = lazy(() => import("./components/ClipList").then(m => ({ default: m.ClipList })));
+const PrintLayout = lazy(() => import("./components/PrintLayout").then(m => ({ default: m.PrintLayout })));
+const SafeCopy = lazy(() => import("./components/SafeCopy").then(m => ({ default: m.SafeCopy })));
+const ExportPanel = lazy(() => import("./components/ExportPanel").then(m => ({ default: m.ExportPanel })));
+const BlocksView = lazy(() => import("./components/BlocksView").then(m => ({ default: m.BlocksView })));
+const JobsPanel = lazy(() => import("./components/JobsPanel").then(m => ({ default: m.JobsPanel })));
+const AboutPanel = lazy(() => import("./components/AboutPanel").then(m => ({ default: m.AboutPanel })));
+const FolderCreator = lazy(() => import("./components/FolderCreator").then(m => ({ default: m.FolderCreator })));
+const ReviewCore = lazy(() => import("./components/ReviewCore").then(m => ({ default: m.ReviewCore })));
+const MosaicBuilder = lazy(() => import("./components/MosaicBuilder").then(m => ({ default: m.MosaicBuilder })));
+const DuplicateFinderApp = lazy(() => import("./components/DuplicateFinderApp").then(m => ({ default: m.DuplicateFinderApp })));
+const StarterSetup = lazy(() => import("./components/PreProduction/StarterSetup"));
+const ShotList = lazy(() => import("./components/PreProduction/ShotList"));
 import { TourGuide, TourStep } from "./components/TourGuide";
 import { exportPdf, exportImage, exportMosaicImage, exportMosaicPdf } from "./utils/ExportUtils";
 import appLogo from "./assets/Subtract.svg";
@@ -64,12 +65,12 @@ import { usePreviewPlayback } from "./hooks/usePreviewPlayback";
 import { useSelection } from "./hooks/useSelection";
 import { useClipActions } from "./hooks/useClipActions";
 import { useAppKeyboard } from "./hooks/useAppKeyboard";
-import { ProductionLanding } from "./modules/Production/ProductionLanding";
-import LookSetup from './modules/Production/apps/LookSetup';
-import OnSetCoach from './modules/Production/apps/OnSetCoach.tsx';
-import MatchNormalize from './modules/Production/apps/MatchNormalize.tsx';
-import CameraMatchLab from './modules/Production/apps/CameraMatchLab.tsx';
-import FramePreview from './modules/Production/apps/FramePreview';
+const ProductionLanding = lazy(() => import("./modules/Production/ProductionLanding").then(m => ({ default: m.ProductionLanding })));
+const LookSetup = lazy(() => import('./modules/Production/apps/LookSetup'));
+const OnSetCoach = lazy(() => import('./modules/Production/apps/OnSetCoach.tsx'));
+const MatchNormalize = lazy(() => import('./modules/Production/apps/MatchNormalize.tsx'));
+const CameraMatchLab = lazy(() => import('./modules/Production/apps/CameraMatchLab.tsx'));
+const FramePreview = lazy(() => import('./modules/Production/apps/FramePreview'));
 import { useCommandPalette } from "./hooks/useCommandPalette";
 import { CommandPalette } from "./components/CommandPalette";
 import { getJumpIntervalForThumbCount, getThumbnailCacheContext } from "./utils/thumbnailIntervals";
@@ -99,6 +100,15 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boole
     }
     return this.props.children;
   }
+}
+
+function SuiteLoading() {
+  return (
+    <div className="media-workspace" style={{ display: 'flex', flexDirection: 'column', height: '100%', alignItems: 'center', justifyContent: 'center', minHeight: '300px' }}>
+      <div className="spinner" style={{ width: '40px', height: '40px', borderWidth: '3px', marginBottom: '16px' }} />
+      <span className="stat-label" style={{ fontSize: '14px', letterSpacing: '0.1em', opacity: 0.6, textTransform: 'uppercase' }}>Loading Module...</span>
+    </div>
+  );
 }
 
 function AppContent() {
@@ -1527,6 +1537,7 @@ function AppContent() {
           </header>
 
           <div className="app-content">
+            <Suspense fallback={<SuiteLoading />}>
             {uiError && (
               <div className="error-banner">
                 <strong>{uiError.title}</strong> {uiError.hint}
@@ -2169,6 +2180,7 @@ function AppContent() {
                 </div>
               </div>
             )}
+            </Suspense>
           </div>
 
           {pendingExportValidation && (

@@ -1,4 +1,3 @@
-import { toJpeg, toPng } from "html-to-image";
 import { mkdir, readFile, writeFile } from "@tauri-apps/plugin-fs";
 import { FramePreviewMedia, FrameTransform, RatioType, RATIO_VALUES } from "../../types/framePreview";
 
@@ -226,6 +225,7 @@ export async function exportFrameToPath(filePath: string, options: ExportFrameOp
 
 export async function exportCanvasElement(filePath: string, options: ExportCanvasOptions): Promise<void> {
   const { element, width, height, format } = options;
+  const { toJpeg, toPng } = await import("html-to-image");
   const dataUrl = format === "jpg"
     ? await toJpeg(element, { quality: 0.95, pixelRatio: 2, canvasWidth: width, canvasHeight: height })
     : await toPng(element, { quality: 1, pixelRatio: 2, canvasWidth: width, canvasHeight: height });

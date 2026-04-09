@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import Hls from "hls.js";
+import type Hls from "hls.js";
 import {
     ReviewCoreAnnotation,
     ReviewCoreApprovalState,
@@ -290,15 +290,26 @@ export function useReviewLogic({
             hlsRef.current.destroy();
             hlsRef.current = null;
         }
-        if (Hls.isSupported()) {
-            const hls = new Hls();
-            hls.loadSource(verifiedMediaUrls.playlistUrl);
-            hls.attachMedia(video);
-            hlsRef.current = hls;
-        } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
-            video.src = verifiedMediaUrls.playlistUrl;
-        }
+
+        let isMounted = true;
+        const initHls = async () => {
+            const { default: HlsClass } = await import("hls.js");
+            if (!isMounted) return;
+
+            if (HlsClass.isSupported()) {
+                const hls = new HlsClass();
+                hls.loadSource(verifiedMediaUrls.playlistUrl);
+                hls.attachMedia(video);
+                hlsRef.current = hls;
+            } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
+                video.src = verifiedMediaUrls.playlistUrl;
+            }
+        };
+
+        void initHls();
+
         return () => {
+            isMounted = false;
             if (hlsRef.current) {
                 hlsRef.current.destroy();
                 hlsRef.current = null;
