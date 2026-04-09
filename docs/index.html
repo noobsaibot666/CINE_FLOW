@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Privacy Policy | CineFlow Suite</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #0f172a;
+            --surface: #1e293b;
+            --text: #f8fafc;
+            --text-muted: #94a3b8;
+            --primary: #10b981; /* Emerald theme based on previous context */
+            --accent: #34d399;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+            padding: 2rem 1rem;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: var(--surface);
+            padding: 3rem;
+            border-radius: 1.5rem;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            font-weight: 800;
+            margin-bottom: 0.5rem;
+            background: linear-gradient(to right, var(--primary), var(--accent));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .last-updated {
+            color: var(--text-muted);
+            font-size: 0.9rem;
+            margin-bottom: 3rem;
+            display: block;
+        }
+
+        section {
+            margin-bottom: 2.5rem;
+        }
+
+        h2 {
+            font-size: 1.25rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+            color: var(--primary);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        p {
+            margin-bottom: 1rem;
+            color: var(--text);
+            opacity: 0.9;
+        }
+
+        ul {
+            list-style: none;
+            margin-left: 0.5rem;
+        }
+
+        li {
+            margin-bottom: 0.5rem;
+            position: relative;
+            padding-left: 1.5rem;
+        }
+
+        li::before {
+            content: "→";
+            position: absolute;
+            left: 0;
+            color: var(--primary);
+        }
+
+        footer {
+            margin-top: 4rem;
+            padding-top: 2rem;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 0.875rem;
+        }
+
+        .contact-link {
+            color: var(--primary);
+            text-decoration: none;
+            font-weight: 600;
+        }
+
+        .contact-link:hover {
+            text-decoration: underline;
+        }
+
+        @media (max-width: 640px) {
+            .container {
+                padding: 1.5rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Privacy Policy</h1>
+            <span class="last-updated">Last Updated: April 09, 2026</span>
+        </header>
+
+        <section>
+            <h2>Overview</h2>
+            <p>
+                CineFlow Suite is built with a "Privacy First" philosophy. We believe your data belongs to you. 
+                Our desktop application is designed to operate locally on your machine, ensuring that your 
+                media files, metadata, and production data never leave your control.
+            </p>
+        </section>
+
+        <section>
+            <h2>1. Information We Collect</h2>
+            <p><strong>CineFlow Suite does not collect, store, or transmit any personal data.</strong></p>
+            <ul>
+                <li>We do not have user accounts.</li>
+                <li>We do not track your usage behavior (no telemetry).</li>
+                <li>We do not log your activities or the projects you work on.</li>
+            </ul>
+        </section>
+
+        <section>
+            <h2>2. Local Data Processing</h2>
+            <p>
+                All video processing, metadata extraction, and storage occur entirely on your local device. 
+                If you use external tools provided within the suite (such as FFmpeg), these tools operate 
+                within your system's environment and do not share data with any external servers.
+            </p>
+        </section>
+
+        <section>
+            <h2>3. Third-Party Services</h2>
+            <p>
+                Our application does not integrate with third-party tracking services, advertising networks, 
+                or data brokers.
+            </p>
+        </section>
+
+        <section>
+            <h2>4. App Store Data</h2>
+            <p>
+                When you purchase CineFlow Suite through the Mac App Store or Microsoft Store, the respective 
+                platform handles all financial transactions. We do not receive your credit card information 
+                or personal billing details.
+            </p>
+        </section>
+
+        <section>
+            <h2>5. Changes to This Policy</h2>
+            <p>
+                We may update this Privacy Policy from time to time. Any changes will be posted on this page 
+                with an updated "Last Updated" date.
+            </p>
+        </section>
+
+        <footer>
+            <p>If you have any questions, please contact us via <a href="https://github.com/noobsaibot666/wrappreview" class="contact-link">GitHub</a>.</p>
+            <p>&copy; 2026 CineFlow Suite. All rights reserved.</p>
+        </footer>
+    </div>
+</body>
+</html>
