@@ -116,15 +116,16 @@ pub fn extract_thumbnail(
     if is_nev {
         return extract_nev_thumbnail(input_path, output_path);
     }
+
+    // R3D (RED REDCODE RAW) is fully proprietary — FFmpeg, AVFoundation, sips
+    // and Quick Look all fail without the RED SDK. Route to dedicated handler
+    // that tries REDline → embedded JPEG → metadata placeholder.
+    if is_r3d {
+        return extract_r3d_thumbnail_safe(input_path, output_path, timestamp_ms);
+    }
     
     let status = if is_braw(input_path) {
         Some(extract_braw_thumbnail(input_path, output_path, timestamp_ms))
-    } else if is_r3d {
-        // Try REDline first, but don't fail yet if it doesn't work
-        match extract_r3d_thumbnail(input_path, output_path, timestamp_ms) {
-            Ok(output) => Some(Ok(output)),
-            Err(_) => None, // Fallthrough to FFmpeg
-        }
     } else {
         None
     };
@@ -268,6 +269,75 @@ fn probe_fps(input_path: &str) -> Option<f64> {
         return None;
     }
     rate.parse::<f64>().ok()
+}
+/// Safe R3D thumbnail extraction — always produces a thumbnail.
+/// Tries REDline → embedded JPEG → generates metadata placeholder.
+fn extract_r3d_thumbnail_safe(
+    input_path: &str,
+    output_path: &str,
+    timestamp_ms: u64,
+) -> Result<bool, String> {
+    // Try the standard R3D extraction (REDline → embedded JPEG)
+    if let Ok(_output) = extract_r3d_thumbnail(input_path, output_path, timestamp_ms) {
+        if Path::new(output_path).exists() {
+            let meta = std::fs::metadata(output_path).ok();
+            if meta.map(|m| m.len() > 1000).unwrap_or(false) {
+                return Ok(true);
+            }
+        }
+    }
+
+    // Fallback to placeholder
+    generate_raw_placeholder(input_path, output_path, "RED R3D", "#e94560", "RED SDK required for preview")
+}
+
+/// Shared utility to generate a branded metadata placeholder thumbnail using FFmpeg's lavfi.
+/// Used for proprietary formats (R3D, BRAW) when native decoders are unavailable.
+fn generate_raw_placeholder(
+    input_path: &str,
+    output_path: &str,
+    label: &str,
+    accent_color: &str,
+    subtext: &str,
+) -> Result<bool, String> {
+    let filename = Path::new(input_path)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| label.to_string());
+
+    let display_name = if filename.len() > 28 {
+        format!("{}...", &filename[..25])
+    } else {
+        filename.clone()
+    };
+
+    if let Some(parent) = Path::new(output_path).parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+
+    let ffmpeg = crate::tools::find_executable("ffmpeg");
+    let filter = format!(
+        "color=c=#1a1a2e:s=640x360:d=1,\
+         drawtext=text='{}':fontsize=36:fontcolor={}:x=(w-text_w)/2:y=(h-text_h)/2-30,\
+         drawtext=text='{}':fontsize=16:fontcolor=#cccccc:x=(w-text_w)/2:y=(h-text_h)/2+20,\
+         drawtext=text='{}':fontsize=12:fontcolor=#666666:x=(w-text_w)/2:y=(h-text_h)/2+50",
+        label, accent_color, display_name.replace('\'', "").replace(':', "\\:"), subtext
+    );
+
+    let result = Command::new(&ffmpeg)
+        .args([
+            "-f", "lavfi",
+            "-i", &filter,
+            "-frames:v", "1",
+            "-update", "1",
+            "-q:v", "3",
+            "-y",
+            output_path,
+        ])
+        .output()
+        .map_err(|e| format!("Failed to generate placeholder: {}", e))?;
+
+    Ok(result.status.success() && Path::new(output_path).exists())
 }
 
 fn extract_r3d_thumbnail(
@@ -420,10 +490,19 @@ fn extract_braw_thumbnail(
             .map_err(|e| format!("echo failed: {}", e));
     }
 
-    Err(format!(
-        "BRAW decoder not available ({}) and no embedded JPEG found",
-        braw_decoder
-    ))
+    // Last resort: generate a metadata placeholder
+    match generate_raw_placeholder(input_path, output_path, "BRAW", "#4a9eff", "Blackmagic SDK required") {
+        Ok(true) => {
+            Command::new("echo")
+                .arg("BRAW placeholder generated")
+                .output()
+                .map_err(|e| format!("echo failed: {}", e))
+        }
+        _ => Err(format!(
+            "BRAW decoder not available ({}) and placeholder generation failed",
+            braw_decoder
+        ))
+    }
 }
 
 fn process_braw_decode(
