@@ -124,7 +124,8 @@ export const FeedbackSidebar: React.FC<FeedbackSidebarProps> = ({
             {/* Comment List */}
             <div className="flex-1 min-h-0">
                 <Virtuoso
-                    style={{ height: "100%" }}
+                    style={{ height: "100%", minHeight: "200px" }}
+                    fixedItemHeight={90}
                     data={filteredComments}
                     itemContent={(_index: number, comment: any) => {
                         const isSelected = selectedCommentId === comment.id;

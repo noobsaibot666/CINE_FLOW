@@ -231,26 +231,24 @@ function AppContent() {
   }, []);
 
   useEffect(() => {
-    if (!IS_DEV) return;
-
     const originalWarn = console.warn;
     const originalError = console.error;
-    const isHarmlessDevNoise = (message: string) =>
-      message.includes("Couldn't find callback id") ||
-      (message.includes("callback id") && message.includes("not found")) ||
-      message.includes("react-virtuoso: Zero-sized element");
+    const isHarmlessNoise = (...args: unknown[]) =>
+      args.some((arg) => {
+        const str = typeof arg === "string" ? arg : typeof arg === "object" && arg !== null ? JSON.stringify(arg) : "";
+        return (
+          str.includes("Couldn't find callback id") ||
+          (str.includes("callback id") && str.includes("not found")) ||
+          str.includes("react-virtuoso") ||
+          str.includes("Zero-sized element")
+        );
+      });
     console.warn = (...args: unknown[]) => {
-      const firstArg = typeof args[0] === "string" ? args[0] : "";
-      if (isHarmlessDevNoise(firstArg)) {
-        return;
-      }
+      if (isHarmlessNoise(...args)) return;
       originalWarn(...args);
     };
     console.error = (...args: unknown[]) => {
-      const firstArg = typeof args[0] === "string" ? args[0] : "";
-      if (isHarmlessDevNoise(firstArg)) {
-        return;
-      }
+      if (isHarmlessNoise(...args)) return;
       originalError(...args);
     };
 
@@ -258,7 +256,7 @@ function AppContent() {
       console.warn = originalWarn;
       console.error = originalError;
     };
-  }, [IS_DEV]);
+  }, []);
 
   // --- Phase-Isolated State ---
 
