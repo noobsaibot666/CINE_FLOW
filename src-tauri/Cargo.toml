@@ -56,3 +56,6 @@ codegen-units = 1
 panic = "abort"
 strip = "symbols"
 opt-level = 3
+
+[lints.rust]
+unexpected_cfgs = "allow"

@@ -1,3 +1,9 @@
+/*
+ * (c) 2026 Alan Alves. All rights reserved.
+ * CineFlow Suite — Professional Production to Post Hub
+ * hello@expose-u.com | https://alan-design.com/
+ */
+
 use objc::{msg_send, sel, sel_impl, class};
 use cocoa::base::{id, nil};
 use cocoa::foundation::{NSString, NSData, NSURL};

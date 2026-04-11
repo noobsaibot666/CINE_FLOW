@@ -31,8 +31,8 @@ export default defineConfig(async () => ({
       output: {
         manualChunks(id) {
           if (id.includes("node_modules")) {
-            if (id.includes("react-dom") || id.includes("react/")) {
-              return "vendor-react";
+            if (id.includes("react-dom") || id.includes("react/") || id.includes("scheduler")) {
+              return "vendor";
             }
             if (id.includes("framer-motion")) {
               return "vendor-ui";

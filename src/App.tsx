@@ -453,10 +453,13 @@ function AppContent() {
   }, [projectId, safeInvoke]);
 
   useEffect(() => {
+    // Tour is only activated manually by the user, not automatically on first run
     const seen = localStorage.getItem(TOUR_SEEN_KEY) === "true";
     const version = localStorage.getItem(TOUR_VERSION_KEY);
     if (!seen || version !== TOUR_VERSION) {
-      setTourRun(true);
+      // We still mark it as seen so we know the user's current version
+      localStorage.setItem(TOUR_SEEN_KEY, "true");
+      localStorage.setItem(TOUR_VERSION_KEY, TOUR_VERSION);
     }
   }, []);
 
