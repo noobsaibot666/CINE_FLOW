@@ -1,11 +1,10 @@
 import type { jsPDF } from "jspdf";
-import iconSvgRaw from "../assets/Subtract.svg?raw";
+import iconPngUrl from "../assets/Icon_C.png";
 
 type WarningHandler = (message: string) => void;
 
 export interface BrandingAssets {
   logoDataUrl: string;
-  logoSvgText?: string;
   logoPngDataUrl?: string;
   fallbackReason?: string;
 }
@@ -59,27 +58,18 @@ interface CanvasFooterTarget {
 
 let cachedAssetsPromise: Promise<BrandingAssets> | null = null;
 
-function escapeSvgForDataUrl(input: string): string {
-  return encodeURIComponent(input)
-    .replace(/%0A/g, "")
-    .replace(/%20/g, " ")
-    .replace(/%3D/g, "=")
-    .replace(/%3A/g, ":")
-    .replace(/%2F/g, "/");
-}
-
 function warnWithFallback(reason: string, onWarning?: WarningHandler) {
   console.warn(`[CineFlow Suite] branding logo fallback used: ${reason}`);
   onWarning?.(`Export branding fallback used: ${reason}`);
 }
 
-async function rasterizeSvgToPng(svgDataUrl: string, size: number): Promise<string> {
+async function rasterizePng(imageUrl: string, size: number): Promise<string> {
   const img = new Image();
   img.decoding = "sync";
-  img.src = svgDataUrl;
+  img.src = imageUrl;
   await new Promise<void>((resolve, reject) => {
     img.onload = () => resolve();
-    img.onerror = () => reject(new Error("SVG image load failed"));
+    img.onerror = () => reject(new Error("Image load failed"));
   });
   const canvas = document.createElement("canvas");
   canvas.width = size;
@@ -96,19 +86,16 @@ async function rasterizeSvgToPng(svgDataUrl: string, size: number): Promise<stri
 export async function getBrandingAssets(onWarning?: WarningHandler): Promise<BrandingAssets> {
   if (!cachedAssetsPromise) {
     cachedAssetsPromise = (async () => {
-      const svgDataUrl = `data:image/svg+xml;charset=utf-8,${escapeSvgForDataUrl(iconSvgRaw)}`;
       try {
-        const pngDataUrl = await rasterizeSvgToPng(svgDataUrl, 160);
+        const pngDataUrl = await rasterizePng(iconPngUrl, 160);
         return {
           logoDataUrl: pngDataUrl,
           logoPngDataUrl: pngDataUrl,
-          logoSvgText: iconSvgRaw,
         };
       } catch (error) {
         const reason = error instanceof Error ? error.message : "unknown rasterization failure";
         return {
-          logoDataUrl: svgDataUrl,
-          logoSvgText: iconSvgRaw,
+          logoDataUrl: iconPngUrl,
           fallbackReason: reason,
         };
       }

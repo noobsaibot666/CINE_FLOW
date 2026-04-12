@@ -57,7 +57,7 @@ const StarterSetup = lazy(() => import("./components/PreProduction/StarterSetup"
 const ShotList = lazy(() => import("./components/PreProduction/ShotList"));
 import { TourGuide, TourStep } from "./components/TourGuide";
 import { exportPdf, exportImage, exportMosaicImage, exportMosaicPdf } from "./utils/ExportUtils";
-import appLogo from "./assets/Subtract.svg";
+import appLogo from "./assets/Icon_C.png";
 import { AppInfo, Clip, ClipWithThumbnails, JobInfo, ScanResult, RecentProject, ProductionProject, Phase, PhaseData } from "./types";
 import {
   LookbookSortMode,
