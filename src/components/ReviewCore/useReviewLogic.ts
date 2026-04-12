@@ -36,6 +36,7 @@ import {
     createEmptyAnnotationDraft,
     getVideoFrameRect,
     parseAnnotationData,
+    updateDraftItem,
 } from "./utils";
 
 const DEFAULT_APPROVAL: ReviewCoreApprovalState = {
@@ -62,6 +63,7 @@ export function useReviewLogic({
     const [versions, setVersions] = useState<CommonVersion[]>([]);
     const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
     const [serverBaseUrl, setServerBaseUrl] = useState("");
+    const [isPlaying, setIsPlaying] = useState(false);
     const [currentTime, setCurrentTime] = useState(0);
     const [duration, setDuration] = useState(0);
     const [thumbnails, setThumbnails] = useState<ReviewCoreThumbnailInfo[]>([]);
@@ -303,6 +305,8 @@ export function useReviewLogic({
         const video = videoRef.current;
         if (!video) return;
         const handleTimeUpdate = () => setCurrentTime(video.currentTime);
+        const handlePlay = () => setIsPlaying(true);
+        const handlePause = () => setIsPlaying(false);
         const handleLoadedMetadata = () => {
             setDuration(video.duration || 0);
             updateFrameRect();
@@ -320,11 +324,15 @@ export function useReviewLogic({
             setMediaReadyAttempt((attempt) => attempt + 1);
         };
         video.addEventListener("timeupdate", handleTimeUpdate);
+        video.addEventListener("play", handlePlay);
+        video.addEventListener("pause", handlePause);
         video.addEventListener("loadedmetadata", handleLoadedMetadata);
         video.addEventListener("canplay", handleCanPlay);
         video.addEventListener("error", handleError);
         return () => {
             video.removeEventListener("timeupdate", handleTimeUpdate);
+            video.removeEventListener("play", handlePlay);
+            video.removeEventListener("pause", handlePause);
             video.removeEventListener("loadedmetadata", handleLoadedMetadata);
             video.removeEventListener("canplay", handleCanPlay);
             video.removeEventListener("error", handleError);
@@ -448,6 +456,19 @@ export function useReviewLogic({
     }, [annotatingCommentId, annotationDraft, isShareMode, onError]);
 
 
+    const runIngest = useCallback(async (filePaths: string[], duplicateMode: "new_version" | "new_asset") => {
+        if (!effectiveProjectId) return;
+        setImporting(true);
+        try {
+            await invoke("review_core_ingest_files", { projectId: effectiveProjectId, filePaths, duplicateMode });
+            await refreshAssets();
+        } catch (error) {
+            console.error("Review Core ingest failed", error);
+        } finally {
+            setImporting(false);
+        }
+    }, [effectiveProjectId, refreshAssets]);
+
     const handleImport = useCallback(async () => {
         if (isShareMode) return;
         const selected = await open({
@@ -459,21 +480,6 @@ export function useReviewLogic({
         const filePaths = Array.isArray(selected) ? selected : [selected];
         await runIngest(filePaths, "new_version");
     }, [isShareMode, effectiveProjectId, runIngest]);
-
-    const runIngest = useCallback(async (filePaths: string[], duplicateMode: "new_version" | "new_asset") => {
-        if (!effectiveProjectId) return;
-        setImporting(true);
-        try {
-            await invoke("review_core_ingest_files", { projectId: effectiveProjectId, filePaths, duplicateMode });
-            setPendingDuplicateFiles(null);
-            setDuplicateCandidates([]);
-            await refreshAssets();
-        } catch (error) {
-            console.error("Review Core ingest failed", error);
-        } finally {
-            setImporting(false);
-        }
-    }, [effectiveProjectId, refreshAssets]);
 
     const handleCreateShareLink = useCallback(async () => {
         if (!effectiveProjectId || isShareMode) return;
@@ -545,14 +551,12 @@ export function useReviewLogic({
         setActiveDraftItem(newItem);
     }, [isShareMode, annotatingCommentId, annotationTool, annotationColor]);
 
-    const handleAnnotationMouseMove = useCallback((_point: NormalizedPoint) => {
+    const handleAnnotationMouseMove = useCallback((point: NormalizedPoint) => {
         const drag = dragStateRef.current;
         if (!drag || isShareMode) return;
 
         if (drag.mode === "draw" && activeDraftItem) {
-            // Internal update logic for draft item
-            // For now, let's keep it simple and just update the state
-            // (Full implementation would involve geometry logic)
+            setActiveDraftItem(updateDraftItem(activeDraftItem, drag.start, point));
         }
     }, [isShareMode, activeDraftItem]);
 
@@ -987,6 +991,7 @@ export function useReviewLogic({
             showQuickNoteComposer,
             activePanelTab,
             mediaReadyStatus,
+            isPlaying,
             mediaReadyAttempt,
             verifiedMediaUrls,
             mediaProbeNonce,
