@@ -2990,16 +2990,10 @@ pub async fn review_core_touch_project(
     project_id: String,
     state: State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
-    state
+    let _ = state
         .db
-        .get_review_core_project(&project_id)
-        .map_err(|e| e.to_string())?
-        .ok_or("Review Core project not found")?;
-
-    state
-        .db
-        .touch_review_core_project(&project_id, &chrono::Utc::now().to_rfc3339())
-        .map_err(|e| e.to_string())
+        .touch_review_core_project(&project_id, &chrono::Utc::now().to_rfc3339());
+    Ok(())
 }
 
 #[tauri::command]
