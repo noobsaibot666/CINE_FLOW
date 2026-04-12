@@ -48,6 +48,7 @@ export function ReviewCore(props: ReviewCoreProps) {
     activeViewAnnotation,
     selectedVersionId,
     versions,
+    isPlaying,
   } = state;
 
   const selectedAsset = useMemo(() =>
@@ -124,7 +125,7 @@ export function ReviewCore(props: ReviewCoreProps) {
               const v = refs.videoRef.current;
               if (v) v.paused ? v.play() : v.pause();
             }}
-            isPaused={refs.videoRef.current?.paused ?? true}
+            isPaused={!isPlaying}
             overlay={
               <AnnotationOverlay
                 rect={frameRect}
