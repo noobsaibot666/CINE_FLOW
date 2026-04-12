@@ -184,11 +184,11 @@ export async function drawHeader(
 
   if (target.kind === "pdf") {
     const { doc, margin, pageWidth } = target;
-    drawLogoOnPdf(doc, assets, margin, margin - 1, 15, onWarning);
+    drawLogoOnPdf(doc, assets, margin, margin - 0.5, 9, onWarning);
     doc.setFont("helvetica", "bold");
     doc.setFontSize(8);
     doc.setTextColor(35);
-    doc.text(header.titleLeft, margin + 18, margin + 3);
+    doc.text(header.titleLeft, margin + 12, margin + 3);
     doc.setFontSize(11);
     doc.setTextColor(30);
     doc.text(header.titleCenter, pageWidth / 2, margin + 3, { align: "center" });
@@ -200,7 +200,7 @@ export async function drawHeader(
     doc.setTextColor(140);
     doc.text(header.subline, pageWidth / 2, margin + 10.5, { align: "center" });
     doc.setDrawColor(0, 209, 255);
-    doc.setLineWidth(0.5);
+    doc.setLineWidth(0.3);
     doc.line(margin, margin + 12, pageWidth - margin, margin + 12);
     return;
   }

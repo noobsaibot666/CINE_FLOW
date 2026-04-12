@@ -1259,28 +1259,37 @@ impl Database {
 
     pub fn reset_file(&self) -> Result<(), String> {
         let db_path = (*self._path).clone();
+        println!("[db][reset] resetting database file: {}", db_path);
+
         if let Some(parent) = Path::new(&db_path).parent() {
-            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            let _ = std::fs::create_dir_all(parent);
         }
 
         {
+            println!("[db][reset] swapping connection for in-memory placeholder...");
             let mut conn = self.conn.lock().unwrap();
             let placeholder = Connection::open_in_memory().map_err(|e| e.to_string())?;
             let old_conn = std::mem::replace(&mut *conn, placeholder);
+            println!("[db][reset] dropping old connection...");
             drop(old_conn);
         }
 
-        remove_sqlite_file(&db_path)?;
-        remove_sqlite_file(&format!("{}-wal", db_path))?;
-        remove_sqlite_file(&format!("{}-shm", db_path))?;
+        println!("[db][reset] deleting physical files...");
+        let _ = remove_sqlite_file(&db_path);
+        let _ = remove_sqlite_file(&format!("{}-wal", db_path));
+        let _ = remove_sqlite_file(&format!("{}-shm", db_path));
 
+        println!("[db][reset] reopening database file...");
         let reopened = Connection::open(&db_path).map_err(|e| e.to_string())?;
         {
             let mut conn = self.conn.lock().unwrap();
             *conn = reopened;
         }
 
-        self.create_tables().map_err(|e| e.to_string())
+        println!("[db][reset] re-creating schema...");
+        self.create_tables().map_err(|e| e.to_string())?;
+        println!("[db][reset] database reset success");
+        Ok(())
     }
 
     fn create_tables(&self) -> SqlResult<()> {

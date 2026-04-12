@@ -14,6 +14,7 @@ interface AboutPanelProps {
 
 export function AboutPanel({ open, info, onResetTour, onClose }: AboutPanelProps) {
   const [perfEvents, setPerfEvents] = useState<any[]>([]);
+  const [isResetting, setIsResetting] = useState(false);
   
   const refreshPerf = async () => {
     try {
@@ -93,6 +94,7 @@ export function AboutPanel({ open, info, onResetTour, onClose }: AboutPanelProps
                 <button
                   className="btn btn-danger btn-xs"
                   style={{ backgroundColor: "#dc2626", color: "white" }}
+                  disabled={isResetting}
                   onClick={async () => {
                     const { ask } = await import("@tauri-apps/plugin-dialog");
                     const confirmed = await ask(
@@ -100,16 +102,25 @@ export function AboutPanel({ open, info, onResetTour, onClose }: AboutPanelProps
                       { title: "Hard Reset", kind: "warning" }
                     );
                     if (confirmed) {
+                      setIsResetting(true);
                       try {
+                        console.log("[ui][reset] starting hard reset...");
                         await invoke("reset_app_data");
+                        console.log("[ui][reset] backend reset done, clearing storage...");
+                        
+                        localStorage.clear();
+                        sessionStorage.clear();
+                        
+                        console.log("[ui][reset] reloading app...");
                         window.location.reload();
                       } catch (e) {
                         console.error("Failed to reset app data", e);
+                        setIsResetting(false);
                       }
                     }
                   }}
                 >
-                  Hard Reset
+                  {isResetting ? "Resetting..." : "Hard Reset"}
                 </button>
               </div>
             </div>

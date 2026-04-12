@@ -324,6 +324,7 @@ function AppContent() {
   const [helpMenuOpen, setHelpMenuOpen] = useState(false);
   const [transferResetNonce, setTransferResetNonce] = useState(0);
   const [shotPlannerExportMenuOpen, setShotPlannerExportMenuOpen] = useState(false);
+  const [loadMenuOpen, setLoadMenuOpen] = useState(false);
   const [reviewExportMenuOpen, setReviewExportMenuOpen] = useState(false);
   const [openExportAfterScan, setOpenExportAfterScan] = useState(false);
   const [uiNotice, setUiNotice] = useState<{ title: string; hint: string } | null>(null);
@@ -350,6 +351,7 @@ function AppContent() {
 
 
   const exportMenuRef = useRef<HTMLDivElement | null>(null);
+  const loadMenuRef = useRef<HTMLDivElement | null>(null);
   const shotPlannerStateRef = useRef<any>(null);
   const reviewStateRef = useRef<any>(null);
   const isUnloadingRef = useRef(false);
@@ -406,21 +408,32 @@ function AppContent() {
   }, [lookbookSortMode, groupByShotSize, enableOptionalShotTags, sequenceMovementFilter, shotSizeFilter]);
 
   useEffect(() => {
+    if (!projectId || scanning || clips.length === 0) return;
+    // Auto-trigger extraction when properties change to ensure we have the frames
+    // Backend skips already extracted files, so this is safe and fast.
+    void safeInvoke("extract_thumbnails", { projectId }).catch(console.error);
+  }, [thumbCount, selectedJumpSeconds, projectId, safeInvoke]);
+
+  useEffect(() => {
     if (lookbookSortMode === "hook_first") {
       setLookbookSortMode("canonical");
     }
   }, [lookbookSortMode]);
 
   useEffect(() => {
-    if (!shotPlannerExportMenuOpen) return;
+    if (!shotPlannerExportMenuOpen && !loadMenuOpen) return;
     const handlePointerDown = (event: MouseEvent) => {
-      if (exportMenuRef.current && !exportMenuRef.current.contains(event.target as Node)) {
+      const target = event.target as Node;
+      if (shotPlannerExportMenuOpen && exportMenuRef.current && !exportMenuRef.current.contains(target)) {
         setShotPlannerExportMenuOpen(false);
+      }
+      if (loadMenuOpen && loadMenuRef.current && !loadMenuRef.current.contains(target)) {
+        setLoadMenuOpen(false);
       }
     };
     window.addEventListener("mousedown", handlePointerDown);
     return () => window.removeEventListener("mousedown", handlePointerDown);
-  }, [shotPlannerExportMenuOpen]);
+  }, [shotPlannerExportMenuOpen, loadMenuOpen]);
 
   useEffect(() => {
     if (!uiNotice) return;
@@ -1570,12 +1583,30 @@ function AppContent() {
             <Suspense fallback={<SuiteLoading />}>
             {uiError && (
               <div className="error-banner">
-                <strong>{uiError.title}</strong> {uiError.hint}
+                <div style={{ flex: 1 }}>
+                  <strong>{uiError.title}</strong> {uiError.hint}
+                </div>
+                <button 
+                  className="btn-link" 
+                  onClick={() => setUiError(null)}
+                  style={{ color: 'white', opacity: 0.6, padding: '0 4px' }}
+                >
+                  <X size={14} />
+                </button>
               </div>
             )}
             {uiNotice && (
               <div className="error-banner info-banner">
-                <strong>{uiNotice.title}</strong>{uiNotice.hint ? ` ${uiNotice.hint}` : ""}
+                <div style={{ flex: 1 }}>
+                  <strong>{uiNotice.title}</strong>{uiNotice.hint ? ` ${uiNotice.hint}` : ""}
+                </div>
+                <button 
+                  className="btn-link" 
+                  onClick={() => setUiNotice(null)}
+                  style={{ color: 'white', opacity: 0.6, padding: '0 4px' }}
+                >
+                  <X size={14} />
+                </button>
               </div>
             )}
             {activeTab === 'preproduction' ? (
@@ -1652,11 +1683,11 @@ function AppContent() {
                         <button className="btn btn-ghost btn-sm" onClick={handleToggleSelectAll}>
                           {selectedSelectableCount === selectableClipIds.length ? "Deselect all" : "Select all"}
                         </button>
-                        <div className="shot-planner-export" ref={exportMenuRef}>
+                        <div className={`shot-planner-export ${shotPlannerExportMenuOpen ? 'is-open' : ''}`} ref={exportMenuRef}>
                           <button
                             type="button"
                             className="btn btn-secondary btn-sm"
-                            onClick={() => setShotPlannerExportMenuOpen((prev) => !prev)}
+                            onClick={(e) => { e.stopPropagation(); setShotPlannerExportMenuOpen((prev) => !prev); }}
                             aria-haspopup="menu"
                             aria-expanded={shotPlannerExportMenuOpen}
                           >
@@ -1685,18 +1716,18 @@ function AppContent() {
                             </div>
                           )}
                         </div>
-                         <div className="shot-planner-export-dropdown">
-                          <button className="btn btn-secondary btn-sm" onClick={() => handleLoadFootage("shot-planner", "folder")} disabled={scanning}>
+                         <div className={`shot-planner-export-dropdown ${loadMenuOpen ? 'is-open' : ''}`} ref={loadMenuRef}>
+                          <button className="btn btn-secondary btn-sm" onClick={(e) => { e.stopPropagation(); setLoadMenuOpen((prev) => !prev); }} disabled={scanning}>
                             {scanning ? <div className="spinner" /> : <FolderOpen size={14} />}
                             <span>{scanning ? "Scanning..." : "Load..."}</span>
                             <ChevronDown size={12} style={{ marginLeft: '4px', opacity: 0.5 }} />
                           </button>
-                          <div className="shot-planner-export-menu">
-                            <button type="button" className="shot-planner-export-item" onClick={() => handleLoadFootage("shot-planner", "folder")}>
+                          <div className="shot-planner-export-menu" role="menu">
+                            <button type="button" className="shot-planner-export-item" onClick={() => { setLoadMenuOpen(false); handleLoadFootage("shot-planner", "folder"); }}>
                               <FolderOpen size={14} />
                               <span>Load Folder</span>
                             </button>
-                            <button type="button" className="shot-planner-export-item" onClick={() => handleLoadFootage("shot-planner", "files")}>
+                            <button type="button" className="shot-planner-export-item" onClick={() => { setLoadMenuOpen(false); handleLoadFootage("shot-planner", "files"); }}>
                               <Film size={14} />
                               <span>Load File(s)</span>
                             </button>

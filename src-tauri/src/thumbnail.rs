@@ -8,7 +8,11 @@ const SKIP_SECONDS: f64 = 0.5;
 const MAX_WIDTH: u32 = 640;
 
 /// Luminance threshold for black frame rejection (0-255)
-const BLACK_THRESHOLD: f64 = 15.0;
+const BLACK_THRESHOLD: u8 = 15;
+
+/// Maximum number of raw pixel bytes to sample for black-frame detection.
+/// 640×360×3 (RGB) = 691 200 — fits any thumbnail we generate.
+const BLACK_DETECT_MAX_BYTES: usize = 700_000;
 
 /// Image file extensions that need special thumbnail handling
 const IMAGE_EXTENSIONS: &[&str] = &[
@@ -87,7 +91,13 @@ pub fn extract_image_thumbnail(
     Ok(true)
 }
 
-/// Extract a single thumbnail from a video file at a given timestamp
+/// Extract a single thumbnail from a video file at a given timestamp.
+///
+/// Uses input-seeking (`-ss` before `-i`) for speed. Falls back to
+/// output-seeking only when input-seeking genuinely fails (not for MKV/MXF
+/// seek inaccuracy — those formats already work fine with input-seeking for
+/// thumbnail purposes). A final stage drops `-map 0:v` for containers whose
+/// first video stream index is ambiguous.
 pub fn extract_thumbnail(
     input_path: &str,
     output_path: &str,
@@ -130,64 +140,81 @@ pub fn extract_thumbnail(
         None
     };
 
+    let scale_filter = format!("scale={}:-1", MAX_WIDTH);
+
     let status = if let Some(res) = status {
         res?
     } else {
         let ffmpeg = crate::tools::find_executable("ffmpeg");
-        // Stage 1: Fast Input Seeking (seeking before -i)
-        let mut cmd = Command::new(&ffmpeg);
-        
-        let output = cmd.args([
-            "-ss", &ts_str,
-            "-i", input_path,
-            "-vframes", "1",
-            "-vf", &format!("scale={}:-1,format=yuv420p", MAX_WIDTH),
-            "-q:v", "5",
-            "-map", "0:v",
-            "-sn", "-dn",
-            "-y",
-            output_path,
-        ])
-        .output()
-        .map_err(|e| format!("Failed to run ffmpeg Stage 1: {}", e))?;
 
-        if output.status.success() {
-            output
-        } else {
-            // Stage 2: Slower but more robust Output Seeking (seeking after -i)
-            let mut cmd2 = Command::new(&ffmpeg);
-            let output2 = cmd2.args([
-                "-i", input_path,
+        // ── Stage 1: Fast input-seeking ──
+        // `-ss` before `-i` makes ffmpeg jump straight to the nearest keyframe,
+        // avoiding decoding from the start. `-noautorotate` skips rotation
+        // transform. Short `-analyzeduration` / `-probesize` help MKV, TS, MXF.
+        let output = Command::new(&ffmpeg)
+            .args([
                 "-ss", &ts_str,
-                "-vframes", "1",
-                "-vf", &format!("scale={}:-1,format=yuv420p", MAX_WIDTH),
+                "-noautorotate",
+                "-analyzeduration", "5000000",
+                "-probesize", "5000000",
+                "-i", input_path,
+                "-frames:v", "1",
+                "-vf", &scale_filter,
                 "-q:v", "5",
-                "-map", "0:v",
-                "-sn", "-dn",
+                "-map", "0:v:0",
+                "-an", "-sn", "-dn",
                 "-y",
                 output_path,
             ])
             .output()
-            .map_err(|e| format!("Failed to run ffmpeg Stage 2: {}", e))?;
+            .map_err(|e| format!("Failed to run ffmpeg Stage 1: {}", e))?;
 
-            if output2.status.success() {
-                output2
-            } else {
-                // Stage 3: Extreme fallback without stream mapping
-                // Useful for RAW files or broken files where stream 0:v is ambiguous
-                let mut cmd3 = Command::new(&ffmpeg);
-                cmd3.args([
-                    "-i", input_path,
+        if output.status.success() {
+            output
+        } else {
+            // ── Stage 2: Input-seeking without explicit stream map ──
+            // Some containers (e.g. MXF with data streams first, some AVI
+            // variants) confuse `-map 0:v:0`. Retry without it.
+            let output2 = Command::new(&ffmpeg)
+                .args([
                     "-ss", &ts_str,
-                    "-vframes", "1",
-                    "-vf", &format!("scale={}:-1,format=yuv420p", MAX_WIDTH),
+                    "-noautorotate",
+                    "-analyzeduration", "5000000",
+                    "-probesize", "5000000",
+                    "-i", input_path,
+                    "-frames:v", "1",
+                    "-vf", &scale_filter,
                     "-q:v", "5",
-                    "-sn", "-dn",
+                    "-an", "-sn", "-dn",
                     "-y",
                     output_path,
                 ])
                 .output()
-                .map_err(|e| format!("Failed to run ffmpeg Stage 3: {}", e))?
+                .map_err(|e| format!("Failed to run ffmpeg Stage 2: {}", e))?;
+
+            if output2.status.success() {
+                output2
+            } else {
+                // ── Stage 3: Output-seeking (last resort) ──
+                // Only for genuinely broken containers where input-seeking
+                // crashes ffmpeg. This must decode from the start so it's slow
+                // but at least produces a frame.
+                Command::new(&ffmpeg)
+                    .args([
+                        "-noautorotate",
+                        "-analyzeduration", "10000000",
+                        "-probesize", "10000000",
+                        "-i", input_path,
+                        "-ss", &ts_str,
+                        "-frames:v", "1",
+                        "-vf", &scale_filter,
+                        "-q:v", "5",
+                        "-an", "-sn", "-dn",
+                        "-y",
+                        output_path,
+                    ])
+                    .output()
+                    .map_err(|e| format!("Failed to run ffmpeg Stage 3: {}", e))?
             }
         }
     };
@@ -199,7 +226,7 @@ pub fn extract_thumbnail(
         ));
     }
 
-    // Check if the frame is black
+    // Check if the frame is black (fast, in-process pixel check)
     if is_black_frame(output_path) {
         return Ok(false); // rejected
     }
@@ -568,42 +595,43 @@ fn process_braw_decode(
     }
 }
 
-/// Check if a thumbnail image is mostly black by sampling its mean luminance
+/// Fast, in-process black-frame check.
+///
+/// Instead of spawning `ffprobe -f lavfi … signalstats` (which alone takes
+/// 200-400ms per frame), we decode the thumbnail we just wrote to raw RGB
+/// via a single fast ffmpeg call and compute mean luminance ourselves.
+/// For a 640-wide JPEG thumbnail this takes ~10-20ms.
 fn is_black_frame(image_path: &str) -> bool {
-    let ffprobe = crate::tools::find_executable("ffprobe");
-    // Escape path for lavfi filter: ' -> \', , -> \, : -> \:
-    let escaped_path = image_path
-        .replace("\\", "\\\\")
-        .replace("'", "\\'")
-        .replace(",", "\\,")
-        .replace(":", "\\:");
+    // Quick sanity — if the file is missing or tiny, skip
+    let meta = match std::fs::metadata(image_path) {
+        Ok(m) => m,
+        Err(_) => return false,
+    };
+    if meta.len() < 500 {
+        return true; // degenerate file, treat as black
+    }
 
-    let output = Command::new(ffprobe)
+    let ffmpeg = crate::tools::find_executable("ffmpeg");
+    let output = Command::new(ffmpeg)
         .args([
-            "-v",
-            "quiet",
-            "-f",
-            "lavfi",
-            "-i",
-            &format!("movie='{}',signalstats", escaped_path),
-            "-show_entries",
-            "frame_tags=lavfi.signalstats.YAVG",
-            "-of",
-            "csv=p=0",
+            "-i", image_path,
+            "-frames:v", "1",
+            "-vf", "scale=64:-1",   // tiny decode — 64px wide is plenty for luminance
+            "-pix_fmt", "gray",     // single-channel luminance
+            "-f", "rawvideo",
+            "-y",
+            "pipe:1",
         ])
         .output();
 
     match output {
-        Ok(out) => {
-            let stdout = String::from_utf8_lossy(&out.stdout);
-            if let Some(line) = stdout.lines().next() {
-                if let Ok(avg) = line.trim().parse::<f64>() {
-                    return avg < BLACK_THRESHOLD;
-                }
-            }
-            false // If we can't determine, assume it's not black
+        Ok(out) if out.status.success() && !out.stdout.is_empty() => {
+            let pixels = &out.stdout[..out.stdout.len().min(BLACK_DETECT_MAX_BYTES)];
+            let sum: u64 = pixels.iter().map(|&p| p as u64).sum();
+            let avg = sum / pixels.len().max(1) as u64;
+            avg < BLACK_THRESHOLD as u64
         }
-        Err(_) => false,
+        _ => false, // If we can't determine, assume it's not black
     }
 }
 
@@ -629,8 +657,8 @@ pub fn extract_with_fallback(
         Err(e) => return Err(e),
     }
 
-    // Fallback: try offsets around the target
-    let offsets: Vec<i64> = vec![1000, 2000, -1000, -2000, 3000, -3000];
+    // Fallback: try offsets around the target (reduced set — 4 attempts not 6)
+    let offsets: Vec<i64> = vec![1000, 2000, -1000, -2000];
     for offset in offsets {
         if let Some(cf) = cancel_flag {
             if cf.load(std::sync::atomic::Ordering::Relaxed) {

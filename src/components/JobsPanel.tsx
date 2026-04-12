@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { ask } from "@tauri-apps/plugin-dialog";
 import { X, Pause, Trash2, CheckCircle2, AlertTriangle, Loader2, Clock } from "lucide-react";
 import { JobInfo } from "../types";
 import { useState } from "react";
@@ -117,28 +118,29 @@ export function JobsPanel({ open, jobs, onClose, onRefresh, extracting, extractP
   };
 
   const handleResetDevData = async () => {
-    if (!confirm("This will wipe wrap-preview-dev data and reload the app.")) {
+    if (resettingDevData) {
       return;
     }
+
+    const confirmed = await ask("This will wipe wrap-preview-dev data and reload the app.", {
+      title: "Reset Dev Data",
+      kind: "warning",
+    });
+    if (!confirmed) {
+      return;
+    }
+
     setResettingDevData(true);
     onClose();
 
-    const reload = () => {
-      window.setTimeout(() => {
-        window.location.reload();
-      }, 120);
-    };
-
     try {
-      const resetPromise = invoke<{ ok: boolean }>("dev_reset_all_data");
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        window.setTimeout(() => reject(new Error("reset timeout")), 1500);
-      });
-      await Promise.race([resetPromise, timeoutPromise]);
-      reload();
+      await invoke<{ success: boolean }>("reset_app_data");
+      localStorage.clear();
+      sessionStorage.clear();
+      window.location.reload();
     } catch (e) {
-      console.warn("Reset dev data did not confirm before reload:", e);
-      reload();
+      console.error("Failed to reset dev data:", e);
+      setResettingDevData(false);
     }
   };
 

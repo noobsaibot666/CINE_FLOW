@@ -220,7 +220,7 @@ export const MosaicBuilder = memo(function MosaicBuilder({
                     status={item.clip.status}
                     placeholderCount={thumbCount}
                     count={thumbCount}
-                    aspectRatio={item.clip.width > 0 && item.clip.height > 0 ? item.clip.width / item.clip.height : 16 / 9}
+                    aspectRatio={useOriginalRatio ? (item.clip.width > 0 && item.clip.height > 0 ? item.clip.width / item.clip.height : 16 / 9) : 1}
                     thumbnailCache={thumbnailCache}
                     cacheKeyContext={cacheKeyContext}
                     isImage={item.clip.duration_ms === 0}

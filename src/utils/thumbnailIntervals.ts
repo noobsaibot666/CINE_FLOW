@@ -16,6 +16,6 @@ export function getJumpIntervalForThumbCount(thumbCount: number, durationSecs?: 
   return baseJump;
 }
 
-export function getThumbnailCacheContext(jumpSeconds: number, thumbCount?: number): string {
-  return thumbCount ? `jump=${jumpSeconds}_tc=${thumbCount}` : `jump=${jumpSeconds}`;
+export function getThumbnailCacheContext(jumpSeconds: number, _thumbCount?: number): string {
+  return `jump=${jumpSeconds}`;
 }

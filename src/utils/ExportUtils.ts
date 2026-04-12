@@ -111,7 +111,7 @@ async function collectMosaicAssets(
   shuffle?: boolean,
 ): Promise<MosaicAsset[]> {
   const assets: MosaicAsset[] = [];
-  let skipped = 0;
+  let skippedTotal = 0;
 
   for (const clip of clips) {
     const displayedThumbs = getDisplayedThumbsForClip({
@@ -124,7 +124,7 @@ async function collectMosaicAssets(
     });
     
     if (displayedThumbs.length === 0) {
-      skipped += 1;
+      skippedTotal += 1;
       continue;
     }
     
@@ -133,20 +133,24 @@ async function collectMosaicAssets(
       const src = thumb.src;
       if (!src) continue;
       
-      const dataUrl = await readThumbAsDataUrl(src);
-      if (!dataUrl) continue;
-      
-      assets.push({ clip, dataUrl });
-      clipThumbsAdded++;
+      try {
+        const dataUrl = await readThumbAsDataUrl(src);
+        if (!dataUrl) continue;
+        
+        assets.push({ clip, dataUrl });
+        clipThumbsAdded++;
+      } catch (e) {
+        console.warn("Skipping corrupt thumbnail asset:", src, e);
+      }
     }
     
     if (clipThumbsAdded === 0) {
-      skipped += 1;
+      skippedTotal += 1;
     }
   }
 
-  if (skipped > 0) {
-    onWarning?.("Some clips had no thumbnails yet and were skipped.");
+  if (skippedTotal > 0 && onWarning) {
+    onWarning(`${skippedTotal} clips had missing or invalid thumbnails and were skipped in the mosaic.`);
   }
   
   if (shuffle) {
@@ -174,41 +178,221 @@ export async function exportPdf(options: ExportOptions): Promise<boolean> {
     onWarning,
   } = options;
 
+  if (clips.length === 0) return false;
+
   const filePath = await save({
     filters: [{ name: "PDF Document", extensions: ["pdf"] }],
     defaultPath: `${projectName}_ContactSheet.pdf`,
   });
   if (!filePath) return false;
 
-  const { jsPDF } = await import("jspdf");
-  const pdf = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
-  const pageW = 297;
-  const pageH = 210;
-  const margin = 10;
-  const usableW = pageW - margin * 2;
-  const clipsPerPage = 3;
-  const pages = chunkArray(clips, clipsPerPage);
-  const exportDate = new Date();
+  try {
+    const { jsPDF } = await import("jspdf");
+    const pdf = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+    const pageW = 297;
+    const pageH = 210;
+    const margin = 10;
+    const usableW = pageW - margin * 2;
+    const clipsPerPage = 3;
+    const pages = chunkArray(clips, clipsPerPage);
+    const exportDate = new Date();
 
-  if (import.meta.env.DEV) {
-    console.info("[CineFlow Suite] PDF export soak helper", {
-      projectName,
-      clipCount: clips.length,
-      pageCount: pages.length,
-    });
+    for (let pi = 0; pi < pages.length; pi++) {
+      if (pi > 0) pdf.addPage();
+      const pageClips = pages[pi];
+
+      await drawHeader(
+        { kind: "pdf", doc: pdf, pageWidth: pageW, margin },
+        {
+          appName: brandName || "CineFlow Suite",
+          appVersion,
+          exportedAt: exportDate,
+          projectName,
+          title: "Contact Sheet",
+        },
+        onWarning
+      );
+
+      const totalDur = clips.reduce((a, c) => a + c.duration_ms, 0);
+      const resolutions = [...new Set(clips.map((c) => `${c.width}×${c.height}`))];
+      const fpsValues = [...new Set(clips.map((c) => c.fps))];
+      const statsLine = [
+        `${clips.length} clips`,
+        `${formatDuration(totalDur)} total`,
+        resolutions.length === 1 ? resolutions[0] : `${resolutions.length} resolutions`,
+        fpsValues.length === 1 ? `${fpsValues[0]}fps` : `${fpsValues.join("/")}fps`,
+      ].join("  •  ");
+
+      pdf.setFontSize(5.4);
+      pdf.setTextColor(140);
+      pdf.text(statsLine, pageW / 2, margin + 7, { align: "center" });
+
+      const clipAreaTop = margin + 16;
+      const clipAreaH = pageH - clipAreaTop - 12;
+      const clipRowH = clipAreaH / clipsPerPage;
+
+      for (let ci = 0; ci < pageClips.length; ci++) {
+        const clip = pageClips[ci];
+        const rowY = clipAreaTop + ci * clipRowH;
+        const thumbStripH = clipRowH * 0.65;
+        const displayedThumbs = getDisplayedThumbsForClip({
+          clipId: clip.id,
+          thumbnails: thumbnailsByClipId[clip.id] ?? [],
+          thumbnailCache,
+          thumbCount,
+          jumpSeconds,
+          cacheKeyContext,
+        });
+        const thumbW = usableW / Math.max(displayedThumbs.length, 1);
+
+        pdf.setFillColor(20, 20, 20);
+        pdf.rect(margin, rowY, usableW, thumbStripH, "F");
+
+        for (let ti = 0; ti < displayedThumbs.length; ti++) {
+          let thumbPath = displayedThumbs[ti].file_path || displayedThumbs[ti].src;
+
+          if (!thumbPath.startsWith("data:") && projectLutHash && clip.lut_enabled === 1) {
+            const parts = thumbPath.split("/");
+            const filename = parts.pop();
+            const newFilename = `lut_${projectLutHash}_${filename}`;
+            thumbPath = [...parts, newFilename].join("/");
+          }
+
+          try {
+            const dataUrl = await readThumbAsDataUrl(thumbPath);
+            if (!dataUrl) continue;
+
+            const image = await loadImage(dataUrl);
+            const x = margin + ti * thumbW;
+            const normalized = await normalizePdfImageDataUrl(dataUrl);
+            const frameX = x + 0.3;
+            const frameY = rowY + 0.3;
+            const frameW = thumbW - 0.6;
+            const frameH = thumbStripH - 0.6;
+            const fitted = getContainRect(image.width, image.height, frameX, frameY, frameW, frameH);
+            pdf.addImage(normalized, "JPEG", fitted.x, fitted.y, fitted.width, fitted.height, undefined, "FAST");
+          } catch (e) {
+            console.warn("Failed to add thumbnail to PDF:", e);
+          }
+        }
+
+        pdf.setDrawColor(0);
+        pdf.setLineWidth(0.3);
+        pdf.rect(margin, rowY, usableW, thumbStripH);
+
+        const metaY = rowY + thumbStripH + 3.5;
+        pdf.setFontSize(7);
+        pdf.setTextColor(30);
+        pdf.setFont("helvetica", "bold");
+        pdf.text(clip.filename, margin, metaY);
+
+        const filenameW = pdf.getTextWidth(clip.filename);
+        pdf.setFont("helvetica", "normal");
+        pdf.setTextColor(100);
+        pdf.text(`   ${formatDuration(clip.duration_ms)}`, margin + filenameW, metaY);
+
+        const audioBadge = getAudioBadge(clip.audio_summary, clip.audio_envelope);
+        const metaParts: string[] = [
+          `${clip.width}×${clip.height}`,
+          formatCodecLabel(clip),
+          clip.fps > 0 ? `${clip.fps}fps` : "",
+        ].filter(Boolean);
+        if (clip.shot_size) metaParts.push(clip.shot_size);
+        if (clip.movement) metaParts.push(clip.movement);
+        if (audioBadge) metaParts.push(audioBadge);
+
+        pdf.setFontSize(5.8);
+        pdf.text(metaParts.join("  •  "), margin, metaY + 3.2);
+
+        let rightX = margin + usableW;
+        if (clip.flag !== "none") {
+          const flagText = clip.flag.toUpperCase();
+          const flagW = pdf.getTextWidth(flagText) + 4;
+          pdf.setTextColor(clip.flag === "pick" ? 0 : 200, clip.flag === "pick" ? 180 : 60, clip.flag === "pick" ? 100 : 60);
+          pdf.setFont("helvetica", "bold");
+          pdf.text(flagText, rightX, metaY, { align: "right" });
+          pdf.setFont("helvetica", "normal");
+          rightX -= flagW + 2;
+        }
+        if (clip.rating > 0) {
+          pdf.setTextColor(0, 209, 255);
+          pdf.setFont("helvetica", "bold");
+          pdf.text("★".repeat(clip.rating), rightX, metaY, { align: "right" });
+          pdf.setFont("helvetica", "normal");
+        }
+      }
+
+      drawFooter(
+        {
+          kind: "pdf",
+          doc: pdf,
+          pageWidth: pageW,
+          pageHeight: pageH,
+          margin,
+          pageLabel: `Page ${pi + 1} of ${pages.length}`,
+        },
+        brandName || "CineFlow Suite"
+      );
+    }
+
+    const finalDataUrl = pdf.output("datauristring");
+    await invokeGuarded("save_image_data_url", { path: filePath, dataUrl: finalDataUrl });
+    return true;
+  } catch (error) {
+    console.error("PDF Export failed:", error);
+    onWarning?.("An error occurred during PDF generation. Please try again.");
+    return false;
   }
+}
 
-  for (let pi = 0; pi < pages.length; pi++) {
-    if (pi > 0) pdf.addPage();
-    const pageClips = pages[pi];
+export async function exportImage(options: ExportOptions): Promise<boolean> {
+  const {
+    projectName,
+    clips,
+    thumbnailsByClipId,
+    thumbnailCache,
+    thumbCount,
+    jumpSeconds,
+    cacheKeyContext,
+    projectLutHash,
+    brandName,
+    appVersion = "unknown",
+    onWarning,
+  } = options;
+
+  if (clips.length === 0) return false;
+
+  const filePath = await save({
+    filters: [{ name: "Image", extensions: ["jpeg"] }],
+    defaultPath: `${projectName}_ContactSheet.jpeg`,
+  });
+  if (!filePath) return false;
+
+  try {
+    const thumbW = 240;
+    const thumbH = 135;
+    const metaAreaH = 60;
+    const rowH = thumbH + metaAreaH;
+    const stripW = thumbW * thumbCount;
+    const marginX = 40;
+    const canvasW = stripW + marginX * 2;
+    const headerH = 100;
+    const footerH = 40;
+    const canvasH = headerH + clips.length * rowH + footerH;
+    const exportDate = new Date();
+    const dateStr = exportDate.toLocaleDateString("en-GB", { day: "2-digit", month: "long", year: "numeric" });
+
+    const canvas = document.createElement("canvas");
+    canvas.width = canvasW;
+    canvas.height = canvasH;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("Canvas context unavailable");
+
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, canvasW, canvasH);
 
     await drawHeader(
-      {
-        kind: "pdf",
-        doc: pdf,
-        pageWidth: pageW,
-        margin,
-      },
+      { kind: "canvas", ctx, canvasWidth: canvasW, marginX },
       {
         appName: brandName || "CineFlow Suite",
         appVersion,
@@ -227,20 +411,15 @@ export async function exportPdf(options: ExportOptions): Promise<boolean> {
       `${formatDuration(totalDur)} total`,
       resolutions.length === 1 ? resolutions[0] : `${resolutions.length} resolutions`,
       fpsValues.length === 1 ? `${fpsValues[0]}fps` : `${fpsValues.join("/")}fps`,
-    ].join("  •  ");
+    ].join("   •   ");
+    ctx.fillStyle = "#777";
+    ctx.font = "11px Inter, system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText(statsLine, canvasW / 2, 70);
 
-    pdf.setFontSize(5.4);
-    pdf.setTextColor(140);
-    pdf.text(statsLine, pageW / 2, margin + 7, { align: "center" });
-
-    const clipAreaTop = margin + 16;
-    const clipAreaH = pageH - clipAreaTop - 12;
-    const clipRowH = clipAreaH / clipsPerPage;
-
-    for (let ci = 0; ci < pageClips.length; ci++) {
-      const clip = pageClips[ci];
-      const rowY = clipAreaTop + ci * clipRowH;
-      const thumbStripH = clipRowH * 0.65;
+    for (let ci = 0; ci < clips.length; ci++) {
+      const clip = clips[ci];
+      const rowY = headerH + ci * rowH;
       const displayedThumbs = getDisplayedThumbsForClip({
         clipId: clip.id,
         thumbnails: thumbnailsByClipId[clip.id] ?? [],
@@ -249,10 +428,8 @@ export async function exportPdf(options: ExportOptions): Promise<boolean> {
         jumpSeconds,
         cacheKeyContext,
       });
-      const thumbW = usableW / Math.max(displayedThumbs.length, 1);
-
-      pdf.setFillColor(20, 20, 20);
-      pdf.rect(margin, rowY, usableW, thumbStripH, "F");
+      const displayedCount = Math.max(displayedThumbs.length, 1);
+      const rowThumbW = stripW / displayedCount;
 
       for (let ti = 0; ti < displayedThumbs.length; ti++) {
         let thumbPath = displayedThumbs[ti].file_path || displayedThumbs[ti].src;
@@ -260,43 +437,43 @@ export async function exportPdf(options: ExportOptions): Promise<boolean> {
         if (!thumbPath.startsWith("data:") && projectLutHash && clip.lut_enabled === 1) {
           const parts = thumbPath.split("/");
           const filename = parts.pop();
-          const newFilename = `lut_${projectLutHash}_${filename}`;
-          thumbPath = [...parts, newFilename].join("/");
+          thumbPath = [...parts, `lut_${projectLutHash}_${filename}`].join("/");
         }
 
-        const dataUrl = await readThumbAsDataUrl(thumbPath);
-        if (!dataUrl) continue;
-
         try {
-          const image = await loadImage(dataUrl);
-          const x = margin + ti * thumbW;
-          const normalized = await normalizePdfImageDataUrl(dataUrl);
-          const frameX = x + 0.3;
-          const frameY = rowY + 0.3;
-          const frameW = thumbW - 0.6;
-          const frameH = thumbStripH - 0.6;
-          const fitted = getContainRect(image.width, image.height, frameX, frameY, frameW, frameH);
-          pdf.addImage(normalized, "JPEG", fitted.x, fitted.y, fitted.width, fitted.height, undefined, "FAST");
-        } catch (e) {
-          console.warn("Failed to add thumbnail to PDF:", e);
+          const dataUrl = await readThumbAsDataUrl(thumbPath);
+          if (!dataUrl) continue;
+          const img = await loadImage(dataUrl);
+          const x = marginX + ti * rowThumbW;
+          const frameW = rowThumbW - 2;
+          const fitted = getContainRect(img.width, img.height, x, rowY, frameW, thumbH);
+          ctx.fillStyle = "#111215";
+          ctx.fillRect(x, rowY, frameW, thumbH);
+          ctx.drawImage(img, fitted.x, fitted.y, fitted.width, fitted.height);
+        } catch {
+          ctx.fillStyle = "#222";
+          ctx.fillRect(marginX + ti * rowThumbW, rowY, rowThumbW - 2, thumbH);
         }
       }
 
-      pdf.setDrawColor(0);
-      pdf.setLineWidth(0.3);
-      pdf.rect(margin, rowY, usableW, thumbStripH);
+      ctx.strokeStyle = "#333";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(marginX, rowY, stripW, thumbH);
 
-      const metaY = rowY + thumbStripH + 3.5;
-      pdf.setFontSize(7);
-      pdf.setTextColor(30);
-      pdf.setFont("helvetica", "bold");
-      pdf.text(clip.filename, margin, metaY);
+      const line1Y = rowY + thumbH + 18;
+      ctx.fillStyle = "#000000";
+      ctx.font = "bold 14px Inter, system-ui, sans-serif";
+      ctx.textAlign = "left";
+      ctx.fillText(clip.filename, marginX, line1Y);
 
-      const filenameW = pdf.getTextWidth(clip.filename);
-      pdf.setFont("helvetica", "normal");
-      pdf.setTextColor(100);
-      pdf.text(`   ${formatDuration(clip.duration_ms)}`, margin + filenameW, metaY);
+      ctx.font = "12px Inter, system-ui, sans-serif";
+      ctx.fillStyle = "#444";
+      const fnW = ctx.measureText(clip.filename).width;
+      ctx.fillText(`   ${formatDuration(clip.duration_ms)}`, marginX + fnW, line1Y);
 
+      const line2Y = line1Y + 18;
+      ctx.font = "11px Inter, system-ui, sans-serif";
+      ctx.fillStyle = "#555";
       const audioBadge = getAudioBadge(clip.audio_summary, clip.audio_envelope);
       const metaParts: string[] = [
         `${clip.width}×${clip.height}`,
@@ -306,343 +483,174 @@ export async function exportPdf(options: ExportOptions): Promise<boolean> {
       if (clip.shot_size) metaParts.push(clip.shot_size);
       if (clip.movement) metaParts.push(clip.movement);
       if (audioBadge) metaParts.push(audioBadge);
+      ctx.fillText(metaParts.join("   •   "), marginX, line2Y);
 
-      pdf.setFontSize(5.8);
-      pdf.text(metaParts.join("  •  "), margin, metaY + 3.2);
-
-      let rightX = margin + usableW;
+      ctx.textAlign = "right";
+      const rightEdge = marginX + stripW;
+      let rx = rightEdge;
       if (clip.flag !== "none") {
+        ctx.font = "bold 13px Inter, system-ui, sans-serif";
+        ctx.fillStyle = clip.flag === "pick" ? "#00b464" : "#e04040";
         const flagText = clip.flag.toUpperCase();
-        const flagW = pdf.getTextWidth(flagText) + 4;
-        pdf.setTextColor(clip.flag === "pick" ? 0 : 200, clip.flag === "pick" ? 180 : 60, clip.flag === "pick" ? 100 : 60);
-        pdf.setFont("helvetica", "bold");
-        pdf.text(flagText, rightX, metaY, { align: "right" });
-        pdf.setFont("helvetica", "normal");
-        rightX -= flagW + 2;
+        ctx.fillText(flagText, rx, line1Y);
+        rx -= ctx.measureText(flagText).width + 10;
       }
       if (clip.rating > 0) {
-        pdf.setTextColor(0, 209, 255);
-        pdf.setFont("helvetica", "bold");
-        pdf.text("★".repeat(clip.rating), rightX, metaY, { align: "right" });
-        pdf.setFont("helvetica", "normal");
+        ctx.font = "bold 14px Inter, system-ui, sans-serif";
+        ctx.fillStyle = "#00a0cc";
+        ctx.fillText("★".repeat(clip.rating), rx, line1Y);
       }
+      ctx.textAlign = "left";
     }
 
     drawFooter(
-      {
-        kind: "pdf",
-        doc: pdf,
-        pageWidth: pageW,
-        pageHeight: pageH,
-        margin,
-        pageLabel: `Page ${pi + 1} of ${pages.length}`,
-      },
+      { kind: "canvas", ctx, canvasWidth: canvasW, canvasHeight: canvasH, marginX, pageLabel: `${clips.length} clips  •  ${dateStr}` },
       brandName || "CineFlow Suite"
     );
+
+    await invokeGuarded("save_image_data_url", { path: filePath, dataUrl: canvas.toDataURL("image/jpeg", 0.92) });
+    return true;
+  } catch (err) {
+    console.error("Image export failed:", err);
+    onWarning?.("Image export failed. Please check folder permissions and try again.");
+    return false;
   }
-
-  await invokeGuarded("save_image_data_url", { path: filePath, dataUrl: pdf.output("datauristring") });
-  return true;
-}
-
-export async function exportImage(options: ExportOptions): Promise<boolean> {
-  const {
-    projectName,
-    clips,
-    thumbnailsByClipId,
-    thumbnailCache,
-    thumbCount,
-    jumpSeconds,
-    cacheKeyContext,
-    projectLutHash,
-    brandName,
-    appVersion = "unknown",
-    onWarning,
-  } = options;
-
-  const filePath = await save({
-    filters: [{ name: "Image", extensions: ["jpeg"] }],
-    defaultPath: `${projectName}_ContactSheet.jpeg`,
-  });
-  if (!filePath) return false;
-
-  const thumbW = 240;
-  const thumbH = 135;
-  const metaAreaH = 60;
-  const rowH = thumbH + metaAreaH;
-  const stripW = thumbW * thumbCount;
-  const marginX = 40;
-  const canvasW = stripW + marginX * 2;
-  const headerH = 100;
-  const footerH = 40;
-  const canvasH = headerH + clips.length * rowH + footerH;
-  const exportDate = new Date();
-  const dateStr = exportDate.toLocaleDateString("en-GB", { day: "2-digit", month: "long", year: "numeric" });
-
-  const canvas = document.createElement("canvas");
-  canvas.width = canvasW;
-  canvas.height = canvasH;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) {
-    throw new Error("Canvas context unavailable");
-  }
-
-  ctx.fillStyle = "#ffffff";
-  ctx.fillRect(0, 0, canvasW, canvasH);
-
-  await drawHeader(
-    {
-      kind: "canvas",
-      ctx,
-      canvasWidth: canvasW,
-      marginX,
-    },
-    {
-      appName: brandName || "CineFlow Suite",
-      appVersion,
-      exportedAt: exportDate,
-      projectName,
-      title: "Contact Sheet",
-    },
-    onWarning
-  );
-
-  const totalDur = clips.reduce((a, c) => a + c.duration_ms, 0);
-  const resolutions = [...new Set(clips.map((c) => `${c.width}×${c.height}`))];
-  const fpsValues = [...new Set(clips.map((c) => c.fps))];
-  const statsLine = [
-    `${clips.length} clips`,
-    `${formatDuration(totalDur)} total`,
-    resolutions.length === 1 ? resolutions[0] : `${resolutions.length} resolutions`,
-    fpsValues.length === 1 ? `${fpsValues[0]}fps` : `${fpsValues.join("/")}fps`,
-  ].join("   •   ");
-  ctx.fillStyle = "#777";
-  ctx.font = "11px Inter, system-ui, sans-serif";
-  ctx.textAlign = "center";
-  ctx.fillText(statsLine, canvasW / 2, 70);
-
-  for (let ci = 0; ci < clips.length; ci++) {
-    const clip = clips[ci];
-    const rowY = headerH + ci * rowH;
-    const displayedThumbs = getDisplayedThumbsForClip({
-      clipId: clip.id,
-      thumbnails: thumbnailsByClipId[clip.id] ?? [],
-      thumbnailCache,
-      thumbCount,
-      jumpSeconds,
-      cacheKeyContext,
-    });
-    const displayedCount = Math.max(displayedThumbs.length, 1);
-    const rowThumbW = stripW / displayedCount;
-
-    for (let ti = 0; ti < displayedThumbs.length; ti++) {
-      let thumbPath = displayedThumbs[ti].file_path || displayedThumbs[ti].src;
-
-      if (!thumbPath.startsWith("data:") && projectLutHash && clip.lut_enabled === 1) {
-        const parts = thumbPath.split("/");
-        const filename = parts.pop();
-        thumbPath = [...parts, `lut_${projectLutHash}_${filename}`].join("/");
-      }
-
-      const dataUrl = await readThumbAsDataUrl(thumbPath);
-      if (!dataUrl) continue;
-      try {
-        const img = await loadImage(dataUrl);
-        const x = marginX + ti * rowThumbW;
-        const frameW = rowThumbW - 2;
-        const fitted = getContainRect(img.width, img.height, x, rowY, frameW, thumbH);
-        ctx.fillStyle = "#111215";
-        ctx.fillRect(x, rowY, frameW, thumbH);
-        ctx.drawImage(img, fitted.x, fitted.y, fitted.width, fitted.height);
-      } catch {
-        ctx.fillStyle = "#222";
-        ctx.fillRect(marginX + ti * rowThumbW, rowY, rowThumbW - 2, thumbH);
-      }
-    }
-
-    ctx.strokeStyle = "#333";
-    ctx.lineWidth = 2;
-    ctx.strokeRect(marginX, rowY, stripW, thumbH);
-
-    const line1Y = rowY + thumbH + 18;
-    ctx.fillStyle = "#000000";
-    ctx.font = "bold 14px Inter, system-ui, sans-serif";
-    ctx.textAlign = "left";
-    ctx.fillText(clip.filename, marginX, line1Y);
-
-    ctx.font = "12px Inter, system-ui, sans-serif";
-    ctx.fillStyle = "#444";
-    const fnW = ctx.measureText(clip.filename).width;
-    ctx.fillText(`   ${formatDuration(clip.duration_ms)}`, marginX + fnW, line1Y);
-
-    const line2Y = line1Y + 18;
-    ctx.font = "11px Inter, system-ui, sans-serif";
-    ctx.fillStyle = "#555";
-    const audioBadge = getAudioBadge(clip.audio_summary, clip.audio_envelope);
-    const metaParts: string[] = [
-      `${clip.width}×${clip.height}`,
-      formatCodecLabel(clip),
-      clip.fps > 0 ? `${clip.fps}fps` : "",
-    ].filter(Boolean);
-    if (clip.shot_size) metaParts.push(clip.shot_size);
-    if (clip.movement) metaParts.push(clip.movement);
-    if (audioBadge) metaParts.push(audioBadge);
-    ctx.fillText(metaParts.join("   •   "), marginX, line2Y);
-
-    ctx.textAlign = "right";
-    const rightEdge = marginX + stripW;
-    let rx = rightEdge;
-    if (clip.flag !== "none") {
-      ctx.font = "bold 13px Inter, system-ui, sans-serif";
-      ctx.fillStyle = clip.flag === "pick" ? "#00b464" : "#e04040";
-      const flagText = clip.flag.toUpperCase();
-      ctx.fillText(flagText, rx, line1Y);
-      rx -= ctx.measureText(flagText).width + 10;
-    }
-    if (clip.rating > 0) {
-      ctx.font = "bold 14px Inter, system-ui, sans-serif";
-      ctx.fillStyle = "#00a0cc";
-      ctx.fillText("★".repeat(clip.rating), rx, line1Y);
-    }
-    ctx.textAlign = "left";
-  }
-
-  drawFooter(
-    {
-      kind: "canvas",
-      ctx,
-      canvasWidth: canvasW,
-      canvasHeight: canvasH,
-      marginX,
-      pageLabel: `${clips.length} clips  •  ${dateStr}`,
-    },
-    brandName || "CineFlow Suite"
-  );
-
-  await invokeGuarded("save_image_data_url", { path: filePath, dataUrl: canvas.toDataURL("image/jpeg", 0.92) });
-  return true;
 }
 
 export async function exportMosaicImage(options: ExportOptions): Promise<boolean> {
   const { projectName, clips, thumbnailsByClipId, thumbnailCache, thumbCount, jumpSeconds, onWarning, cacheKeyContext, shuffle, useOriginalRatio } = options;
-  const assets = await collectMosaicAssets(clips, thumbnailsByClipId, thumbnailCache, thumbCount, jumpSeconds, onWarning, cacheKeyContext, shuffle);
-  if (assets.length === 0) {
-    onWarning?.("Some clips had no thumbnails yet and were skipped.");
+  
+  try {
+    const assets = await collectMosaicAssets(clips, thumbnailsByClipId, thumbnailCache, thumbCount, jumpSeconds, onWarning, cacheKeyContext, shuffle);
+    if (assets.length === 0) {
+      onWarning?.("No thumbnails available for mosaic export.");
+      return false;
+    }
+
+    const pages = chunkArray(assets, 100);
+    let baseFilePath: string | null = null;
+
+    for (let pageIndex = 0; pageIndex < pages.length; pageIndex += 1) {
+      let filePath: string | null = null;
+
+      if (pageIndex === 0) {
+        filePath = await save({
+          filters: [{ name: "Image", extensions: ["jpeg"] }],
+          defaultPath: `${projectName}_Mosaic.jpeg`,
+        });
+        if (!filePath) return false;
+        baseFilePath = filePath;
+      } else if (baseFilePath) {
+        // For subsequent pages, derive the name from the first one
+        const extIndex = baseFilePath.lastIndexOf(".");
+        const base = extIndex !== -1 ? baseFilePath.substring(0, extIndex) : baseFilePath;
+        const ext = extIndex !== -1 ? baseFilePath.substring(extIndex) : ".jpeg";
+        filePath = `${base}_p${pageIndex + 1}${ext}`;
+      }
+
+      if (!filePath) continue;
+
+      const pageAssets = pages[pageIndex];
+      const grid = getMosaicGrid(pageAssets.length);
+      const canvas = document.createElement("canvas");
+      canvas.width = 2048;
+      canvas.height = 2048;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) throw new Error("Canvas context unavailable");
+
+      ctx.fillStyle = "#111215";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      const gap = 20;
+      const margin = 28;
+      const tileSize = Math.floor((canvas.width - margin * 2 - gap * (grid - 1)) / grid);
+
+      for (let index = 0; index < pageAssets.length; index += 1) {
+        const { dataUrl } = pageAssets[index];
+        const img = await loadImage(dataUrl);
+        const column = index % grid;
+        const row = Math.floor(index / grid);
+        const x = margin + column * (tileSize + gap);
+        const y = margin + row * (tileSize + gap);
+        if (useOriginalRatio) {
+          drawOriginalTile(ctx, img, x, y, tileSize);
+        } else {
+          drawSquareTile(ctx, img, x, y, tileSize);
+        }
+      }
+
+      await invokeGuarded("save_image_data_url", { path: filePath, dataUrl: canvas.toDataURL("image/jpeg", 0.92) });
+    }
+    return true;
+  } catch (err) {
+    console.error("Mosaic Image export failed:", err);
+    onWarning?.("Mosaic Image export failed. Please try again.");
     return false;
   }
-
-  const pages = chunkArray(assets, 100);
-  let baseFilePath: string | null = null;
-
-  for (let pageIndex = 0; pageIndex < pages.length; pageIndex += 1) {
-    let filePath: string | null = null;
-
-    if (pageIndex === 0) {
-      filePath = await save({
-        filters: [{ name: "Image", extensions: ["jpeg"] }],
-        defaultPath: `${projectName}_Mosaic.jpeg`,
-      });
-      if (!filePath) return false;
-      baseFilePath = filePath;
-    } else if (baseFilePath) {
-      // For subsequent pages, derive the name from the first one
-      const extIndex = baseFilePath.lastIndexOf(".");
-      const base = extIndex !== -1 ? baseFilePath.substring(0, extIndex) : baseFilePath;
-      const ext = extIndex !== -1 ? baseFilePath.substring(extIndex) : ".jpeg";
-      filePath = `${base}_p${pageIndex + 1}${ext}`;
-    }
-
-    if (!filePath) continue;
-
-    const pageAssets = pages[pageIndex];
-    const grid = getMosaicGrid(pageAssets.length);
-    const canvas = document.createElement("canvas");
-    canvas.width = 2048;
-    canvas.height = 2048;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) throw new Error("Canvas context unavailable");
-
-    ctx.fillStyle = "#111215";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    const gap = 20;
-    const margin = 28;
-    const tileSize = Math.floor((canvas.width - margin * 2 - gap * (grid - 1)) / grid);
-
-    for (let index = 0; index < pageAssets.length; index += 1) {
-      const { dataUrl } = pageAssets[index];
-      const img = await loadImage(dataUrl);
-      const column = index % grid;
-      const row = Math.floor(index / grid);
-      const x = margin + column * (tileSize + gap);
-      const y = margin + row * (tileSize + gap);
-      if (useOriginalRatio) {
-        drawOriginalTile(ctx, img, x, y, tileSize);
-      } else {
-        drawSquareTile(ctx, img, x, y, tileSize);
-      }
-    }
-
-    await invokeGuarded("save_image_data_url", { path: filePath, dataUrl: canvas.toDataURL("image/jpeg", 0.92) });
-  }
-  return true;
 }
 
 export async function exportMosaicPdf(options: ExportOptions): Promise<boolean> {
   const { projectName, clips, thumbnailsByClipId, thumbnailCache, thumbCount, jumpSeconds, onWarning, cacheKeyContext, shuffle, useOriginalRatio } = options;
+
   const filePath = await save({
     filters: [{ name: "PDF Document", extensions: ["pdf"] }],
     defaultPath: `${projectName}_Mosaic.pdf`,
   });
   if (!filePath) return false;
 
-  const assets = await collectMosaicAssets(clips, thumbnailsByClipId, thumbnailCache, thumbCount, jumpSeconds, onWarning, cacheKeyContext, shuffle);
-  if (assets.length === 0) {
-    onWarning?.("Some clips had no thumbnails yet and were skipped.");
-    return false;
-  }
+  try {
+    const assets = await collectMosaicAssets(clips, thumbnailsByClipId, thumbnailCache, thumbCount, jumpSeconds, onWarning, cacheKeyContext, shuffle);
+    if (assets.length === 0) {
+      onWarning?.("No thumbnails available for mosaic export.");
+      return false;
+    }
 
-  const { jsPDF } = await import("jspdf");
-  const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: [210, 210] });
-  const pageW = 210;
-  const pageH = 210;
-  const margin = 10;
-  const gap = 3;
-  const pages = chunkArray(assets, 144);
+    const { jsPDF } = await import("jspdf");
+    const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: [210, 210] });
+    const pageW = 210;
+    const pageH = 210;
+    const margin = 10;
+    const gap = 3;
+    const pages = chunkArray(assets, 144);
 
-  for (let pageIndex = 0; pageIndex < pages.length; pageIndex += 1) {
-    if (pageIndex > 0) pdf.addPage();
-    pdf.setFillColor(17, 18, 21);
-    pdf.rect(0, 0, pageW, pageH, "F");
+    for (let pageIndex = 0; pageIndex < pages.length; pageIndex += 1) {
+      if (pageIndex > 0) pdf.addPage();
+      pdf.setFillColor(17, 18, 21);
+      pdf.rect(0, 0, pageW, pageH, "F");
 
-    const pageAssets = pages[pageIndex];
-    const grid = getMosaicGrid(pageAssets.length);
-    const tileSize = (pageW - margin * 2 - gap * (grid - 1)) / grid;
-    for (let index = 0; index < pageAssets.length; index += 1) {
-      const column = index % grid;
-      const row = Math.floor(index / grid);
-      const x = margin + column * (tileSize + gap);
-      const y = margin + row * (tileSize + gap);
-      const { dataUrl } = pageAssets[index];
-      try {
-        const img = await loadImage(dataUrl);
-        if (useOriginalRatio) {
-          const fitted = getContainRect(img.width, img.height, x, y, tileSize, tileSize);
-          const normalized = await normalizePdfImageDataUrl(dataUrl);
-          pdf.addImage(normalized, "JPEG", fitted.x, fitted.y, fitted.width, fitted.height, undefined, "FAST");
-        } else {
-          const square = cropToSquare(img);
-          const normalized = await normalizePdfImageDataUrl(square.toDataURL("image/png"));
-          pdf.addImage(normalized, "JPEG", x, y, tileSize, tileSize, undefined, "FAST");
+      const pageAssets = pages[pageIndex];
+      const grid = getMosaicGrid(pageAssets.length);
+      const tileSize = (pageW - margin * 2 - gap * (grid - 1)) / grid;
+      for (let index = 0; index < pageAssets.length; index += 1) {
+        const column = index % grid;
+        const row = Math.floor(index / grid);
+        const x = margin + column * (tileSize + gap);
+        const y = margin + row * (tileSize + gap);
+        const { dataUrl } = pageAssets[index];
+        try {
+          const img = await loadImage(dataUrl);
+          if (useOriginalRatio) {
+            const fitted = getContainRect(img.width, img.height, x, y, tileSize, tileSize);
+            const normalized = await normalizePdfImageDataUrl(dataUrl);
+            pdf.addImage(normalized, "JPEG", fitted.x, fitted.y, fitted.width, fitted.height, undefined, "FAST");
+          } else {
+            const square = cropToSquare(img);
+            const normalized = await normalizePdfImageDataUrl(square.toDataURL("image/png"));
+            pdf.addImage(normalized, "JPEG", x, y, tileSize, tileSize, undefined, "FAST");
+          }
+        } catch (error) {
+          console.warn("Mosaic PDF tile failed:", error);
         }
-      } catch (error) {
-        console.warn("[CineFlow Suite] Failed to extract review waveform", error);
       }
     }
-  }
 
-  await invokeGuarded("save_image_data_url", { path: filePath, dataUrl: pdf.output("datauristring") });
-  return true;
+    await invokeGuarded("save_image_data_url", { path: filePath, dataUrl: pdf.output("datauristring") });
+    return true;
+  } catch (err) {
+    console.error("Mosaic PDF export failed:", err);
+    onWarning?.("Mosaic PDF export failed. Please try again.");
+    return false;
+  }
 }
 
 function cropToSquare(img: HTMLImageElement): HTMLCanvasElement {

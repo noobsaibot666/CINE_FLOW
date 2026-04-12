@@ -442,7 +442,6 @@ pub async fn extract_thumbnails(
                 let _permit = semaphore_inner.acquire_owned().await.ok();
 
                 let jump_intervals = vec![1, 2, 5, 10, 20, 30, 60];
-                let _ = state_inner.db.delete_thumbnails_for_clip(&clip.id);
                 let mut thumb_results: Vec<Thumbnail> = Vec::new();
 
                 if is_image {
@@ -6608,31 +6607,63 @@ pub async fn purge_cache(state: State<'_, Arc<AppState>>) -> Result<serde_json::
 pub async fn reset_app_data(
     state: State<'_, Arc<AppState>>,
 ) -> Result<serde_json::Value, String> {
+    println!("[production][reset] initiating full app data reset");
+
+    // 0. Cancel any running background jobs first
+    state.job_manager.clear();
+
+    // 1. Reset Database (deletes file and recreates tables)
     state.db.reset_file()?;
 
+    // 2. Clear App Data Directory (everything except the DB file itself)
     if state.app_data_dir.exists() {
         for entry in std::fs::read_dir(&state.app_data_dir).map_err(|e| e.to_string())? {
             let entry = entry.map_err(|e| e.to_string())?;
             let path = entry.path();
+            
+            // Skip the database file
             if path == state.db_path {
                 continue;
             }
+
             if path.is_dir() {
-                std::fs::remove_dir_all(&path).map_err(|e| e.to_string())?;
+                let _ = std::fs::remove_dir_all(&path);
             } else {
-                std::fs::remove_file(&path).map_err(|e| e.to_string())?;
+                let _ = std::fs::remove_file(&path);
             }
         }
     }
-    
-    if std::path::Path::new(&state.cache_dir).exists() {
-        let _ = std::fs::remove_dir_all(&state.cache_dir);
+
+    // 3. Clear Cache Directory completely
+    let cache_p = Path::new(&state.cache_dir);
+    if cache_p.exists() {
+        let _ = std::fs::remove_dir_all(cache_p);
     }
+
+    // 4. Clear Review Core base dir (if it happens to be elsewhere, though it's usually in app_data_dir)
+    if state.review_core_base_dir.exists() && !state.review_core_base_dir.starts_with(&state.app_data_dir) {
+        let _ = std::fs::remove_dir_all(&state.review_core_base_dir);
+    }
+
+    // 5. Clear in-memory trackers
+    state.production_matchlab_proxy_tracker.attempts.lock().unwrap().clear();
+    state.production_matchlab_analysis_tracker.running.lock().unwrap().clear();
+    {
+        let mut caps = state.production_matchlab_braw_decoder_caps.lock().unwrap();
+        *caps = None;
+    }
+    {
+        let mut caps = state.production_matchlab_redline_decoder_caps.lock().unwrap();
+        *caps = None;
+    }
+
+    // 6. Re-create base directory structure
     std::fs::create_dir_all(&state.app_data_dir).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&state.review_core_base_dir).map_err(|e| e.to_string())?;
-    std::fs::create_dir_all(&state.cache_dir).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(cache_p).map_err(|e| e.to_string())?;
 
-    Ok(serde_json::json!({ "ok": true }))
+    println!("[production][reset] reset complete");
+    Ok(serde_json::json!({ "success": true }))
 }
 
 fn dir_size(path: &std::path::Path) -> std::io::Result<u64> {

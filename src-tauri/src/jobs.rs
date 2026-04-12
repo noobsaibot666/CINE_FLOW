@@ -245,6 +245,14 @@ impl JobManager {
             }
         }
     }
+
+    pub fn clear(&self) {
+        let mut jobs = lock_or_recover(&self.jobs);
+        for record in jobs.values_mut() {
+            record.cancel_flag.store(true, Ordering::Relaxed);
+        }
+        jobs.clear();
+    }
 }
 
 fn lock_or_recover<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {

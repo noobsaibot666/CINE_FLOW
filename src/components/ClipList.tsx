@@ -228,7 +228,7 @@ export const ClipList = memo(function ClipList({
                         <span className="section-title">Clips</span>
                         <span className="section-count highlight">{clips.length}</span>
                     </div>
-                    <div className="shot-planner-export">
+                    <div className={`shot-planner-export ${exportMenuOpen ? 'is-open' : ''}`}>
                         <button
                             type="button"
                             className="btn btn-secondary btn-sm"

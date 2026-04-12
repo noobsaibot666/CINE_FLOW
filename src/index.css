@@ -3353,8 +3353,9 @@ body {
 }
 
 .film-strip-thumb {
-  flex: 1 0 0;
-  min-width: 120px;
+  flex: 1 1 0px;
+  min-width: 0;
+  aspect-ratio: var(--aspect-ratio);
   height: 100%;
   overflow: hidden;
   position: relative;
@@ -3405,8 +3406,9 @@ body {
 }
 
 .film-strip-placeholder {
-  flex: 1 0 0;
-  min-width: 120px;
+  flex: 1 1 0px;
+  min-width: 0;
+  aspect-ratio: var(--aspect-ratio);
   height: 100%;
   background: var(--bg-elevated);
   display: flex;
@@ -5311,8 +5313,8 @@ body {
   transition: opacity 160ms ease, transform 160ms ease, background-color 160ms ease;
 }
 
-.shot-planner-export:hover .shot-planner-export-menu,
-.shot-planner-export-dropdown:hover .shot-planner-export-menu {
+.shot-planner-export.is-open .shot-planner-export-menu,
+.shot-planner-export-dropdown.is-open .shot-planner-export-menu {
   opacity: 1;
   pointer-events: auto;
   transform: translateY(0);
