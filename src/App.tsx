@@ -81,7 +81,7 @@ const FramePreview = lazy(() => import('./modules/Production/apps/FramePreview')
 import { useCommandPalette } from "./hooks/useCommandPalette";
 import { CommandPalette } from "./components/CommandPalette";
 import { getJumpIntervalForThumbCount, getThumbnailCacheContext } from "./utils/thumbnailIntervals";
-import { invokeGuarded, isTauriReloading } from "./utils/tauri";
+import { convertFileSrc, invokeGuarded, isTauriReloading } from "./utils/tauri";
 
 // --- Error Boundary ---
 class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; error: any }> {
@@ -630,14 +630,14 @@ function AppContent() {
     if (!path || isUnloadingRef.current) return null;
     if (path.startsWith("data:")) return path;
     try {
-      return await safeInvoke<string>("read_thumbnail", { path });
+      return convertFileSrc(path);
     } catch (error) {
       if (!isUnloadingRef.current) {
         console.warn(`Failed to hydrate thumbnail ${path}`, error);
       }
       return null;
     }
-  }, [safeInvoke]);
+  }, []);
 
   const hydrateThumbnailCacheEntries = useCallback(async (
     entries: Array<{ clipId: string; jumpSeconds: number; index: number; path: string }>

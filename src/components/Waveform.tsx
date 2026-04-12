@@ -26,8 +26,10 @@ export const Waveform: React.FC<WaveformProps> = ({
 
     // Calculate points for the SVG polyline/path
     const barCount = envelope.length;
-    const gap = 0.5;
-    const barWidth = (100 - (barCount - 1) * gap) / barCount;
+    const maxGap = 50 / barCount;
+    const gap = Math.min(0.5, maxGap);
+    const rawWidth = (100 - (barCount - 1) * gap) / barCount;
+    const barWidth = Math.max(0.01, rawWidth);
 
     return (
         <div className="waveform-outer">

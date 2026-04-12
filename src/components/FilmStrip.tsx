@@ -1,7 +1,7 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useMemo } from "react";
 import { Thumbnail } from "../types";
 import { DisplayedThumbnail, getThumbnailCacheValue } from "../utils/shotPlannerThumbnails";
-import { invokeGuarded, isTauriReloading } from "../utils/tauri";
+import { convertFileSrc } from "../utils/tauri";
 
 interface FilmStripProps {
     clipId?: string;
@@ -57,40 +57,10 @@ export const FilmStrip = memo(function FilmStrip({
         };
     }).filter((thumb) => Boolean(thumb.src)), [cacheKeyContext, clipId, thumbnailCache, thumbnails]);
 
-    const [renderSources, setRenderSources] = useState<string[]>([]);
-    const renderTokenRef = useRef(0);
-
-    useEffect(() => {
-        const visibleThumbs = resolvedThumbnails.slice(0, effectivePlaceholderCount);
-        const shouldApplyLut = Boolean(projectLutHash && clipLutEnabled === 1);
-        if (!shouldApplyLut) {
-            setRenderSources(visibleThumbs.map((thumb) => thumb.src));
-            return;
-        }
-        const token = renderTokenRef.current + 1;
-        renderTokenRef.current = token;
-        let cancelled = false;
-        void Promise.all(visibleThumbs.map(async (thumb) => {
-            if (isTauriReloading()) return thumb.src;
-            const thumbPath = thumb.file_path;
-            if (!thumbPath || thumbPath.startsWith("data:")) return thumb.src;
-            const parts = thumbPath.split("/");
-            const filename = parts.pop();
-            if (!filename) return thumb.src;
-            const lutPath = [...parts, `lut_${projectLutHash}_${filename}`].join("/");
-            try {
-                return await invokeGuarded<string>("read_thumbnail", { path: lutPath });
-            } catch {
-                return thumb.src;
-            }
-        })).then((nextSources) => {
-            if (cancelled || renderTokenRef.current !== token || isTauriReloading()) return;
-            setRenderSources(nextSources);
-        });
-        return () => {
-            cancelled = true;
-        };
-    }, [clipLutEnabled, effectivePlaceholderCount, lutRenderNonce, projectLutHash, resolvedThumbnails]);
+    const visibleThumbnails = useMemo(
+        () => resolvedThumbnails.slice(0, effectivePlaceholderCount),
+        [effectivePlaceholderCount, resolvedThumbnails]
+    );
 
     if (status === "fail") {
         return (
@@ -135,16 +105,19 @@ export const FilmStrip = memo(function FilmStrip({
             style={{ "--aspect-ratio": aspectRatio, "--thumb-columns": effectivePlaceholderCount } as any}
         >
             {indices.map((idx) => {
-                const thumb = resolvedThumbnails[idx];
-                const src = renderSources[idx] ?? thumb?.src;
+                const thumb = visibleThumbnails[idx];
+                const src = thumb
+                    ? getDisplayThumbnailSrc(thumb, projectLutHash, clipLutEnabled, lutRenderNonce)
+                    : undefined;
 
                 if (src) {
                     return (
                         <div key={idx} className="film-strip-thumb">
                             <img className="thumb" src={src} alt={`Frame ${idx + 1}`} onError={(e) => {
-                                // Fallback to original thumbnail if LUT image fails to load
                                 if (thumb && projectLutHash && clipLutEnabled === 1) {
-                                    (e.target as HTMLImageElement).src = fallbackThumbnailSrc ?? thumb.src;
+                                    const img = e.target as HTMLImageElement;
+                                    img.onerror = null;
+                                    img.src = fallbackThumbnailSrc ?? getOriginalThumbnailSrc(thumb);
                                 }
                             }} decoding="async" />
                             {!isImage && (
@@ -169,6 +142,37 @@ export const FilmStrip = memo(function FilmStrip({
         </div>
     );
 });
+
+function getOriginalThumbnailSrc(thumb: DisplayedThumbnail): string {
+    if (thumb.src.startsWith("data:")) {
+        return thumb.src;
+    }
+    if (thumb.file_path) {
+        return convertFileSrc(thumb.file_path);
+    }
+    return thumb.src;
+}
+
+function getDisplayThumbnailSrc(
+    thumb: DisplayedThumbnail,
+    projectLutHash?: string | null,
+    clipLutEnabled?: number,
+    lutRenderNonce?: number,
+): string {
+    if (!projectLutHash || clipLutEnabled !== 1 || !thumb.file_path || thumb.file_path.startsWith("data:")) {
+        return getOriginalThumbnailSrc(thumb);
+    }
+
+    const parts = thumb.file_path.split("/");
+    const filename = parts.pop();
+    if (!filename) {
+        return getOriginalThumbnailSrc(thumb);
+    }
+
+    const lutPath = [...parts, `lut_${projectLutHash}_${filename}`].join("/");
+    const versionSuffix = lutRenderNonce ? `?v=${lutRenderNonce}` : "";
+    return `${convertFileSrc(lutPath)}${versionSuffix}`;
+}
 
 function formatTimestamp(ms: number): string {
     const totalSecs = Math.floor(ms / 1000);

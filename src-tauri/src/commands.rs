@@ -50,7 +50,7 @@ use sha2::{Digest, Sha256};
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::Path;
 use std::process::Command;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, State};
 use tokio::sync::Semaphore;
@@ -1823,7 +1823,14 @@ pub async fn generate_lut_thumbnails(
     let lut_content = std::fs::read_to_string(&lut_path).map_err(|e| e.to_string())?;
     let lut = Arc::new(crate::lut::Lut3D::parse_cube(&lut_content).map_err(|e| e.to_string())?);
 
-    let (job_id, cancel_flag) = state.job_manager.create_job("lut_thumbnails", Some(project_id.clone()));
+    let job_id = format!("lut_thumbnails:{}", project_id);
+    if let Some(existing) = state.job_manager.get_job(&job_id) {
+        if existing.status == JobStatus::Running || existing.status == JobStatus::Queued {
+            state.job_manager.cancel_job(&job_id);
+        }
+    }
+
+    let (job_id, cancel_flag) = state.job_manager.create_job("lut_thumbnails", Some(job_id));
     
     let app_clone = app.clone();
     let state_inner = state.inner().clone();
@@ -1843,8 +1850,21 @@ pub async fn generate_lut_thumbnails(
             }
         };
 
+        let clips: Vec<Clip> = clips.into_iter().filter(|clip| clip.lut_enabled == 1).collect();
+        if clips.is_empty() {
+            state_inner
+                .job_manager
+                .mark_done(&job_id_clone, "No LUT-enabled clips required thumbnail processing");
+            emit_job_state(&app_clone, &state_inner.job_manager, &job_id_clone);
+            return;
+        }
+
         let total_clips = clips.len();
-        let semaphore = Arc::new(Semaphore::new(4)); // 4 concurrent clips
+        let max_parallel = std::thread::available_parallelism()
+            .map(|count| count.get().clamp(2, 8))
+            .unwrap_or(4);
+        let semaphore = Arc::new(Semaphore::new(max_parallel));
+        let completed_clips = Arc::new(AtomicUsize::new(0));
         let mut set = tokio::task::JoinSet::new();
 
         for (clip_idx, clip) in clips.into_iter().enumerate() {
@@ -1859,6 +1879,8 @@ pub async fn generate_lut_thumbnails(
             let lut_hash_task = lut_hash.clone();
             let semaphore_task = semaphore.clone();
             let cancel_flag_task = cancel_flag.clone();
+            let job_id_task = job_id_clone.clone();
+            let completed_task = completed_clips.clone();
 
             set.spawn(async move {
                 let _permit = semaphore_task.acquire().await.unwrap();
@@ -1866,62 +1888,73 @@ pub async fn generate_lut_thumbnails(
                     return;
                 }
 
-                let thumbnails = state_task.db.get_thumbnails(&clip.id).unwrap_or_default();
-                if thumbnails.is_empty() {
-                     let _ = app_task.emit(
-                        "lut-thumbnail-progress",
-                        ThumbnailProgress {
-                            project_id: project_id_task,
-                            clip_id: clip.id,
-                            clip_index: clip_idx,
-                            total_clips,
-                            status: "skipped".to_string(),
-                            thumbnails: vec![],
-                        },
-                    );
-                    return;
-                }
-
-                let mut processed_thumbs = Vec::new();
-                for thumb in &thumbnails {
-                    let original_name = Path::new(&thumb.file_path)
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("thumb.jpg");
-                    let output_dir = Path::new(&thumb.file_path)
-                        .parent()
-                        .map(|parent| parent.to_path_buf())
-                        .unwrap_or_else(|| Path::new(&state_task.cache_dir).join(&clip.id));
-                    
-                    let _ = std::fs::create_dir_all(&output_dir);
-                    
-                    let output_path = output_dir
-                        .join(format!("lut_{}_{}", lut_hash_task, original_name))
-                        .to_string_lossy()
-                        .to_string();
-
-                    if std::path::Path::new(&output_path).exists() {
-                        let mut new_thumb = thumb.clone();
-                        new_thumb.file_path = output_path;
-                        processed_thumbs.push(new_thumb);
-                        continue;
+                let clip_id = clip.id.clone();
+                let state_blocking = state_task.clone();
+                let lut_blocking = lut_task.clone();
+                let lut_hash_blocking = lut_hash_task.clone();
+                let processed_thumbs = match tokio::task::spawn_blocking(move || -> Result<Vec<Thumbnail>, String> {
+                    let thumbnails = state_blocking
+                        .db
+                        .get_thumbnails(&clip_id)
+                        .map_err(|e| e.to_string())?;
+                    if thumbnails.is_empty() {
+                        return Ok(vec![]);
                     }
 
-                    match crate::lut::apply_lut_to_image(&thumb.file_path, &lut_task, &output_path) {
-                        Ok(_) => {
+                    let mut processed_thumbs = Vec::with_capacity(thumbnails.len());
+                    for thumb in &thumbnails {
+                        let original_name = Path::new(&thumb.file_path)
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("thumb.jpg");
+                        let output_dir = Path::new(&thumb.file_path)
+                            .parent()
+                            .map(|parent| parent.to_path_buf())
+                            .unwrap_or_else(|| Path::new(&state_blocking.cache_dir).join(&clip_id));
+
+                        let _ = std::fs::create_dir_all(&output_dir);
+
+                        let output_path = output_dir
+                            .join(format!("lut_{}_{}", lut_hash_blocking, original_name))
+                            .to_string_lossy()
+                            .to_string();
+
+                        if Path::new(&output_path).exists() {
                             let mut new_thumb = thumb.clone();
                             new_thumb.file_path = output_path;
                             processed_thumbs.push(new_thumb);
+                            continue;
                         }
-                        Err(err) => {
-                            eprintln!("LUT processing failed for {}: {}", thumb.file_path, err);
+
+                        match crate::lut::apply_lut_to_image(&thumb.file_path, &lut_blocking, &output_path) {
+                            Ok(_) => {
+                                let mut new_thumb = thumb.clone();
+                                new_thumb.file_path = output_path;
+                                processed_thumbs.push(new_thumb);
+                            }
+                            Err(err) => {
+                                eprintln!("LUT processing failed for {}: {}", thumb.file_path, err);
+                            }
                         }
                     }
-                }
 
-                let progress = (clip_idx as f32 / total_clips as f32).max(0.01);
-                state_task.job_manager.update_progress(&job_id_clone, progress, None);
-                emit_job_state(&app_task, &state_task.job_manager, &job_id_clone);
+                    Ok(processed_thumbs)
+                }).await {
+                    Ok(Ok(processed)) => processed,
+                    Ok(Err(error)) => {
+                        eprintln!("LUT processing failed for clip {}: {}", clip.id, error);
+                        Vec::new()
+                    }
+                    Err(error) => {
+                        eprintln!("LUT processing task failed for clip {}: {}", clip.id, error);
+                        Vec::new()
+                    }
+                };
+
+                let done = completed_task.fetch_add(1, Ordering::Relaxed) + 1;
+                let progress = (done as f32 / total_clips as f32).clamp(0.01, 1.0);
+                state_task.job_manager.update_progress(&job_id_task, progress, None);
+                emit_job_state(&app_task, &state_task.job_manager, &job_id_task);
 
                 let _ = app_task.emit(
                     "lut-thumbnail-progress",
@@ -3947,10 +3980,11 @@ pub async fn review_core_set_approval(
         "in_review" => "in_review",
         "approved" => "approved",
         "rejected" => "rejected",
+        "changes_requested" => "changes_requested",
         _ => return Err("Invalid approval status".to_string()),
     };
 
-    let approval = if matches!(normalized_status, "approved" | "rejected") {
+    let approval = if matches!(normalized_status, "approved" | "rejected" | "changes_requested") {
         let safe_name = approved_by
             .map(|value| {
                 let trimmed = value.trim();

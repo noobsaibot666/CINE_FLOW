@@ -69,7 +69,7 @@ export function ReviewCore(props: ReviewCoreProps) {
             if (p) setters.setActiveProject(p);
           }}
           loading={loadingProjects}
-          onCreateProject={handlers.refreshProjects}
+          onCreateProject={handlers.handleCreateProject}
           newProjectName={newProjectName}
           setNewProjectName={setters.setNewProjectName}
           creating={creatingProject}
@@ -132,7 +132,7 @@ export function ReviewCore(props: ReviewCoreProps) {
                 activeAnnotation={activeViewAnnotation}
                 draft={annotationDraft}
                 activeDraftItem={activeDraftItem}
-                onMouseDown={handlers.openAnnotationEditor as any} // Temporary cast
+                onMouseDown={handlers.handleAnnotationMouseDown}
                 onMouseMove={handlers.handleAnnotationMouseMove}
                 onMouseUp={handlers.handleAnnotationMouseUp}
               />

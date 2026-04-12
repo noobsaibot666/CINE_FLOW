@@ -47,6 +47,7 @@ const DEFAULT_APPROVAL: ReviewCoreApprovalState = {
 
 export function useReviewLogic({
     projectId,
+    projectName,
     shareToken,
     onError,
 }: ReviewCoreProps) {
@@ -144,7 +145,12 @@ export function useReviewLogic({
     const dragStateRef = useRef<{ mode: "draw" | "move"; start: NormalizedPoint; itemId?: string } | null>(null);
     const previousVersionStatusRef = useRef<string | null>(null);
 
-    const effectiveProjectId = activeProject?.id || projectId;
+    const effectiveProjectId = activeProject?.id || shareResolved?.project_id || projectId;
+    const shareAccessReady = !isShareMode || Boolean(shareResolved && (!shareResolved.password_required || shareSessionToken || shareUnlocked));
+    const selectedVersion = useMemo(
+        () => versions.find((version) => version.id === selectedVersionId) || null,
+        [selectedVersionId, versions]
+    );
 
     // --- Handlers ---
     const refreshProjects = useCallback(async () => {
@@ -173,7 +179,25 @@ export function useReviewLogic({
         }
     }, [isShareMode, effectiveProjectId]);
 
+    const refreshFrameNotes = useCallback(async () => {
+        if (isShareMode || !effectiveProjectId) {
+            setFrameNotes([]);
+            return;
+        }
+        try {
+            const notes = await invoke<ReviewCoreFrameNote[]>("review_core_list_frame_notes", { projectId: effectiveProjectId });
+            setFrameNotes(notes);
+        } catch (error) {
+            console.error("Failed to list frame notes", error);
+            setFrameNotes([]);
+        }
+    }, [effectiveProjectId, isShareMode]);
+
     const refreshVersions = useCallback(async (assetId: string) => {
+        if (isShareMode && !shareAccessReady) {
+            setVersions([]);
+            return;
+        }
         try {
             const list = isShareMode
                 ? await invoke<ReviewCoreSharedVersionSummary[]>("review_core_share_list_versions", {
@@ -181,12 +205,36 @@ export function useReviewLogic({
                     assetId,
                     sessionToken: shareSessionToken,
                 })
-                : await invoke<ReviewCoreAssetVersion[]>("review_core_list_versions", { assetId });
+                : await invoke<ReviewCoreAssetVersion[]>("review_core_list_asset_versions", { assetId });
             setVersions(list);
         } catch (error) {
             console.error("Failed to list versions", error);
+            if (isShareMode) {
+                setVersions([]);
+            }
         }
-    }, [isShareMode, shareToken, shareSessionToken]);
+    }, [isShareMode, shareAccessReady, shareToken, shareSessionToken]);
+
+    const refreshShareAssets = useCallback(async () => {
+        if (!isShareMode || !shareToken || !shareAccessReady) {
+            setAssets([]);
+            return;
+        }
+        setLoading(true);
+        try {
+            const sharedAssets = await invoke<ReviewCoreAsset[]>("review_core_share_list_assets", {
+                token: shareToken,
+                sessionToken: shareSessionToken,
+            });
+            setAssets(sharedAssets);
+        } catch (error) {
+            console.error("Failed to list shared assets", error);
+            setAssets([]);
+            onError?.({ title: "Shared review unavailable", hint: String(error) });
+        } finally {
+            setLoading(false);
+        }
+    }, [isShareMode, onError, shareAccessReady, shareSessionToken, shareToken]);
 
     const resetMedia = useCallback(() => {
         setVerifiedMediaUrls(null);
@@ -219,6 +267,10 @@ export function useReviewLogic({
 
     const addComment = useCallback(async () => {
         if (!selectedVersionId) return;
+        if (isShareMode && shareResolved && !shareResolved.allow_comments) {
+            onError?.({ title: "Comments disabled", hint: "This shared review does not allow comments." });
+            return;
+        }
         setSubmittingComment(true);
         try {
             const created = isShareMode
@@ -245,7 +297,7 @@ export function useReviewLogic({
         } finally {
             setSubmittingComment(false);
         }
-    }, [selectedVersionId, isShareMode, shareToken, currentTime, commentText, commentAuthor, shareSessionToken, onError]);
+    }, [selectedVersionId, isShareMode, shareResolved, shareToken, currentTime, commentText, commentAuthor, shareSessionToken, onError]);
 
     // --- Media Effects ---
     useEffect(() => {
@@ -265,6 +317,8 @@ export function useReviewLogic({
         };
         const handleError = () => {
             if (video.poster) video.poster = "";
+            setMediaReadyStatus((current) => (current === "ready" ? "finalizing" : current));
+            setMediaReadyAttempt((attempt) => attempt + 1);
         };
         video.addEventListener("timeupdate", handleTimeUpdate);
         video.addEventListener("loadedmetadata", handleLoadedMetadata);
@@ -280,7 +334,7 @@ export function useReviewLogic({
 
     useEffect(() => {
         const video = videoRef.current;
-        if (!video || !verifiedMediaUrls) return;
+        if (!video || !verifiedMediaUrls || mediaReadyStatus !== "ready") return;
         video.poster = verifiedMediaUrls.posterUrl;
         video.pause();
         video.removeAttribute("src");
@@ -315,7 +369,7 @@ export function useReviewLogic({
                 hlsRef.current = null;
             }
         };
-    }, [verifiedMediaUrls]);
+    }, [mediaReadyStatus, verifiedMediaUrls]);
 
     useEffect(() => {
         const frame = videoStageRef.current;
@@ -354,15 +408,14 @@ export function useReviewLogic({
                 assetVersionId: selectedVersionId,
                 timestampMs: Math.round(currentTime * 1000),
             });
-            // (This would normally trigger a refresh of frame notes)
-            // For brevity in this step, I'm assuming a refresh handler exists
+            await refreshFrameNotes();
         } catch (error) {
             console.error("Failed extracting frame", error);
             onError?.({ title: "Grab frame failed", hint: String(error) });
         } finally {
             setGrabbingFrame(false);
         }
-    }, [selectedVersionId, selectedAssetId, isShareMode, currentTime, onError]);
+    }, [selectedVersionId, selectedAssetId, isShareMode, currentTime, onError, refreshFrameNotes]);
 
     const openAnnotationEditor = useCallback((comment: ReviewCoreComment) => {
         if (isShareMode) return;
@@ -457,6 +510,55 @@ export function useReviewLogic({
         }
     }, [effectiveProjectId, isShareMode, shareVersionIds, shareExpiryLocal, sharePassword, shareAllowComments, shareAllowDownload]);
 
+    const handleAnnotationMouseDown = useCallback((point: NormalizedPoint) => {
+        if (isShareMode || !annotatingCommentId) return;
+
+        dragStateRef.current = { mode: "draw", start: point };
+        const id = crypto.randomUUID ? crypto.randomUUID() : Date.now().toString();
+
+        let newItem: AnnotationItem;
+        if (annotationTool === "pen") {
+            newItem = {
+                id,
+                type: "pen",
+                points: [point],
+                style: { stroke: annotationColor, width: 2 }
+            };
+        } else if (annotationTool === "arrow") {
+            newItem = {
+                id,
+                type: "arrow",
+                a: point,
+                b: point,
+                style: { stroke: annotationColor, width: 2 }
+            };
+        } else if (annotationTool === "rect") {
+            newItem = {
+                id,
+                type: "rect",
+                x: point[0],
+                y: point[1],
+                w: 0,
+                h: 0,
+                style: { stroke: annotationColor, width: 2 }
+            };
+        } else if (annotationTool === "circle") {
+            newItem = {
+                id,
+                type: "circle",
+                x: point[0],
+                y: point[1],
+                w: 0,
+                h: 0,
+                style: { stroke: annotationColor, width: 2 }
+            };
+        } else {
+            return;
+        }
+
+        setActiveDraftItem(newItem);
+    }, [isShareMode, annotatingCommentId, annotationTool, annotationColor]);
+
     const handleAnnotationMouseMove = useCallback((_point: NormalizedPoint) => {
         const drag = dragStateRef.current;
         if (!drag || isShareMode) return;
@@ -483,7 +585,7 @@ export function useReviewLogic({
         if (!selectedVersionId || isShareMode) return;
         setSavingApproval(true);
         try {
-            const updated = await invoke<ReviewCoreApprovalState>("review_core_update_approval", {
+            const updated = await invoke<ReviewCoreApprovalState>("review_core_set_approval", {
                 assetVersionId: selectedVersionId,
                 status,
                 approvedBy: approvalName,
@@ -496,6 +598,329 @@ export function useReviewLogic({
             setSavingApproval(false);
         }
     }, [selectedVersionId, isShareMode, approvalName, onError]);
+
+    const handleCreateProject = useCallback(async (name: string) => {
+        if (isShareMode) return;
+        const trimmed = name.trim();
+        if (!trimmed) return;
+        setCreatingProject(true);
+        try {
+            const created = await invoke<ReviewCoreProjectSummary>("review_core_create_project", { name: trimmed });
+            setNewProjectName("");
+            setRecentProjects((prev) => [created, ...prev.filter((project) => project.id !== created.id)]);
+            setActiveProject(created);
+        } catch (error) {
+            console.error("Failed to create Review Core project", error);
+            onError?.({ title: "Create project failed", hint: String(error) });
+        } finally {
+            setCreatingProject(false);
+        }
+    }, [isShareMode, onError]);
+
+    useEffect(() => {
+        if (!isShareMode || !shareToken) return;
+
+        setLoading(true);
+        setSharePasswordError(null);
+
+        void invoke<ReviewCoreShareLinkResolved>("review_core_resolve_share_link", { token: shareToken })
+            .then((resolved) => {
+                setShareResolved(resolved);
+                setActiveProject({
+                    id: resolved.project_id,
+                    name: resolved.project_name,
+                    last_opened_at: new Date().toISOString(),
+                });
+                if (!resolved.password_required) {
+                    setShareUnlocked(true);
+                    setShareSessionToken(null);
+                } else {
+                    setShareUnlocked(Boolean(shareSessionToken));
+                }
+            })
+            .catch((error) => {
+                console.error("Failed to resolve share link", error);
+                setShareResolved(null);
+                setAssets([]);
+                setVersions([]);
+                setShareUnlocked(false);
+                setSharePasswordError(String(error));
+                onError?.({ title: "Shared review unavailable", hint: String(error) });
+            })
+            .finally(() => {
+                setLoading(false);
+            });
+    }, [isShareMode, onError, shareSessionToken, shareToken]);
+
+    useEffect(() => {
+        if (isShareMode) return;
+        if (usesEmbeddedProjectPicker) {
+            void refreshProjects();
+        }
+    }, [isShareMode, refreshProjects, usesEmbeddedProjectPicker]);
+
+    useEffect(() => {
+        if (isShareMode || !projectId) return;
+        setActiveProject((current) => {
+            if (current?.id === projectId) {
+                if (projectName && current.name !== projectName) {
+                    return { ...current, name: projectName };
+                }
+                return current;
+            }
+            return {
+                id: projectId,
+                name: projectName || current?.name || "Review Core",
+                last_opened_at: current?.last_opened_at || new Date().toISOString(),
+            };
+        });
+    }, [isShareMode, projectId, projectName]);
+
+    useEffect(() => {
+        if (isShareMode) {
+            if (shareAccessReady) {
+                void refreshShareAssets();
+            } else {
+                setAssets([]);
+                setVersions([]);
+                setSelectedAssetId(null);
+            }
+            return;
+        }
+        if (!effectiveProjectId) return;
+
+        void invoke("review_core_touch_project", { projectId: effectiveProjectId }).catch((error) => {
+            console.error("Failed to touch Review Core project", error);
+        });
+
+        void refreshAssets();
+        void refreshFrameNotes();
+
+        void invoke<ReviewCoreShareLinkSummary[]>("review_core_list_share_links", { projectId: effectiveProjectId })
+            .then(setShareLinks)
+            .catch((error) => {
+                console.error("Failed to list share links", error);
+                setShareLinks([]);
+            });
+    }, [effectiveProjectId, isShareMode, refreshAssets, refreshFrameNotes, refreshShareAssets, shareAccessReady]);
+
+    useEffect(() => {
+        void invoke<string>("review_core_get_server_base_url")
+            .then((url) => setServerBaseUrl(url))
+            .catch((error) => {
+                console.error("Failed to get Review Core server URL", error);
+                setServerBaseUrl("");
+            });
+    }, []);
+
+    useEffect(() => {
+        setSelectedAssetId((current) => {
+            if (!assets.length) return null;
+            if (current && assets.some((asset) => asset.id === current)) return current;
+            return assets[0].id;
+        });
+    }, [assets]);
+
+    useEffect(() => {
+        resetMedia();
+        setVersions([]);
+        setSelectedVersionId(null);
+        setComments([]);
+        setAnnotations([]);
+        setApproval(DEFAULT_APPROVAL);
+        setThumbnails([]);
+
+        if (!selectedAssetId) {
+            return;
+        }
+
+        void refreshVersions(selectedAssetId);
+    }, [refreshVersions, resetMedia, selectedAssetId]);
+
+    useEffect(() => {
+        setSelectedVersionId((current) => {
+            if (!versions.length) return null;
+            if (current && versions.some((version) => version.id === current)) return current;
+            return [...versions]
+                .sort((a, b) => {
+                    const versionDelta = (b.version_number ?? 0) - (a.version_number ?? 0);
+                    if (versionDelta !== 0) return versionDelta;
+                    return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+                })[0]?.id ?? null;
+        });
+    }, [versions]);
+
+    useEffect(() => {
+        resetMedia();
+        setComments([]);
+        setAnnotations([]);
+        setApproval(DEFAULT_APPROVAL);
+        setThumbnails([]);
+
+        if (isShareMode && !shareAccessReady) {
+            return;
+        }
+
+        if (!selectedVersionId || !selectedAssetId) {
+            return;
+        }
+
+        if (!isShareMode) {
+            void invoke<ReviewCoreApprovalState>("review_core_get_approval", { assetVersionId: selectedVersionId })
+                .then(setApproval)
+                .catch((error) => {
+                    console.error("Failed to load approval state", error);
+                    setApproval({ ...DEFAULT_APPROVAL, asset_version_id: selectedVersionId });
+                });
+        }
+
+        const commentCommand = isShareMode ? "review_core_share_list_comments" : "review_core_list_comments";
+        const annotationCommand = isShareMode ? "review_core_share_list_annotations" : "review_core_list_annotations";
+        const thumbnailCommand = isShareMode ? "review_core_share_list_thumbnails" : "review_core_list_thumbnails";
+        const shareArgs = isShareMode
+            ? { token: shareToken, assetVersionId: selectedVersionId, sessionToken: shareSessionToken }
+            : { assetVersionId: selectedVersionId };
+        const thumbnailArgs = isShareMode
+            ? { token: shareToken, assetVersionId: selectedVersionId, sessionToken: shareSessionToken }
+            : { versionId: selectedVersionId };
+
+        void invoke<ReviewCoreComment[]>(commentCommand, shareArgs)
+            .then((items) => setComments(items.sort((a, b) => a.timestamp_ms - b.timestamp_ms)))
+            .catch((error) => {
+                console.error("Failed to load comments", error);
+                setComments([]);
+            });
+
+        void invoke<ReviewCoreAnnotation[]>(annotationCommand, shareArgs)
+            .then(setAnnotations)
+            .catch((error) => {
+                console.error("Failed to load annotations", error);
+                setAnnotations([]);
+            });
+
+        void invoke<ReviewCoreThumbnailInfo[]>(thumbnailCommand, thumbnailArgs)
+            .then(setThumbnails)
+            .catch((error) => {
+                console.error("Failed to load thumbnails", error);
+                setThumbnails([]);
+            });
+    }, [isShareMode, resetMedia, selectedAssetId, selectedVersionId, shareAccessReady, shareSessionToken, shareToken]);
+
+    useEffect(() => {
+        previousVersionStatusRef.current = selectedVersion?.processing_status || null;
+        setMediaProbeNonce((value) => value + 1);
+
+        if (!selectedVersion || !selectedAssetId || !effectiveProjectId) {
+            setVerifiedMediaUrls(null);
+            setMediaReadyStatus("idle");
+            return;
+        }
+
+        if (selectedVersion.processing_status === "failed") {
+            setVerifiedMediaUrls(null);
+            setMediaReadyStatus("failed");
+            return;
+        }
+
+        if (selectedVersion.processing_status !== "ready") {
+            setVerifiedMediaUrls(null);
+            setMediaReadyStatus("processing");
+            return;
+        }
+
+        if (!serverBaseUrl) {
+            setVerifiedMediaUrls(null);
+            setMediaReadyStatus("finalizing");
+            return;
+        }
+
+        const params = new URLSearchParams();
+        if (isShareMode && shareToken) params.set("t", shareToken);
+        if (isShareMode && shareSessionToken) params.set("s", shareSessionToken);
+        const query = params.toString();
+        const suffix = query ? `?${query}` : "";
+
+        setVerifiedMediaUrls({
+            playlistUrl: `${serverBaseUrl}/media/${effectiveProjectId}/${selectedAssetId}/${selectedVersion.id}/hls/index.m3u8${suffix}`,
+            posterUrl: `${serverBaseUrl}/media/${effectiveProjectId}/${selectedAssetId}/${selectedVersion.id}/poster.jpg${suffix}`,
+        });
+        setMediaReadyStatus("finalizing");
+        setMediaReadyAttempt(0);
+    }, [effectiveProjectId, isShareMode, selectedAssetId, selectedVersion, serverBaseUrl, shareSessionToken, shareToken]);
+
+    useEffect(() => {
+        if (!selectedAssetId || !selectedVersion) {
+            return;
+        }
+        if (selectedVersion.processing_status === "ready") {
+            return;
+        }
+
+        const timer = window.setTimeout(() => {
+            void refreshVersions(selectedAssetId);
+        }, 2500);
+
+        return () => window.clearTimeout(timer);
+    }, [refreshVersions, selectedAssetId, selectedVersion]);
+
+    useEffect(() => {
+        if (!verifiedMediaUrls || !selectedVersion || selectedVersion.processing_status !== "ready") {
+            return;
+        }
+
+        let cancelled = false;
+        const controller = new AbortController();
+        const probeAttempt = mediaReadyAttempt;
+        const playlistUrl = `${verifiedMediaUrls.playlistUrl}${verifiedMediaUrls.playlistUrl.includes("?") ? "&" : "?"}probe=${mediaProbeNonce}-${probeAttempt}`;
+
+        const assetId = selectedAssetId;
+        if (!assetId) {
+            return;
+        }
+
+        const probe = async () => {
+            try {
+                const response = await fetch(playlistUrl, {
+                    method: "GET",
+                    cache: "no-store",
+                    signal: controller.signal,
+                });
+                if (!response.ok) {
+                    throw new Error(`Manifest probe failed with ${response.status}`);
+                }
+                const manifest = await response.text();
+                if (!manifest.includes("#EXTM3U")) {
+                    throw new Error("Manifest probe returned invalid data");
+                }
+                if (!cancelled) {
+                    setMediaReadyStatus("ready");
+                }
+            } catch (error) {
+                if (cancelled || controller.signal.aborted) {
+                    return;
+                }
+                console.error("Media probe failed", error);
+                setMediaReadyStatus("finalizing");
+                if (probeAttempt >= 20) {
+                    setMediaReadyStatus("failed");
+                    return;
+                }
+                window.setTimeout(() => {
+                    if (!cancelled) {
+                        setMediaReadyAttempt((attempt) => attempt + 1);
+                        void refreshVersions(assetId);
+                    }
+                }, 1500);
+            }
+        };
+
+        void probe();
+
+        return () => {
+            cancelled = true;
+            controller.abort();
+        };
+    }, [mediaProbeNonce, mediaReadyAttempt, refreshVersions, selectedAssetId, selectedVersion, verifiedMediaUrls]);
 
     return {
         state: {
@@ -677,6 +1102,7 @@ export function useReviewLogic({
         handlers: {
             refreshProjects,
             refreshAssets,
+            refreshFrameNotes,
             refreshVersions,
             resetMedia,
             handleThumbnailSeek,
@@ -689,9 +1115,11 @@ export function useReviewLogic({
             handleImport,
             runIngest,
             handleCreateShareLink,
+            handleAnnotationMouseDown,
             handleAnnotationMouseMove,
             handleAnnotationMouseUp,
             handleUpdateApproval,
+            handleCreateProject,
         },
     };
 }
