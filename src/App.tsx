@@ -81,7 +81,7 @@ const FramePreview = lazy(() => import('./modules/Production/apps/FramePreview')
 import { useCommandPalette } from "./hooks/useCommandPalette";
 import { CommandPalette } from "./components/CommandPalette";
 import { getJumpIntervalForThumbCount, getThumbnailCacheContext } from "./utils/thumbnailIntervals";
-import { invokeGuarded, isTauriReloading, convertFileSrc } from "./utils/tauri";
+import { invokeGuarded, isTauriReloading } from "./utils/tauri";
 
 // --- Error Boundary ---
 class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; error: any }> {

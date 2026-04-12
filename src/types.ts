@@ -454,6 +454,7 @@ export interface ProductionLookOutputs {
     summary: string;
     recommendations: ProductionLookRecommendation[];
     generated_at: string;
+    hero_slot?: string;
 }
 
 export interface ProductionUsageGuidance {

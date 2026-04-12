@@ -20,6 +20,20 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function clearBrowserStorage() {
+  try {
+    localStorage.clear();
+  } catch (error) {
+    console.warn("Failed to clear localStorage during reset:", error);
+  }
+
+  try {
+    sessionStorage.clear();
+  } catch (error) {
+    console.warn("Failed to clear sessionStorage during reset:", error);
+  }
+}
+
 function StatusIcon({ status }: { status: string }) {
   switch (status) {
     case "done":
@@ -135,8 +149,7 @@ export function JobsPanel({ open, jobs, onClose, onRefresh, extracting, extractP
 
     try {
       await invoke<{ success: boolean }>("reset_app_data");
-      localStorage.clear();
-      sessionStorage.clear();
+      clearBrowserStorage();
       window.location.reload();
     } catch (e) {
       console.error("Failed to reset dev data:", e);

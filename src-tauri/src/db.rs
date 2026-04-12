@@ -4030,6 +4030,7 @@ impl Database {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn delete_thumbnails_for_clip(&self, clip_id: &str) -> SqlResult<usize> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
@@ -4053,7 +4054,9 @@ impl Database {
                     file_path: row.get(4)?,
                 })
             })?
-            .filter_map(|r| r.ok())
+            .collect::<SqlResult<Vec<_>>>()?;
+        let thumbs = thumbs
+            .into_iter()
             .filter(|thumb| Path::new(&thumb.file_path).exists())
             .collect();
         Ok(thumbs)

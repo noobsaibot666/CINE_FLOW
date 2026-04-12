@@ -1,7 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Thumbnail } from "../types";
 import { DisplayedThumbnail, getThumbnailCacheValue } from "../utils/shotPlannerThumbnails";
-import { invokeGuarded, isTauriReloading, convertFileSrc } from "../utils/tauri";
+import { invokeGuarded, isTauriReloading } from "../utils/tauri";
 
 interface FilmStripProps {
     clipId?: string;

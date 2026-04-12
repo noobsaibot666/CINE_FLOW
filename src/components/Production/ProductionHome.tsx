@@ -23,7 +23,6 @@ export function ProductionHome({
   onOpenFramePreview,
 }: ProductionHomeProps) {
   const [projects, setProjects] = useState<ProductionProject[]>([]);
-  const [loadingProjects, setLoadingProjects] = useState(true);
   const [projectName, setProjectName] = useState("");
   const [clientName, setClientName] = useState("");
   const [creatingProject, setCreatingProject] = useState(false);
@@ -36,12 +35,12 @@ export function ProductionHome({
   }, []);
 
   const loadProjects = async () => {
-    setLoadingProjects(true);
     try {
       const list = await invokeGuarded<ProductionProject[]>("production_list_projects");
       setProjects(list);
-    } finally {
-      setLoadingProjects(false);
+    } catch (error) {
+      console.error("Failed to load production projects", error);
+      setProjects([]);
     }
   };
 
@@ -359,37 +358,12 @@ const projectInputStyle: React.CSSProperties = {
   outline: "none",
 };
 
-const projectListWrapStyle: React.CSSProperties = {
-  display: "grid",
-  gap: 8,
-  width: "100%",
-};
 const projectListTitleStyle: React.CSSProperties = {
   fontSize: "0.68rem",
   textTransform: "uppercase",
   letterSpacing: "0.12em",
   color: "var(--text-muted)",
   fontWeight: 800,
-};
-
-const projectListStyle: React.CSSProperties = {
-  display: "grid",
-  gap: 8,
-};
-
-const projectRowStyle: React.CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 10,
-  padding: "10px 12px",
-  borderRadius: 14,
-  border: "1px solid rgba(255,255,255,0.06)",
-  background: "rgba(255,255,255,0.02)",
-};
-
-const projectRowActiveStyle: React.CSSProperties = {
-  border: "1px solid rgba(165,146,255,0.22)",
-  background: "rgba(165,146,255,0.08)",
 };
 
 const projectDeleteButtonStyle: React.CSSProperties = {
@@ -405,69 +379,6 @@ const projectDeleteButtonStyle: React.CSSProperties = {
   justifyContent: "center",
   cursor: "pointer",
   flexShrink: 0,
-};
-
-const projectOpenButtonStyle: React.CSSProperties = {
-  border: "none",
-  background: "transparent",
-  padding: 0,
-  margin: 0,
-  color: "inherit",
-  textAlign: "left",
-  display: "block",
-  minWidth: 0,
-  cursor: "pointer",
-  flex: "1 1 auto",
-};
-
-const projectContentRowStyle: React.CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 10,
-  minWidth: 0,
-};
-
-const projectSeparatorStyle: React.CSSProperties = {
-  color: "rgba(161,161,170,0.72)",
-  flexShrink: 0,
-  fontSize: "0.78rem",
-};
-
-const projectNameStyle: React.CSSProperties = {
-  fontWeight: 700,
-  color: "var(--text-primary)",
-  fontSize: "0.9rem",
-  whiteSpace: "nowrap",
-  overflow: "hidden",
-  textOverflow: "ellipsis",
-  minWidth: 0,
-  flex: "1 1 120px",
-};
-
-const projectMetaStyle: React.CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 6,
-  color: "var(--text-secondary)",
-  fontSize: "0.9rem",
-  fontWeight: 500,
-  whiteSpace: "nowrap",
-  flex: "0 1 auto",
-  minWidth: 0,
-  overflow: "hidden",
-  textOverflow: "ellipsis",
-};
-
-const projectEmptyStyle: React.CSSProperties = {
-  color: "var(--text-muted)",
-  fontSize: "0.95rem",
-  lineHeight: 1.45,
-  padding: "4px 0",
-};
-
-const createProjectButtonStyle: React.CSSProperties = {
-  marginTop: "auto",
-  alignSelf: "center",
 };
 
 const modalBackdropStyle: React.CSSProperties = {
@@ -603,4 +514,3 @@ const activeBadgeStyle: React.CSSProperties = {
   boxShadow: "0 2px 8px rgba(0,0,0,0.2)",
   zIndex: 10,
 };
-

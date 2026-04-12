@@ -39,13 +39,21 @@ export function MatchNormalizeApp({ project }: MatchNormalizeAppProps) {
       setCameraConfigs(configs);
       setSetup(savedSetup);
       setPresets(savedPresets);
-      
+
       const savedOutputs = parseLookOutputs(savedSetup?.outputs_json);
-      if (savedOutputs?.hero_slot) {
+      if (savedOutputs?.hero_slot && configs.some((config) => config.slot === savedOutputs.hero_slot)) {
         setHeroSlot(savedOutputs.hero_slot);
       } else if (configs[0]?.slot) {
         setHeroSlot(configs[0].slot);
+      } else {
+        setHeroSlot("A");
       }
+    } catch (error) {
+      console.error("Failed to load match & normalize state", error);
+      setCameraConfigs([]);
+      setSetup(null);
+      setPresets([]);
+      setHeroSlot("A");
     } finally {
       setLoading(false);
     }
@@ -57,8 +65,11 @@ export function MatchNormalizeApp({ project }: MatchNormalizeAppProps) {
   const saveHeroPreference = async (slot: string) => {
     if (!setup) return;
     try {
-      // We store the hero slot preference inside a 'preferences' key in outputs_json
-      const currentOutputs = parseLookOutputs(setup.outputs_json) || { recommendations: [] };
+      const currentOutputs = parseLookOutputs(setup.outputs_json) || {
+        summary: "",
+        recommendations: [],
+        generated_at: "",
+      };
       const nextOutputs = { ...currentOutputs, hero_slot: slot };
       const nextSetup = { ...setup, outputs_json: JSON.stringify(nextOutputs) };
       await invokeGuarded("production_save_look_setup", { setup: nextSetup });

@@ -1234,8 +1234,6 @@ export const FramePreviewApp: React.FC<FramePreviewAppProps> = ({ project, onBac
     }
   };
 
-  const activeGuideVisible = (ratio: RatioType) => safeGuides[ratio] && (selectedCompositionGuide !== 'none' || selectedSocialGuide !== 'none');
-
   return (
     <div className="frame-preview-app-container">
       {/* HEADER */}

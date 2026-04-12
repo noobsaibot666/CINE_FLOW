@@ -395,16 +395,19 @@ export function buildDefaultOnsetChecks(projectId: string) {
 export function parseLookOutputs(raw?: string | null): ProductionLookOutputs | null {
   if (!raw) return null;
   try {
-    const parsed = JSON.parse(raw) as ProductionLookOutputs;
-    if (!parsed || !Array.isArray(parsed.recommendations)) return null;
+    const parsed = JSON.parse(raw) as Partial<ProductionLookOutputs> | null;
+    if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.recommendations)) return null;
     return {
       ...parsed,
+      summary: typeof parsed.summary === "string" ? parsed.summary : "",
+      generated_at: typeof parsed.generated_at === "string" ? parsed.generated_at : "",
+      hero_slot: typeof parsed.hero_slot === "string" ? parsed.hero_slot : undefined,
       recommendations: parsed.recommendations.map((item) => ({
         ...item,
         quickSetup: Array.isArray(item.quickSetup) ? item.quickSetup : [],
         details: Array.isArray(item.details) ? item.details : [],
       })),
-    };
+    } as ProductionLookOutputs;
   } catch {
     return null;
   }
