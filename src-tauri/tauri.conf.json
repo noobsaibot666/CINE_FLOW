@@ -62,8 +62,8 @@
       "bin/braw_bridge",
       "bin/REDline"
     ],
-    "resources": [
-      "bin/BlackmagicRawAPI.dll"
-    ]
+    "resources": {
+      "resources/BlackmagicRawAPI.dll": "."
+    }
   }
 }
