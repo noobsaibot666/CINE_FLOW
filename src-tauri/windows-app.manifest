@@ -8,6 +8,20 @@
   />
   <description>CineFlow Suite</description>
 
+  <!-- Common Controls v6: required for TaskDialog, modern UI widgets, and WebView2/wry/tao -->
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity
+        type="win32"
+        name="Microsoft.Windows.Common-Controls"
+        version="6.0.0.0"
+        processorArchitecture="*"
+        publicKeyToken="6595b64144ccf1df"
+        language="*"
+      />
+    </dependentAssembly>
+  </dependency>
+
   <!-- UAC: run as standard user, no elevation required -->
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
     <security>
