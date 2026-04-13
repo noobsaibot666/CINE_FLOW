@@ -54,7 +54,9 @@ calibration = ["dep:opencv"]
 lto = true
 codegen-units = 1
 panic = "abort"
-strip = "symbols"
+# strip removed: on MSVC symbols live in a separate .pdb; keeping it allows
+# crash dump analysis with WinDbg. Re-add strip = "symbols" after the crash
+# is diagnosed and fixed.
 opt-level = 3
 
 [lints.rust]

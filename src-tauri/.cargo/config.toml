@@ -1,0 +1,5 @@
+# Windows MSVC: statically link the C runtime (vcruntime140.dll, msvcp140.dll, ucrtbase.dll)
+# so the installer does not depend on the Visual C++ Redistributable being pre-installed.
+# Without this, the app crashes before main() on clean Windows VMs that lack the MSVC runtime.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
