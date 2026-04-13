@@ -101,12 +101,20 @@ pub fn run() {
 
             let handle = app.handle();
             crate::tools::init(handle.clone());
-            let server_url = crate::review_core::server::start_review_core_server(
+            // Non-fatal: if TCP bind fails (e.g. WACK/sandbox restricts loopback sockets),
+            // the app still launches. Streaming review features degrade gracefully.
+            match crate::review_core::server::start_review_core_server(
                 app_state.db.clone(),
                 app_state.review_core_base_dir.clone(),
-            )?;
-            if let Ok(mut lock) = app_state.review_core_server_base_url.lock() {
-                *lock = Some(server_url);
+            ) {
+                Ok(url) => {
+                    if let Ok(mut lock) = app_state.review_core_server_base_url.lock() {
+                        *lock = Some(url);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("[review_core] server unavailable: {e}");
+                }
             }
 
             // Implementation of standard macOS menu for HIG compliance
@@ -141,6 +149,8 @@ pub fn run() {
             edit_menu.append(&PredefinedMenuItem::select_all(app, None)?)?;
 
             let view_menu = Submenu::with_id(app, "view", "View", true)?;
+            // fullscreen is macOS-only; skip on Windows/Linux to avoid potential Err abort
+            #[cfg(target_os = "macos")]
             view_menu.append(&PredefinedMenuItem::fullscreen(app, None)?)?;
 
             let window_menu = Submenu::with_id(app, "window", "Window", true)?;
