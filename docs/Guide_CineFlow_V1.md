@@ -6,11 +6,11 @@ This is designed to:
 - Be shareable with collaborators or clients
 - Be expandable as features grow
 
-# WRAP PREVIEW SUITE
+# CINEFLOW SUITE
 
-### On-Set Media Control System
+### Professional Production to Post Hub
 
-Version: 1.0
+Version: 1.0.0-beta.4
 
 Platform: macOS (Apple Silicon)
 
@@ -18,27 +18,26 @@ Offline-first
 
 ---
 
-# 1. What Is Wrap Preview?
+# 1. What Is CineFlow Suite?
 
-Wrap Preview is a modular on-set media control system designed to:
+CineFlow Suite is a modular on-set media control system designed to bridge the gap between production and post-production:
 
-- Verify data integrity
-- Organize multi-camera shoots
-- Assist creative review
-- Accelerate post-production
+- Plan shot sequences and equipment logic (Pre-Production)
+- Match cameras and lock exposure on set (Production)
+- Verify data and prep editorial blocks (Post-Production)
 - Deliver professional client-ready documentation
 
-It replaces fragmented tools with one unified workflow.
+It replaces fragmented tools with one unified, offline-secure workflow.
 
 ---
 
 # 2. Core Philosophy
 
-Wrap Preview is built around three pillars:
+CineFlow is built around three pillars:
 
-1. **Data Integrity** – No corrupted or missing files.
-2. **Creative Clarity** – Understand what was captured.
-3. **Post-Production Acceleration** – Reduce editor prep time.
+1. **Precision Planning** – Reduce on-set friction with references and structure.
+2. **Visual Consistency** – Matched cameras and locked exposure.
+3. **Post-Production Acceleration** – Zero-prep editorial handoff.
 
 Each module supports one or more of these pillars.
 
@@ -46,248 +45,108 @@ Each module supports one or more of these pillars.
 
 # 3. Modules Overview
 
-## 3.1 Contact Sheet
+## 3.1 Pre-Production (The Plan)
 
-Purpose:
-Create a visual summary of all clips in a shoot.
+### Shot Planner (Formerly Lookbook)
+- **Purpose**: Analyze reference footage and build an actionable shooting plan.
+- **Workflow**: Tag shot size, movement, and favorites. Sequence by storytelling logic (Canonical or Hook-First).
+- **Output**: Branded reference sheets and mobile-friendly offline packs.
 
-What it does:
+### Grid Mosaic
+- **Purpose**: Rapid visual reporting.
+- **Workflow**: Generate large multi-frame image grids (Contact Sheets) from clip thumbnails.
+- **Output**: High-res JPEG mosaics or multi-page A4 PDFs.
 
-- Scans project folder
-- Extracts metadata
-- Generates representative thumbnails
-- Displays film-strip previews
-- Exports A4 Landscape PDF
+### Folder Creator
+- **Purpose**: Standardize project organization.
+- **Workflow**: Generate sophisticated multi-platform folder structures for assets and proxies.
 
-Best used:
+### Shot List & Starter Setup
+- **Purpose**: Technical and creative documentation.
+- **Workflow**: Build day sheets with equipment list and recommended camera "safe start" settings.
 
-- End of shoot day
-- Client review
-- Production reports
+## 3.2 Production (The Shoot)
 
-Output:
+### Look Setup & Frame Preview
+- **Purpose**: Visual baseline.
+- **Workflow**: Plan looks, design LUTs, and review high-res frames immediately after capture.
 
-- Branded PDF contact sheet
+### On-Set Coach & Match-Normalize
+- **Purpose**: Technical consistency.
+- **Workflow**: Interactive exposure monitoring and color-matching multiple camera bodies (e.g., matching B-Cam to A-Cam sensor).
 
----
+### Camera Match Lab
+- **Purpose**: Deep sensor analysis.
+- **Workflow**: Advanced tool for matching disparate sensors through technical normalization.
 
-## 3.2 Safe Copy / Verification
+## 3.3 Post-Production (The Handoff)
 
-Purpose:
-Guarantee files were copied correctly.
+### Safe Copy
+- **Purpose**: Data integrity guarantee.
+- **Workflow**: Multi-destination copy with full hash verification (MD5/XXHash).
+- **Output**: Branded PDF verification reports.
 
-What it does:
+### Media Review (Ratings & Audio)
+- **Purpose**: Rapid selection.
+- **Workflow**: 0–5 star ratings, pick/reject flags, and waveform sparklines to detect audio clipping or silence.
 
-- Compares source and destination folders
-- Detects missing files
-- Detects size mismatches
-- Performs full hash verification
-- Detects extra files
-- Generates verification report
+### Scene Blocks
+- **Purpose**: Editorial organization.
+- **Workflow**: Group clips by timestamp proximity and camera labels into deterministic "blocks".
 
-Best used:
-Immediately after copying camera media.
-
-Output:
-
-- JSON verification report
-- Printable verification summary
-
----
-
-## 3.3 Ratings & Selection
-
-Purpose:
-Rapid on-set clip selection.
-
-What it does:
-
-- 0–5 star rating system
-- Pick / Reject flags
-- Keyboard shortcuts for speed
-- Persisted selections
-
-Best used:
-During or immediately after review.
-
-Output:
-
-- Filtered clip sets
-- Director's selects
-- Resolve export-ready markers
+### Delivery
+- **Purpose**: Intelligent handoff.
+- **Workflow**: Export Resolve-ready FCPXML organized by Scene Blocks and Director Packs with full documentation.
 
 ---
 
-## 3.4 Audio Waveform Summary
+# 4. Utilities (Micro-Apps)
 
-Purpose:
-Quickly evaluate audio quality.
+Quick-access tools for calculations under pressure:
 
-What it does:
+- **Crop Factor**: Sensor size and focal length math for matching look across cameras.
+- **Video File Size**: Storage estimation for pro codecs (ARRIRAW, REDCODE, BRAW, ProRes).
+- **Aspect Ratio**: Resolution math and delivery safe-frame calculation.
+- **Transfer Time**: Real-world copy duration estimation based on hardware bottlenecks.
 
-- Detects presence of audio
-- Displays waveform sparkline
-- Flags:
-    - No audio
-    - Possible clipping
-    - Mostly silent
+# 5. Recommended Workflow Sequence
 
-Best used:
-Before leaving set to detect audio issues.
+This is the ideal operational order for a project lifecycle.
 
 ---
 
-## 3.5 Scene / Moment Clustering
+## PHASE 1 — Pre-Production (The Plan)
 
-Purpose:
-Turn raw clips into organized “blocks”.
+1. **Shot Planner**: Import references and build your shooting plan.
+2. **Folder Creator**: Setup the drive structure before any media is recorded.
+3. **Shot List**: Finalize the day sheet and equipment list.
 
-What it does:
-
-- Groups clips by timestamp proximity
-- Detects multi-camera overlaps
-- Groups by camera label
-- Allows merge/split/rename
-
-Best used:
-Before export to editor.
-
-Output:
-
-- Structured block organization
+Goal: Clear visual and structural roadmap.
 
 ---
 
-## 3.6 DaVinci Resolve Export
+## PHASE 2 — Production (The Shoot)
 
-Purpose:
-Prepare editing environment automatically.
+1. **Look Setup**: Baseline your exposure and LUTs.
+2. **Match & Normalize**: Ensure multiple camera bodies are seeing the same colors and exposure levels.
+3. **On-Set Coach**: Monitor exposure consistency throughout the day.
 
-What it does:
-
-- Exports FCPXML for Resolve
-- Organizes clips into structured bins
-- Creates stringout timelines
-- Applies markers for:
-    - Picks
-    - Rejects
-    - Ratings
-    - Notes
-
-Best used:
-Immediately before post-production begins.
-
-Output:
-
-- Resolve-ready XML file
+Goal: Consistent capture and zero technical debt.
 
 ---
 
-## 3.7 Director Pack Export
+## PHASE 3 — Post-Production (The Handoff)
 
-Purpose:
-Deliver complete structured package.
+1. **Safe Copy**: Backup media and verify data integrity immediately.
+2. **Media Review**: Rapidly rate clips and verify audio technicals.
+3. **Scene Blocks**: Organize your selects into meaningful editorial groups.
+4. **Delivery**: Export to Resolve and hand off the Director Pack.
 
-What it includes:
-
-- Contact Sheet PDF
-- Resolve XML
-- JSON summary report
-- Structured export folder
-
-Best used:
-When handing over material to editor or client.
+Goal: Faster editorial turnaround and professional client delivery.
 
 ---
 
-# 4. Recommended Workflow Sequence
-
-This is the ideal operational order.
-
----
-
-## STEP 1 — Copy & Verify
-
-Use:
-Safe Copy / Verification
-
-Goal:
-Ensure no missing or corrupted data.
-
-Do not proceed before verification passes.
-
----
-
-## STEP 2 — Scan & Generate Contact Sheet
-
-Use:
-Contact Sheet
-
-Goal:
-Understand what was captured visually.
-
----
-
-## STEP 3 — Review & Rate
-
-Use:
-Ratings & Selection
-
-Goal:
-Mark:
-
-- Best takes
-- Rejects
-- Director’s selects
-
----
-
-## STEP 4 — Check Audio
-
-Use:
-Audio Waveform Summary
-
-Goal:
-Confirm audio integrity and detect clipping or silence.
-
----
-
-## STEP 5 — Build Scene Blocks
-
-Use:
-Scene / Moment Clustering
-
-Goal:
-Organize clips into meaningful editorial blocks.
-
----
-
-## STEP 6 — Export to Resolve
-
-Use:
-Resolve Export
-
-Goal:
-Open structured project in DaVinci Resolve with:
-
-- Bins
-- Timelines
-- Markers
-- Selects
-
----
-
-## STEP 7 — Generate Director Pack (Optional)
-
-Use:
-Director Pack Export
-
-Goal:
-Deliver full professional documentation package.
-
----
-
-# 5. Who Is This For?
+# 6. Who Is This For?
 
 - Director of Photography
 - DIT
@@ -299,45 +158,42 @@ Deliver full professional documentation package.
 
 ---
 
-# 6. What Makes Wrap Preview Different?
+# 7. What Makes CineFlow Different?
 
-- Combines integrity + creative + editorial prep
-- Offline and secure
-- Designed for real on-set pressure
-- Modular system, not a single-purpose tool
-
----
-
-# 7. Ongoing Development
-
-Wrap Preview is modular and expandable.
-
-Future modules may include:
-
-- Sync suggestions
-- LUT preview mode
-- Advanced metadata mapping
-- Multi-day project management
-- AI-assisted moment detection
-
-This document must be updated whenever new modules are added.
+- **Phased Ecosystem**: Plan (Pre), Protect (Prod), and Prep (Post) in one app.
+- **Offline and Secure**: Local-first architecture designed for set and studio environments.
+- **Designed for Pressure**: Rapid-entry tagging and deterministic exports.
+- **Micro-App Integration**: Floating utilities for on-the-spot technical math.
 
 ---
 
-# 8. Document Maintenance Policy
+# 8. Ongoing Development
+
+CineFlow is a living ecosystem. Future modules under consideration:
+
+- Multi-user project sync / Cloud backup
+- Automated proxy generation
+- AI-assisted clip summarization
+- Advanced DIT color pipeline management
+
+This document must be updated whenever new modules or micro-apps are added.
+
+---
+
+# 9. Document Maintenance Policy
 
 Whenever new features are implemented:
 
 1. Add module description under “Modules Overview”.
-2. Update workflow sequence if necessary.
+2. Update workflow phase sequence if necessary.
 3. Update version number at top.
 4. Maintain clarity and non-technical tone.
 
-This document is the authoritative operational guide for Wrap Preview Suite.
+This document is the authoritative operational guide for CineFlow Suite.
 
 ---
 
-# Inspiration Library — Lookbook & Shooting Plan Guide
+# Shot Planner — The Cinematography & Sequencing Guide
 
 This module transforms reference footage into a structured **shooting plan**.
 
@@ -394,7 +250,7 @@ Tags are:
 
 # 2. Sequencing Modes
 
-Each Lookbook supports three sequencing strategies.
+Each Shot Planner project supports three sequencing strategies.
 
 ## Canonical (Default)
 
@@ -460,7 +316,7 @@ Best for:
 
 # 3. Vertical 9:16 Mode
 
-Lookbooks can be exported in vertical mode.
+Shot Planner projects can be exported in vertical mode.
 
 When enabled:
 
@@ -491,7 +347,7 @@ Auto tags:
 - Never overwrite manual tags
 - Are stored separately
 - Can be filtered in-app
-- Can be included in Lookbook export
+- Can be included in Shot Planner export
 
 Example filtering:
 
@@ -501,11 +357,11 @@ Example filtering:
 
 ---
 
-# 5. Lookbook Pack (Mobile Export)
+# 5. Shot Planner Pack (Mobile Export)
 
 Exports an offline mobile-friendly package:
 
-LookbookPack__/
+ShotPlannerPack__/
 index.html
 data.json
 assets/
@@ -520,7 +376,7 @@ The pack works fully offline once unzipped.
 
 # 6. Mobile Viewer Experience
 
-The Lookbook Pack includes:
+The Shot Planner Pack includes:
 
 ### Tabs
 
@@ -546,7 +402,7 @@ Designed for:
 
 # 7. How to Open on iPhone
 
-1. Export Lookbook Pack as ZIP.
+1. Export Shot Planner Pack as ZIP.
 2. Share via:
     - AirDrop
     - iCloud Drive
@@ -584,7 +440,7 @@ This transforms references into an actionable shot plan.
 
 # Summary
 
-The Inspiration Library is no longer just a reference storage tool.
+The Shot Planner is no longer just a reference storage tool.
 
 It is:
 
