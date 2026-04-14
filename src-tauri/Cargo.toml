@@ -53,7 +53,7 @@ calibration = ["dep:opencv"]
 [profile.release]
 lto = true
 codegen-units = 1
-panic = "abort"
+panic = "unwind"
 # strip removed: on MSVC symbols live in a separate .pdb; keeping it allows
 # crash dump analysis with WinDbg. Re-add strip = "symbols" after the crash
 # is diagnosed and fixed.

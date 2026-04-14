@@ -96,9 +96,21 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .manage(app_state.clone())
+        .on_window_event(|_window, event| {
+            // Windows: force a clean exit on window close/destroy to prevent the
+            // Tauri/tao/WebView2 teardown panic ("cannot move state from Destroyed")
+            // which causes WACK "Crashes and hangs" FAIL with panic = "abort".
+            #[cfg(target_os = "windows")]
+            if matches!(
+                event,
+                tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed
+            ) {
+                std::process::exit(0);
+            }
+            #[cfg(not(target_os = "windows"))]
+            let _ = event;
+        })
         .setup(move |app| {
-            use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
-
             let handle = app.handle();
             crate::tools::init(handle.clone());
             // Non-fatal: if TCP bind fails (e.g. WACK/sandbox restricts loopback sockets),
@@ -117,55 +129,53 @@ pub fn run() {
                 }
             }
 
-            // Implementation of standard macOS menu for HIG compliance
-            let app = handle;
-            let about_menu = Submenu::with_id(app, "about", "CineFlow Suite", true)?;
-            let settings = MenuItem::with_id(app, "settings", "Settings...", true, Some(","))?;
-            
-            about_menu.append(&PredefinedMenuItem::about(app, Some("CineFlow Suite"), None)?)?;
-            about_menu.append(&PredefinedMenuItem::separator(app)?)?;
-            about_menu.append(&settings)?;
-            
+            // Native menu — macOS only (Windows uses the OS chrome; no menu bar needed)
             #[cfg(target_os = "macos")]
             {
+                use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
+
+                let app = handle;
+                let about_menu = Submenu::with_id(app, "about", "CineFlow Suite", true)?;
+                let settings = MenuItem::with_id(app, "settings", "Settings...", true, Some(","))?;
+
+                about_menu.append(&PredefinedMenuItem::about(app, Some("CineFlow Suite"), None)?)?;
+                about_menu.append(&PredefinedMenuItem::separator(app)?)?;
+                about_menu.append(&settings)?;
                 about_menu.append(&PredefinedMenuItem::separator(app)?)?;
                 about_menu.append(&PredefinedMenuItem::services(app, None)?)?;
                 about_menu.append(&PredefinedMenuItem::separator(app)?)?;
                 about_menu.append(&PredefinedMenuItem::hide(app, None)?)?;
                 about_menu.append(&PredefinedMenuItem::hide_others(app, None)?)?;
                 about_menu.append(&PredefinedMenuItem::show_all(app, None)?)?;
+                about_menu.append(&PredefinedMenuItem::separator(app)?)?;
+                about_menu.append(&PredefinedMenuItem::quit(app, None)?)?;
+
+                let edit_menu = Submenu::with_id(app, "edit", "Edit", true)?;
+                edit_menu.append(&PredefinedMenuItem::undo(app, None)?)?;
+                edit_menu.append(&PredefinedMenuItem::redo(app, None)?)?;
+                edit_menu.append(&PredefinedMenuItem::separator(app)?)?;
+                edit_menu.append(&PredefinedMenuItem::cut(app, None)?)?;
+                edit_menu.append(&PredefinedMenuItem::copy(app, None)?)?;
+                edit_menu.append(&PredefinedMenuItem::paste(app, None)?)?;
+                edit_menu.append(&PredefinedMenuItem::select_all(app, None)?)?;
+
+                let view_menu = Submenu::with_id(app, "view", "View", true)?;
+                view_menu.append(&PredefinedMenuItem::fullscreen(app, None)?)?;
+
+                let window_menu = Submenu::with_id(app, "window", "Window", true)?;
+                window_menu.append(&PredefinedMenuItem::minimize(app, None)?)?;
+                window_menu.append(&PredefinedMenuItem::maximize(app, None)?)?;
+                window_menu.append(&PredefinedMenuItem::separator(app)?)?;
+                window_menu.append(&PredefinedMenuItem::close_window(app, None)?)?;
+
+                let menu = Menu::with_items(app, &[&about_menu, &edit_menu, &view_menu, &window_menu])?;
+                app.set_menu(menu)?;
+
+                // Note: Menu events (like clicking "Settings") can be handled here or in a separate listener:
+                // app.on_menu_event(move |app_handle, event| {
+                //    if event.id() == "settings" { ... }
+                // });
             }
-
-            about_menu.append(&PredefinedMenuItem::separator(app)?)?;
-            about_menu.append(&PredefinedMenuItem::quit(app, None)?)?;
-
-            let edit_menu = Submenu::with_id(app, "edit", "Edit", true)?;
-            edit_menu.append(&PredefinedMenuItem::undo(app, None)?)?;
-            edit_menu.append(&PredefinedMenuItem::redo(app, None)?)?;
-            edit_menu.append(&PredefinedMenuItem::separator(app)?)?;
-            edit_menu.append(&PredefinedMenuItem::cut(app, None)?)?;
-            edit_menu.append(&PredefinedMenuItem::copy(app, None)?)?;
-            edit_menu.append(&PredefinedMenuItem::paste(app, None)?)?;
-            edit_menu.append(&PredefinedMenuItem::select_all(app, None)?)?;
-
-            let view_menu = Submenu::with_id(app, "view", "View", true)?;
-            // fullscreen is macOS-only; skip on Windows/Linux to avoid potential Err abort
-            #[cfg(target_os = "macos")]
-            view_menu.append(&PredefinedMenuItem::fullscreen(app, None)?)?;
-
-            let window_menu = Submenu::with_id(app, "window", "Window", true)?;
-            window_menu.append(&PredefinedMenuItem::minimize(app, None)?)?;
-            window_menu.append(&PredefinedMenuItem::maximize(app, None)?)?;
-            window_menu.append(&PredefinedMenuItem::separator(app)?)?;
-            window_menu.append(&PredefinedMenuItem::close_window(app, None)?)?;
-
-            let menu = Menu::with_items(app, &[&about_menu, &edit_menu, &view_menu, &window_menu])?;
-            app.set_menu(menu)?;
-
-            // Note: Menu events (like clicking "Settings") can be handled here or in a separate listener:
-            // app.on_menu_event(move |app_handle, event| {
-            //    if event.id() == "settings" { ... }
-            // });
 
             #[cfg(debug_assertions)]
             {
