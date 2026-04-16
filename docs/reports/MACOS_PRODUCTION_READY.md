@@ -25,7 +25,7 @@ The most significant "weak spot" identified was the `REDline` sidecar's dependen
 
 ## 🚀 Build Metadata
 - **Identifier**: `com.cineflow.suite`
-- **Category**: `public.app-category.video`
+- **Category (LSApplicationCategoryType)**: `public.app-category.video` (Set in `bundle > macOS > infoPlist`)
 - **Version**: `1.0.0-rc.1` (Release Candidate)
 
 ## Next Steps

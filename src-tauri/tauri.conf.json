@@ -55,7 +55,9 @@
       "entitlements": "entitlements.plist",
       "hardenedRuntime": true,
       "minimumSystemVersion": "10.15",
-      "category": "public.app-category.video"
+      "infoPlist": {
+        "LSApplicationCategoryType": "public.app-category.video"
+      }
     },
     "externalBin": [
       "bin/ffmpeg",
