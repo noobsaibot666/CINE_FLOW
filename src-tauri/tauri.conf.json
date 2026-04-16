@@ -55,7 +55,30 @@
       "entitlements": "entitlements.plist",
       "hardenedRuntime": true,
       "minimumSystemVersion": "10.15",
-      "infoPlist": "Info.plist"
+      "infoPlist": "Info.plist",
+      "frameworks": [
+        "Frameworks/ACFPluginHost.framework",
+        "Frameworks/FTF.framework",
+        "Frameworks/QtConcurrent.framework",
+        "Frameworks/QtCore.framework",
+        "Frameworks/QtDBus.framework",
+        "Frameworks/QtGui.framework",
+        "Frameworks/QtMultimedia.framework",
+        "Frameworks/QtMultimediaWidgets.framework",
+        "Frameworks/QtNetwork.framework",
+        "Frameworks/QtOpenGL.framework",
+        "Frameworks/QtPrintSupport.framework",
+        "Frameworks/QtQml.framework",
+        "Frameworks/QtQuick.framework",
+        "Frameworks/QtScript.framework",
+        "Frameworks/QtSql.framework",
+        "Frameworks/QtUiPlugin.framework",
+        "Frameworks/QtWebChannel.framework",
+        "Frameworks/QtWidgets.framework",
+        "Frameworks/QtXml.framework",
+        "Frameworks/QtXmlPatterns.framework",
+        "Frameworks/SDL2.framework"
+      ]
     },
     "externalBin": [
       "bin/ffmpeg",
@@ -65,8 +88,7 @@
     ],
     "resources": {
       "bin/BlackmagicRawAPI.dll": ".",
-      "libs/": "libs/",
-      "Frameworks/": "Frameworks/"
+      "libs/": "libs/"
     }
   }
 }
