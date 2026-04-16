@@ -7,7 +7,7 @@ This checklist identifies all lingering placeholders, technical configurations, 
 | Location | Key/Field | Current Value | Required Action |
 | :--- | :--- | :--- | :--- |
 | `src-tauri/Cargo.toml` | `authors` | `["you"]` | **REPLACE** with `["Alan Alves"]` |
-| `src-tauri/tauri.conf.json` | `identifier` | `com.cineflow.suite` | **VERIFY** matches Apple Developer Identifier. |
+| `src-tauri/tauri.conf.json` | `identifier` | `com.exposeu.cineflow` | **VERIFY** matches Apple Developer Identifier. |
 | `src-tauri/tauri.conf.json` | `version` | `1.0.0` | **VERIFY** matches Store draft version. |
 | `docs/appstore/APP_STORE_DEPLOYMENT.md` | Notarization Commands | `YOUR_APPLE_ID` | **USE** your actual Apple ID in terminal. |
 

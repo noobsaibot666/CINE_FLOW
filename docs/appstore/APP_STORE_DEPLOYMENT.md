@@ -67,7 +67,7 @@ Follow these steps to submit **CineFlow Suite** to the macOS App Store.
 
 ## 2. Certificates & Identifiers
 
-- [ ] Create a **Bundle ID** in [Developer Portal](https://developer.apple.com/account/resources/identifiers/list): `com.cineflow.suite`.
+- [ ] Create a **Bundle ID** in [Developer Portal](https://developer.apple.com/account/resources/identifiers/list): `com.exposeu.cineflow`.
 - [ ] Create **Mac App Distribution** and **Mac Installer Distribution** certificates.
 - [ ] Ensure `entitlements.plist` contains the required sandbox keys.
 

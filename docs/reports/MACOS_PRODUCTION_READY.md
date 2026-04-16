@@ -24,7 +24,7 @@ The most significant "weak spot" identified was the `REDline` sidecar's dependen
 - **Verification**: The sidecars are now "portable" within the app bundle and do not require external software installations to function.
 
 ## 🚀 Build Metadata
-- **Identifier**: `com.cineflow.suite`
+- **Identifier**: `com.exposeu.cineflow`
 - **Category (LSApplicationCategoryType)**: `public.app-category.video` (Set in `bundle > macOS > infoPlist`)
 - **Version**: `1.0.0-rc.1` (Release Candidate)
 
