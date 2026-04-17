@@ -28,7 +28,13 @@ The most significant "weak spot" identified was the `REDline` sidecar's dependen
 - **Category (LSApplicationCategoryType)**: `public.app-category.video` (Set in `bundle > macOS > infoPlist`)
 - **Version**: `1.0.0-rc.1` (Release Candidate)
 
-## Next Steps
-- [ ] Run production build: `npm run build && npx tauri build`
-- [ ] Verify signature: `codesign -vvv --deep --strict "CineFlow Suite.app"`
-- [ ] Upload via Transporter app.
+## Next Steps (Submission)
+
+1. **Verify Bundle ID**: Ensure `com.exposeu.cineflow` is registered in your [Apple Developer Portal](https://developer.apple.com/account/resources/identifiers/list).
+2. **App Store Connect**: Create a new App record in [App Store Connect](https://appstoreconnect.apple.com/) using this identifier.
+3. **Generate Submission Package**: Run the following to generate the `.pkg` file:
+   ```bash
+   npx tauri build
+   ```
+4. **Upload**: Use the **Transporter** app (available on the Mac App Store) to drag and drop the `.pkg` file from `src-tauri/target/release/bundle/macos/`.
+5. **Submit for Review**: Once uploaded, select the build in App Store Connect and submit!
