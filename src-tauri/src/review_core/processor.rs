@@ -27,11 +27,16 @@ fn check_cancel(cancel_flag: &Arc<AtomicBool>) -> Result<(), String> {
 }
 
 fn ffmpeg_run(args: &[String]) -> Result<(), String> {
-    let ffmpeg = crate::tools::find_executable("ffmpeg");
-    let output = std::process::Command::new(ffmpeg)
-        .args(args)
+    let mut command = crate::tools::create_command("ffmpeg");
+    
+    // Add -nostdin to prevent FFmpeg from waiting for user input
+    command.arg("-nostdin");
+    command.args(args);
+    
+    let output = command
         .output()
         .map_err(|e| format!("Failed to run ffmpeg: {}", e))?;
+        
     if !output.status.success() {
         return Err(format!(
             "ffmpeg failed: {}",

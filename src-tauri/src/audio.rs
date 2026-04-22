@@ -21,9 +21,8 @@ fn find_r3d_companion_audio(r3d_path: &Path) -> Option<String> {
 }
 
 fn run_ffmpeg_extract(source: &str) -> Result<Vec<u8>, String> {
-    let ffmpeg = crate::tools::find_executable("ffmpeg");
-    let mut child = Command::new(ffmpeg)
-        .args(&["-i", source, "-f", "s16le", "-ac", "1", "-ar", "8000", "-"])
+    let mut child = crate::tools::create_command("ffmpeg")
+        .args(&["-nostdin", "-i", source, "-f", "s16le", "-ac", "1", "-ar", "8000", "-"])
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()

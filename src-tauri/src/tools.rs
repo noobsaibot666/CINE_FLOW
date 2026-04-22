@@ -1,7 +1,9 @@
 use std::process::Command;
 use std::sync::OnceLock;
 use tauri::{AppHandle, Manager};
-use tauri_plugin_shell::ShellExt;
+
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 
 static APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
 
@@ -59,7 +61,7 @@ pub fn find_executable(name: &str) -> String {
 
     // 2. Try which (Unix only — `which` does not exist on Windows)
     #[cfg(not(target_os = "windows"))]
-    if let Ok(output) = Command::new("which").arg(name).output() {
+    if let Ok(output) = crate::tools::create_command("which").arg(name).output() {
         if output.status.success() {
             let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if !path.is_empty() {
@@ -91,16 +93,20 @@ pub fn find_executable(name: &str) -> String {
     name.to_string()
 }
 
-/// Helper to run a command that might be a sidecar (reserved for future shell migration)
-#[allow(dead_code)]
+/// Create a process Command with the correct executable path and Windows flags.
+/// This is the preferred way to spawn FFmpeg/FFprobe/REDline as it suppresses
+/// the console window blizzard on Windows.
 pub fn create_command(name: &str) -> Command {
-    if let Some(handle) = APP_HANDLE.get() {
-        if let Ok(_sidecar_command) = handle.shell().sidecar(name) {
-            // This returns a tauri_plugin_shell::process::Command
-            // Our code currently expects std::process::Command.
-            // This is a major difference in Tauri 2. 
-            // To be truly production-ready, we should migrate to tauri_plugin_shell::process::Command.
-        }
+    let executable = find_executable(name);
+    let mut command = Command::new(executable);
+    
+    // Windows: suppress console window for child processes
+    #[cfg(target_os = "windows")]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        command.creation_flags(CREATE_NO_WINDOW);
     }
-    Command::new(find_executable(name))
+    
+    command
 }
+

@@ -553,10 +553,9 @@ fn run_frame_extraction_attempt(
     timestamp_ms: u64,
     strategy: &ExtractionStrategy,
 ) -> Result<(), String> {
-    let ffmpeg = crate::tools::find_executable("ffmpeg");
     let timestamp = format!("{:.3}", timestamp_ms as f64 / 1000.0);
-    let mut command = Command::new(ffmpeg);
-    command.args(["-hide_banner", "-loglevel", "error", "-y"]);
+    let mut command = crate::tools::create_command("ffmpeg");
+    command.args(["-nostdin", "-hide_banner", "-loglevel", "error", "-y"]);
     if strategy.hwaccel_none {
         command.args(["-hwaccel", "none"]);
     }
@@ -996,10 +995,10 @@ pub fn probe_braw_decoder() -> BrawDecoderCaps {
         };
     };
 
-    let help_output = Command::new(&executable_path)
+    let help_output = crate::tools::create_command(&executable_path)
         .arg("--help")
         .output()
-        .or_else(|_| Command::new(&executable_path).arg("-h").output());
+        .or_else(|_| crate::tools::create_command(&executable_path).arg("-h").output());
 
     let (help_text, help_excerpt) = match help_output {
         Ok(output) => {
@@ -1022,7 +1021,7 @@ pub fn probe_braw_decoder() -> BrawDecoderCaps {
         ),
     };
 
-    let version = Command::new(&executable_path)
+    let version = crate::tools::create_command(&executable_path)
         .arg("--version")
         .output()
         .ok()
@@ -1067,10 +1066,10 @@ pub fn probe_redline_decoder() -> RedlineDecoderCaps {
         };
     };
 
-    let help_output = Command::new(&executable_path)
+    let help_output = crate::tools::create_command(&executable_path)
         .arg("--help")
         .output()
-        .or_else(|_| Command::new(&executable_path).arg("-h").output());
+        .or_else(|_| crate::tools::create_command(&executable_path).arg("-h").output());
 
     let help_excerpt = match help_output {
         Ok(output) => format!(
@@ -1086,7 +1085,7 @@ pub fn probe_redline_decoder() -> RedlineDecoderCaps {
         Err(error) => format!("help unavailable: {}", error),
     };
 
-    let version = Command::new(&executable_path)
+    let version = crate::tools::create_command(&executable_path)
         .arg("--version")
         .output()
         .ok()
@@ -1115,7 +1114,7 @@ pub fn probe_braw_ffmpeg_format(caps: &BrawDecoderCaps, input_path: &str) -> Res
         .executable_path
         .as_ref()
         .ok_or("Decoder executable missing".to_string())?;
-    let output = Command::new(executable)
+    let output = crate::tools::create_command(executable)
         .args(["-f", input_path])
         .output()
         .map_err(|e| format!("Failed to run braw-decode -f: {}", e))?;
@@ -1145,7 +1144,7 @@ pub fn create_braw_proxy_via_stdout(
     let fmt_args = probe_braw_ffmpeg_format(caps, input_path)?;
     validate_proxy_output_path(input_path, output_path)?;
 
-    let mut braw_decode_cmd = Command::new(executable);
+    let mut braw_decode_cmd = crate::tools::create_command(executable);
     braw_decode_cmd
         .args(["-c", "rgba", input_path])
         .stdout(Stdio::piped())
@@ -1159,12 +1158,11 @@ pub fn create_braw_proxy_via_stdout(
         .take()
         .ok_or("Failed to capture BRAW decoder stdout".to_string())?;
 
-    let ffmpeg = crate::tools::find_executable("ffmpeg");
-    let mut ffmpeg_args: Vec<String> = vec!["-hide_banner".to_string(), "-y".to_string()];
+    let mut ffmpeg_args: Vec<String> = vec!["-nostdin".to_string(), "-hide_banner".to_string(), "-y".to_string()];
     ffmpeg_args.extend(fmt_args.split_whitespace().map(|value| value.to_string()));
     ffmpeg_args.extend(proxy_ffmpeg_args(output_path));
 
-    let mut ffmpeg_child = Command::new(ffmpeg)
+    let mut ffmpeg_child = crate::tools::create_command("ffmpeg")
         .args(ffmpeg_args)
         .stdin(Stdio::from(stdout))
         .stdout(Stdio::null())
@@ -1223,7 +1221,7 @@ pub fn create_braw_proxy_via_file(
     } else {
         "-o"
     };
-    let decode_output = Command::new(executable)
+    let decode_output = crate::tools::create_command(executable)
         .args([input_path, output_flag, &decoded_path.to_string_lossy()])
         .output()
         .map_err(|e| format!("Failed to start BRAW decoder file output: {}", e))?;
@@ -1241,8 +1239,8 @@ pub fn create_braw_proxy_via_file(
         ));
     }
 
-    let ffmpeg = crate::tools::find_executable("ffmpeg");
-    let ffmpeg_output = Command::new(ffmpeg)
+    let ffmpeg_output = crate::tools::create_command("ffmpeg")
+        .args(["-nostdin"])
         .args([
             "-hide_banner",
             "-y",
@@ -1297,7 +1295,7 @@ fn locate_braw_decoder() -> Option<String> {
     }
 
     // 3. Last resort fallback for PATH
-    if let Ok(output) = Command::new(if cfg!(target_os = "windows") { "where" } else { "which" })
+    if let Ok(output) = crate::tools::create_command(if cfg!(target_os = "windows") { "where" } else { "which" })
         .arg("braw-decode")
         .output()
     {
@@ -1314,7 +1312,7 @@ fn locate_braw_decoder() -> Option<String> {
 
 fn locate_redline_decoder() -> Option<String> {
     for binary in ["REDline", "redline"] {
-        if let Ok(output) = Command::new("which").arg(binary).output() {
+        if let Ok(output) = crate::tools::create_command(if cfg!(target_os = "windows") { "where" } else { "which" }).arg(binary).output() {
             if output.status.success() {
                 let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 if !path.is_empty() {
@@ -1349,7 +1347,7 @@ pub fn create_redline_proxy_via_file(
     validate_proxy_output_path(input_path, decoded_path)?;
     validate_proxy_output_path(input_path, output_path)?;
 
-    let decode_output = Command::new(executable)
+    let decode_output = crate::tools::create_command(executable)
         .args([
             "--i",
             input_path,
@@ -1395,8 +1393,8 @@ pub fn create_redline_proxy_via_file(
         }
     };
 
-    let ffmpeg = crate::tools::find_executable("ffmpeg");
-    let ffmpeg_output = Command::new(ffmpeg)
+    let ffmpeg_output = crate::tools::create_command("ffmpeg")
+        .args(["-nostdin"])
         .args([
             "-hide_banner",
             "-y",

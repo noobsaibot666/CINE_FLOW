@@ -4574,8 +4574,8 @@ fn compute_comment_frame_number(
 }
 
 fn review_core_ffmpeg_run(args: &[String]) -> Result<(), String> {
-    let ffmpeg = crate::tools::find_executable("ffmpeg");
-    let output = Command::new(ffmpeg)
+    let output = crate::tools::create_command("ffmpeg")
+        .args(["-nostdin"])
         .args(args)
         .output()
         .map_err(|e| format!("Failed to run ffmpeg: {}", e))?;
@@ -5338,7 +5338,7 @@ fn synthetic_cut_points(duration_ms: u64, threshold: f64) -> Vec<u64> {
 }
 
 fn command_first_line(bin: &str, args: &[&str]) -> Option<String> {
-    let output = Command::new(bin).args(args).output().ok()?;
+    let output = crate::tools::create_command(bin).args(args).output().ok()?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     stdout.lines().next().map(|s| s.trim().to_string())
 }
@@ -5986,7 +5986,7 @@ fn command_exists(bin: &str) -> bool {
         // We verify if 'which' or equivalent works for the fallback
         #[cfg(not(target_os = "windows"))]
         {
-            Command::new("sh")
+            crate::tools::create_command("sh")
                 .args(["-lc", &format!("command -v {} >/dev/null 2>&1", bin)])
                 .status()
                 .map(|s| s.success())
@@ -5994,7 +5994,7 @@ fn command_exists(bin: &str) -> bool {
         }
         #[cfg(target_os = "windows")]
         {
-            Command::new("where")
+            crate::tools::create_command("where")
                 .arg(bin)
                 .status()
                 .map(|s| s.success())

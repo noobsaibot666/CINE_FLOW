@@ -62,9 +62,9 @@ pub fn extract_image_thumbnail(
             .map_err(|e| format!("Failed to create thumbnail directory: {}", e))?;
     }
 
-    let ffmpeg = crate::tools::find_executable("ffmpeg");
-    let status = Command::new(ffmpeg)
+    let status = crate::tools::create_command("ffmpeg")
         .args([
+            "-nostdin",
             "-i",
             input_path,
             "-vframes",
@@ -145,14 +145,14 @@ pub fn extract_thumbnail(
     let status = if let Some(res) = status {
         res?
     } else {
-        let ffmpeg = crate::tools::find_executable("ffmpeg");
 
         // ── Stage 1: Fast input-seeking ──
         // `-ss` before `-i` makes ffmpeg jump straight to the nearest keyframe,
         // avoiding decoding from the start. `-noautorotate` skips rotation
         // transform. Short `-analyzeduration` / `-probesize` help MKV, TS, MXF.
-        let output = Command::new(&ffmpeg)
+        let output = crate::tools::create_command("ffmpeg")
             .args([
+                "-nostdin",
                 "-ss", &ts_str,
                 "-noautorotate",
                 "-analyzeduration", "5000000",
@@ -175,8 +175,9 @@ pub fn extract_thumbnail(
             // ── Stage 2: Input-seeking without explicit stream map ──
             // Some containers (e.g. MXF with data streams first, some AVI
             // variants) confuse `-map 0:v:0`. Retry without it.
-            let output2 = Command::new(&ffmpeg)
+            let output2 = crate::tools::create_command("ffmpeg")
                 .args([
+                    "-nostdin",
                     "-ss", &ts_str,
                     "-noautorotate",
                     "-analyzeduration", "5000000",
@@ -199,8 +200,9 @@ pub fn extract_thumbnail(
                 // Only for genuinely broken containers where input-seeking
                 // crashes ffmpeg. This must decode from the start so it's slow
                 // but at least produces a frame.
-                Command::new(&ffmpeg)
+                crate::tools::create_command("ffmpeg")
                     .args([
+                        "-nostdin",
                         "-noautorotate",
                         "-analyzeduration", "10000000",
                         "-probesize", "10000000",
@@ -265,11 +267,11 @@ fn shell_quote(value: &str) -> String {
 }
 
 fn probe_fps(input_path: &str) -> Option<f64> {
-    let ffprobe = crate::tools::find_executable("ffprobe");
-    let out = Command::new(ffprobe)
+    let out = crate::tools::create_command("ffprobe")
         .args([
             "-v",
             "error",
+            "-nostdin",
             "-select_streams",
             "v:0",
             "-show_entries",
@@ -344,10 +346,10 @@ fn generate_raw_placeholder(
     };
 
     if let Some(parent) = Path::new(output_path).parent() {
-        std::fs::create_dir_all(parent).ok();
+        let _ = std::fs::create_dir_all(parent);
     }
 
-    let ffmpeg = crate::tools::find_executable("ffmpeg");
+    
 
     // Stage 1: with drawtext — requires libfreetype compiled into ffmpeg.
     let filter_text = format!(
@@ -360,8 +362,8 @@ fn generate_raw_placeholder(
         display_name.replace('\'', "").replace(':', "\\:"),
         subtext,
     );
-    if let Ok(r) = Command::new(&ffmpeg)
-        .args(["-f", "lavfi", "-i", &filter_text, "-frames:v", "1", "-update", "1", "-q:v", "3", "-y", output_path])
+    if let Ok(r) = crate::tools::create_command("ffmpeg")
+        .args(["-nostdin", "-f", "lavfi", "-i", &filter_text, "-frames:v", "1", "-update", "1", "-q:v", "3", "-y", output_path])
         .output()
     {
         if r.status.success() && placeholder_valid(output_path) {
@@ -370,8 +372,8 @@ fn generate_raw_placeholder(
     }
 
     // Stage 2: plain solid color — no drawtext, no freetype dependency.
-    if let Ok(r) = Command::new(&ffmpeg)
-        .args(["-f", "lavfi", "-i", "color=c=#1a1a2e:s=640x360:d=1", "-frames:v", "1", "-update", "1", "-q:v", "3", "-y", output_path])
+    if let Ok(r) = crate::tools::create_command("ffmpeg")
+        .args(["-nostdin", "-f", "lavfi", "-i", "color=c=#1a1a2e:s=640x360:d=1", "-frames:v", "1", "-update", "1", "-q:v", "3", "-y", output_path])
         .output()
     {
         if r.status.success() && placeholder_valid(output_path) {
@@ -407,22 +409,20 @@ fn extract_r3d_thumbnail(
     // R3D files often contain a preview JPEG in the header area.
     if let Ok(result) = extract_embedded_jpeg_preview(input_path, output_path) {
         if result {
-            // Return a synthetic "success" Output to satisfy the type
-            return Command::new("echo")
-                .arg("R3D thumbnail extracted from embedded JPEG")
-                .output()
-                .map_err(|e| format!("echo failed: {}", e));
+        // Return a synthetic "success" Output to satisfy the type
+        return crate::tools::create_command("echo")
+            .arg("R3D thumbnail extracted from embedded JPEG")
+            .output()
+            .map_err(|e| format!("echo failed: {}", e));
         }
     }
 
     // Strategy 2: Try REDline sidecar
-    let redline = crate::tools::find_executable("REDline");
-    let redline_path = std::path::Path::new(&redline);
-    if redline_path.exists() || !redline.contains('/') {
+    if true {
         let fps = probe_fps(input_path).unwrap_or(23.976);
         let frame = ((_timestamp_ms as f64 / 1000.0) * fps) as u64;
 
-        if let Ok(output) = Command::new(&redline)
+        if let Ok(output) = crate::tools::create_command("REDline")
             .args([
                 "--i", input_path,
                 "--o", "thumb",
@@ -517,8 +517,7 @@ fn extract_braw_thumbnail(
     timestamp_ms: u64,
 ) -> Result<std::process::Output, String> {
     // Try braw_bridge first
-    let braw_decoder = crate::tools::find_executable("braw_bridge");
-    let bridge_result = Command::new(&braw_decoder)
+    let bridge_result = crate::tools::create_command("braw_bridge")
         .args(["-f", input_path])
         .output();
     
@@ -528,8 +527,7 @@ fn extract_braw_thumbnail(
         }
         _ => {
             // Try "braw-decode" fallback
-            let fallback_decoder = crate::tools::find_executable("braw-decode");
-            if let Ok(fallback_fmt) = Command::new(&fallback_decoder)
+            if let Ok(fallback_fmt) = crate::tools::create_command("braw-decode")
                 .args(["-f", input_path])
                 .output()
             {
@@ -542,7 +540,7 @@ fn extract_braw_thumbnail(
 
     // Final fallback: try embedded JPEG extraction
     if let Ok(true) = extract_embedded_jpeg_preview(input_path, output_path) {
-        return Command::new("echo")
+        return crate::tools::create_command("echo")
             .arg("BRAW thumbnail extracted from embedded JPEG")
             .output()
             .map_err(|e| format!("echo failed: {}", e));
@@ -551,7 +549,7 @@ fn extract_braw_thumbnail(
     // Last resort: generate a metadata placeholder
     match generate_raw_placeholder(input_path, output_path, "BRAW", "#4a9eff", "Blackmagic SDK required") {
         Ok(true) => {
-            Command::new("echo")
+            crate::tools::create_command("echo")
                 .arg("BRAW placeholder generated")
                 .output()
                 .map_err(|e| format!("echo failed: {}", e))
@@ -579,15 +577,13 @@ fn process_braw_decode(
     let frame_index = ((timestamp_ms as f64 / 1000.0) * fps).round().max(0.0) as u64;
     let frame_end = frame_index.saturating_add(1);
     
-    let ffmpeg = crate::tools::find_executable("ffmpeg");
-    
     // On Windows, 'sh -lc' might not be available, so we use a direct command if possible 
     // or cmd.exe. For now, let's keep the shell approach but adapt for platform.
     #[cfg(target_os = "windows")]
     let cmd = format!(
         "\"{}\" -c rgba -i {frame} -o {frame_end} {input} | \"{}\" {fmt} -vframes 1 -vf scale={w}:-1 -f image2 -vcodec png -update 1 -y {output}",
         decoder,
-        ffmpeg,
+        crate::tools::find_executable("ffmpeg"),
         frame = frame_index,
         frame_end = frame_end,
         input = shell_quote(input_path),
@@ -600,7 +596,7 @@ fn process_braw_decode(
     let cmd = format!(
         "{} -c rgba -i {frame} -o {frame_end} {input} | {} {fmt} -vframes 1 -vf scale={w}:-1 -f image2 -vcodec png -update 1 -y {output}",
         decoder,
-        ffmpeg,
+        crate::tools::find_executable("ffmpeg"),
         frame = frame_index,
         frame_end = frame_end,
         input = shell_quote(input_path),
@@ -611,7 +607,7 @@ fn process_braw_decode(
 
     #[cfg(not(target_os = "windows"))]
     {
-        Command::new("sh")
+        crate::tools::create_command("sh")
             .args(["-lc", &cmd])
             .output()
             .map_err(|e| format!("Failed to run BRAW thumbnail pipeline: {}", e))
@@ -619,7 +615,7 @@ fn process_braw_decode(
     
     #[cfg(target_os = "windows")]
     {
-        Command::new("cmd")
+        crate::tools::create_command("cmd")
             .args(["/C", &cmd])
             .output()
             .map_err(|e| format!("Failed to run BRAW thumbnail pipeline (Windows): {}", e))
@@ -642,9 +638,9 @@ fn is_black_frame(image_path: &str) -> bool {
         return true; // degenerate file, treat as black
     }
 
-    let ffmpeg = crate::tools::find_executable("ffmpeg");
-    let output = Command::new(ffmpeg)
+    let output = crate::tools::create_command("ffmpeg")
         .args([
+            "-nostdin",
             "-i", image_path,
             "-frames:v", "1",
             "-vf", "scale=64:-1",   // tiny decode — 64px wide is plenty for luminance

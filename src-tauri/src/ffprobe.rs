@@ -69,11 +69,11 @@ struct FfprobeFormat {
 
 /// Run ffprobe on a file and parse the JSON output into ClipMetadata
 pub fn probe_file(file_path: &str) -> Result<ClipMetadata, String> {
-    let ffprobe = crate::tools::find_executable("ffprobe");
-    let output = Command::new(ffprobe)
+    let output = crate::tools::create_command("ffprobe")
         .args([
             "-v",
             "quiet",
+            "-nostdin",
             "-print_format",
             "json",
             "-show_format",
