@@ -31,10 +31,10 @@
 ## Phase 4: Distribution & Security
 - [x] Refined Activation UI (Lavender Accent, 4:5 Card Ratio)
 - [x] Visual Admin Dashboard implementation (web_three)
-- [ ] macOS Code Signing & Notarization (Apple Developer ID)
+- [x] macOS Code Signing & Notarization (Apple Developer ID)
 - [ ] Windows Code Signing (EV Certificate)
 - [ ] Tauri Auto-Updater implementation
-- [ ] Dockerize and Deploy Licensing Server to TrueNAS
+- [x] Dockerize and Prepare Licensing Server for NAS Deploy
 
 ---
 *Last Updated: 2026-05-02*

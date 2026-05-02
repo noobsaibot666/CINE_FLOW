@@ -3,7 +3,7 @@ services:
     build: .
     container_name: cineflow-licensing
     ports:
-      - "3000:3000"
+      - "3002:3002"
     volumes:
       - ./data:/app/data
     env_file:

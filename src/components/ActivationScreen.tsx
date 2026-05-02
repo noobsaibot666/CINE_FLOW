@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ArrowRight, Loader2, AlertCircle, CheckCircle2, Monitor, Copy, Check } from 'lucide-react';
+import { ArrowRight, Loader2, AlertCircle, CheckCircle2, Monitor, Check } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 
 interface ActivationScreenProps {
@@ -74,7 +74,7 @@ export const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivated 
             backgroundColor: '#0a0a0c',
             borderRadius: '23px',
             width: '100%',
-            padding: '80px 48px',
+            padding: '48px 40px',
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',
@@ -91,12 +91,12 @@ export const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivated 
                 style={{ width: '100%' }}
               >
                 {/* Brand / App Name */}
-                <div style={{ marginBottom: '56px' }}>
+                <div style={{ marginBottom: '32px' }}>
                   <div style={{
                     display: 'inline-flex',
                     alignItems: 'center',
                     gap: '12px',
-                    marginBottom: '32px'
+                    marginBottom: '20px'
                   }}>
                     <span style={{
                       fontSize: '11px',
@@ -142,7 +142,7 @@ export const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivated 
                   <div style={{ width: '100%', maxWidth: '380px' }}>
                     
                     {/* Email Field */}
-                    <div style={{ marginBottom: '28px', textAlign: 'left' }}>
+                    <div style={{ marginBottom: '20px', textAlign: 'left' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
                         <label style={{ 
                           fontSize: '10px', 
@@ -186,7 +186,7 @@ export const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivated 
                     </div>
 
                     {/* Serial Field */}
-                    <div style={{ marginBottom: '48px', textAlign: 'left' }}>
+                    <div style={{ marginBottom: '32px', textAlign: 'left' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
                         <label style={{ 
                           fontSize: '10px', 
@@ -333,13 +333,13 @@ export const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivated 
 
                 {/* Footer Metadata */}
                 <div style={{ 
-                  marginTop: '64px', 
-                  paddingTop: '32px', 
+                  marginTop: '32px', 
+                  paddingTop: '20px', 
                   borderTop: '1px solid rgba(255,255,255,0.03)',
                   width: '100%',
                   display: 'flex',
                   justifyContent: 'center',
-                  gap: '32px'
+                  gap: '24px'
                 }}>
                   <div 
                     onClick={handleCopyId}
@@ -410,7 +410,7 @@ export const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivated 
                 key="success-state"
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
-                style={{ padding: '60px 0' }}
+                style={{ padding: '40px 0' }}
               >
                 <div style={{
                   width: '80px',

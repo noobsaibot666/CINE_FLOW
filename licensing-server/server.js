@@ -2,10 +2,21 @@ const express = require('express');
 const sqlite3 = require('sqlite3').verbose();
 const crypto = require('crypto');
 require('dotenv').config();
+const cors = require('cors');
+const rateLimit = require('express-rate-limit');
 
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const app = express();
 const port = process.env.PORT || 3000;
+
+// Rate Limiting
+const limiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 100, // limit each IP to 100 requests per windowMs
+    message: { error: 'Too many requests from this IP, please try again later' }
+});
+
+app.use(limiter);
 
 // Database Setup
 const path = require('path');
@@ -93,7 +104,15 @@ app.post('/webhook', express.raw({type: 'application/json'}), async (req, res) =
 });
 
 // 2. Standard API Middlewares
+app.use(cors({
+    origin: ['https://alan-design.com', 'https://www.alan-design.com', 'http://localhost:3000', 'http://127.0.0.1:3000'],
+    methods: ['GET', 'POST', 'DELETE'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+}));
 app.use(express.json());
+
+// Favicon Redirect (Sync with Alan Alves Studio brand)
+app.get('/favicon.ico', (req, res) => res.redirect('https://alan-design.com/vite.svg'));
 
 // 3. Activation Endpoint
 app.post('/activate', (req, res) => {
