@@ -41,6 +41,9 @@ bcrypt = "0.15"
 rand = "0.8"
 trash = "5"
 opencv = { version = "0.92", optional = true, default-features = false, features = ["clang-runtime", "imgcodecs", "imgproc"] }
+machine-uid = "0.3"
+reqwest = { version = "0.12", features = ["json"] }
+ed25519-dalek = "2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cocoa = "0.25"
@@ -49,15 +52,14 @@ objc = "0.2"
 [features]
 default = []
 calibration = ["dep:opencv"]
+direct-dist = []
 
 [profile.release]
-lto = true
+panic = "abort"
 codegen-units = 1
-panic = "unwind"
-# strip removed: on MSVC symbols live in a separate .pdb; keeping it allows
-# crash dump analysis with WinDbg. Re-add strip = "symbols" after the crash
-# is diagnosed and fixed.
-opt-level = 3
+lto = true
+opt-level = "s"
+strip = true
 
 [lints.rust]
 unexpected_cfgs = "allow"

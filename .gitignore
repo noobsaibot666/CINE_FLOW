@@ -39,3 +39,8 @@ MacOS/
 
 # Build outputs
 builds/
+
+# Licensing Secrets
+.env
+*.env
+licensing-server/database.sqlite

@@ -83,6 +83,7 @@ import { useCommandPalette } from "./hooks/useCommandPalette";
 import { CommandPalette } from "./components/CommandPalette";
 import { getJumpIntervalForThumbCount, getThumbnailCacheContext } from "./utils/thumbnailIntervals";
 import { convertFileSrc, invokeGuarded, isTauriReloading } from "./utils/tauri";
+import { ActivationScreen } from "./components/ActivationScreen";
 
 // --- Error Boundary ---
 class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; error: any }> {
@@ -140,6 +141,17 @@ function AppContent() {
     if (IS_DEV) return null;
     return localStorage.getItem('wp_activeMediaApp') || null;
   });
+
+  const [isActivated, setIsActivated] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    invoke<any>("get_license_status").then((res) => {
+      setIsActivated(res.active);
+    }).catch(e => {
+      console.error("License check failed", e);
+      setIsActivated(false);
+    });
+  }, []);
   const [activeProductionApp, setActiveProductionApp] = useState<string | null>(() => {
     if (IS_DEV) return null;
     return localStorage.getItem('wp_activeProdApp') || null;
@@ -1340,6 +1352,22 @@ function AppContent() {
 
     return [...navigationActions, ...projectActions];
   }, [refreshProjectClips, safeInvoke, setActiveMediaWorkspaceApp, setActivePreproductionApp, setActiveTab, setPhaseState]);
+
+  if (isActivated === null) {
+    return (
+      <div className="fixed inset-0 flex flex-col items-center justify-center bg-[#000000]">
+        <div className="w-20 h-20 border-2 border-blue-500/10 border-t-blue-500 rounded-full animate-spin mb-10" />
+        <div className="flex flex-col items-center gap-4">
+          <h2 className="text-white font-bold tracking-[0.3em] uppercase text-sm">CineFlow</h2>
+          <p className="text-slate-600 text-[10px] uppercase tracking-[0.4em]">Initialising Production Hub</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!isActivated) {
+    return <ActivationScreen onActivated={() => setIsActivated(true)} />;
+  }
 
   return (
     <div className="app-container">

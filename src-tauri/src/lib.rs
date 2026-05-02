@@ -12,6 +12,7 @@ mod export;
 mod ffprobe;
 mod folders;
 mod jobs;
+mod license;
 mod lut;
 mod perf;
 mod production;
@@ -391,6 +392,9 @@ pub fn run() {
             commands::production_matchlab_export_calibration_package,
             commands::camera_match_analyze_clip,
             commands::reset_app_data,
+            license::activate_license,
+            license::get_license_status,
+            license::get_hwid,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
