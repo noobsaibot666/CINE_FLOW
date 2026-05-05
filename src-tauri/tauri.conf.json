@@ -77,7 +77,22 @@
         "Frameworks/QtXml.framework",
         "Frameworks/QtXmlPatterns.framework",
         "Frameworks/SDL2.framework"
-      ]
+      ],
+      "dmg": {
+        "background": "dgm_bg.png",
+        "windowSize": {
+          "width": 600,
+          "height": 400
+        },
+        "appPosition": {
+          "x": 140,
+          "y": 200
+        },
+        "applicationFolderPosition": {
+          "x": 460,
+          "y": 200
+        }
+      }
     },
     "externalBin": [
       "bin/ffmpeg",

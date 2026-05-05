@@ -57,6 +57,7 @@ const MosaicBuilder = lazy(() => import("./components/MosaicBuilder").then(m => 
 const DuplicateFinderApp = lazy(() => import("./components/DuplicateFinderApp").then(m => ({ default: m.DuplicateFinderApp })));
 const StarterSetup = lazy(() => import("./components/PreProduction/StarterSetup"));
 const ShotList = lazy(() => import("./components/PreProduction/ShotList"));
+const BrandedInstaller = lazy(() => import("./components/BrandedInstaller").then(m => ({ default: m.BrandedInstaller })));
 import { TourGuide, TourStep } from "./components/TourGuide";
 import { exportPdf, exportImage, exportMosaicImage, exportMosaicPdf } from "./utils/ExportUtils";
 import appLogo from "./assets/Icon_C.png";
@@ -137,8 +138,8 @@ function AppContent() {
   const DEV_BOOT_RESET_KEY = "wrap_preview:dev_boot_reset_done";
   const IS_DEV = import.meta.env.DEV;
 
-  const [activeTab, setActiveTab] = useState<"home" | "production" | "preproduction" | "shot-planner" | "media-workspace" | "contact" | "blocks" | "safe-copy" | "all">(() => {
-    if (IS_DEV) return "home";
+  const [activeTab, setActiveTab] = useState<"home" | "production" | "preproduction" | "shot-planner" | "media-workspace" | "contact" | "blocks" | "safe-copy" | "all" | "installer">(() => {
+    if (IS_DEV) return "installer";
     const saved = localStorage.getItem('wp_activeTab');
     return (saved as any) || 'home';
   });
@@ -2260,6 +2261,8 @@ function AppContent() {
                   lockedModuleIds={licenseMode === 'trial' ? ['onset-coach', 'match-normalize', 'frame-preview'] : []}
                 />
               )
+            ) : activeTab === 'installer' ? (
+              <BrandedInstaller onEnterSuite={() => setActiveTab("home")} />
             ) : (
               <div className="scrollable-view">
                 <div className="onboarding-container">
