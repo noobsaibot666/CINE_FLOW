@@ -55,11 +55,11 @@ calibration = ["dep:opencv"]
 direct-dist = []
 
 [profile.release]
-panic = "abort"
+panic = "unwind"
 codegen-units = 1
 lto = true
 opt-level = "s"
-strip = true
+# strip omitted: on MSVC symbols live in a separate .pdb needed for WinDbg crash analysis
 
 [lints.rust]
 unexpected_cfgs = "allow"
