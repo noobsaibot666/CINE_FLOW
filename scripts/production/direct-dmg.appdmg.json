@@ -1,0 +1,26 @@
+{
+  "title": "CineFlow Suite",
+  "icon": "../../src-tauri/icons/icon.icns",
+  "background": "../../src-tauri/dgm_bg.png",
+  "icon-size": 96,
+  "window": {
+    "size": {
+      "width": 720,
+      "height": 460
+    }
+  },
+  "contents": [
+    {
+      "x": 230,
+      "y": 220,
+      "type": "file",
+      "path": "../../src-tauri/target/release/bundle/macos/CineFlow Suite.app"
+    },
+    {
+      "x": 490,
+      "y": 220,
+      "type": "link",
+      "path": "/Applications"
+    }
+  ]
+}
