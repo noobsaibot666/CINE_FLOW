@@ -80,3 +80,35 @@ These rules come from `docs/AI_DEV_RULES.md` and `docs/AI_UI_CONTRACT.md` — fo
 - `docs/DEVELOPER_ONBOARDING.md` — quick-start and workspace overview
 - `docs/APP_ARCHITECTURE.md` — Camera Match Lab, BRAW pipeline, frame sampling, design system details
 - `docs/PHASES.md` — feature roadmap
+
+## Cross-Platform Rules (macOS ↔ Windows)
+
+Windows builds and testing are handled on the Windows side. To avoid
+breaking them on every push, follow these constraints before committing.
+
+### tauri.conf.json — never touch these two fields
+
+- `"targets"` must stay `"all"` — never change to `["app","dmg"]`
+- `"beforeBuildCommand"` must stay `"npm run build"` — never set to `""`
+
+### Cargo.toml — release profile constraints
+
+- `panic` must stay `"unwind"` — not `"abort"` (WinDbg crash analysis)
+- Do NOT add `strip = true/symbols/debuginfo` — same reason
+
+`opt-level`, `lto`, `codegen-units` are safe to change.
+
+### license.rs — LicenseStatus struct rule
+
+When adding a field to `LicenseStatus`, initialize it in **every** return
+site across all `cfg` branches — including the success path of
+`activate_license`. The compiler only catches this when building with
+`--features direct-dist`, which only runs on Windows. Always run:
+
+    cargo check --manifest-path src-tauri/Cargo.toml --features direct-dist
+
+before pushing, even if your macOS build is clean.
+
+### libs/ and Frameworks/ are macOS-only
+
+Do not reference them in any non-macOS bundle config key in tauri.conf.json.
