@@ -186,6 +186,9 @@ pub async fn activate_license(app: AppHandle, key: String, email: String) -> Res
             key: Some(token.key),
             hwid,
             message: None,
+            is_trial: false,
+            trial_days_remaining: None,
+            trial_expired: false,
         })
     } else {
         let status_code = res.status();
