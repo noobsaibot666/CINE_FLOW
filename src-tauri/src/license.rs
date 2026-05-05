@@ -1,9 +1,16 @@
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "direct-dist")]
 use std::fs;
+#[cfg(feature = "direct-dist")]
 use std::path::PathBuf;
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
+#[cfg(feature = "direct-dist")]
+use tauri::Manager;
+#[cfg(feature = "direct-dist")]
 use machine_uid;
+#[cfg(feature = "direct-dist")]
 use ed25519_dalek::{VerifyingKey, Signature, Verifier};
+#[cfg(feature = "direct-dist")]
 use base64::{Engine as _, engine::general_purpose};
 
 #[cfg(feature = "direct-dist")]
@@ -42,6 +49,7 @@ struct TrialState {
 #[cfg(feature = "direct-dist")]
 const TRIAL_DURATION_DAYS: i64 = 14;
 
+#[cfg(feature = "direct-dist")]
 #[derive(Debug, Serialize, Deserialize)]
 struct ActivationToken {
     pub key: String,
@@ -186,6 +194,9 @@ pub async fn activate_license(app: AppHandle, key: String, email: String) -> Res
             key: Some(token.key),
             hwid,
             message: None,
+            is_trial: false,
+            trial_days_remaining: None,
+            trial_expired: false,
         })
     } else {
         let status_code = res.status();
@@ -240,6 +251,7 @@ pub fn get_hwid() -> String {
 }
 
 #[cfg(not(feature = "direct-dist"))]
+#[allow(dead_code)]
 pub fn check_license(_app: &AppHandle) -> LicenseStatus {
     LicenseStatus {
         active: true,
