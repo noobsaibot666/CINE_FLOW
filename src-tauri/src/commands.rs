@@ -5703,6 +5703,26 @@ async fn ensure_matchlab_proxy_internal(
         }
     }
 
+    // Activate any security-scoped bookmark for the source file's volume before
+    // spawning the blocking decoder task. Without this, sandboxed processes
+    // (REDline, braw-decode) cannot access files on user-selected external volumes.
+    #[cfg(target_os = "macos")]
+    let _proxy_bookmark_guard: Option<crate::mac_bookmarks::BookmarkGuard> = {
+        state
+            .db
+            .list_project_roots(project_id)
+            .ok()
+            .and_then(|roots| {
+                roots.into_iter().find(|r| source_path.starts_with(&r.root_path))
+            })
+            .and_then(|root| root.bookmark)
+            .and_then(|data| {
+                crate::mac_bookmarks::start_accessing_bookmark(&data)
+                    .ok()
+                    .map(|(_, guard)| guard)
+            })
+    };
+
     let result: Result<ProductionMatchLabProxyResult, String> = async {
         if crate::jobs::JobManager::is_cancelled(&cancel_flag) {
             return Err("Proxy generation cancelled".to_string());

@@ -8,6 +8,19 @@ use objc::{msg_send, sel, sel_impl, class};
 use cocoa::base::{id, nil};
 use cocoa::foundation::{NSString, NSData, NSURL};
 
+/// RAII guard that calls `stopAccessingSecurityScopedResource` on drop.
+/// The underlying NSURL is reference-counted and safe to use across threads.
+pub struct BookmarkGuard(id);
+unsafe impl Send for BookmarkGuard {}
+unsafe impl Sync for BookmarkGuard {}
+impl Drop for BookmarkGuard {
+    fn drop(&mut self) {
+        unsafe {
+            let _: () = msg_send![self.0, stopAccessingSecurityScopedResource];
+        }
+    }
+}
+
 #[allow(dead_code)]
 pub fn create_secure_bookmark(path: &str) -> Result<Vec<u8>, String> {
     unsafe {
@@ -41,20 +54,20 @@ pub fn create_secure_bookmark(path: &str) -> Result<Vec<u8>, String> {
 }
 
 #[allow(dead_code)]
-pub fn start_accessing_bookmark(bookmark_data: &[u8]) -> Result<(String, id), String> {
+pub fn start_accessing_bookmark(bookmark_data: &[u8]) -> Result<(String, BookmarkGuard), String> {
     unsafe {
         let ns_data = NSData::dataWithBytes_length_(nil, bookmark_data.as_ptr() as *const _, bookmark_data.len() as u64);
-        
+
         let mut error: id = nil;
         let mut is_stale: bool = false;
         // NSURLBookmarkResolutionWithSecurityScope = 1 << 10
         let options = 1 << 10;
-        
-        let url: id = msg_send![class!(NSURL), 
-            URLByResolvingBookmarkData:ns_data 
-            options:options 
-            relativeToURL:nil 
-            bookmarkDataIsStale:&mut is_stale 
+
+        let url: id = msg_send![class!(NSURL),
+            URLByResolvingBookmarkData:ns_data
+            options:options
+            relativeToURL:nil
+            bookmarkDataIsStale:&mut is_stale
             error:&mut error
         ];
 
@@ -72,7 +85,7 @@ pub fn start_accessing_bookmark(bookmark_data: &[u8]) -> Result<(String, id), St
             .to_string_lossy()
             .into_owned();
 
-        Ok((path_rust, url))
+        Ok((path_rust, BookmarkGuard(url)))
     }
 }
 
@@ -82,3 +95,4 @@ pub fn stop_accessing_url(url: id) {
         let _: () = msg_send![url, stopAccessingSecurityScopedResource];
     }
 }
+
