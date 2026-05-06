@@ -15,10 +15,10 @@ use base64::{Engine as _, engine::general_purpose};
 
 #[cfg(feature = "direct-dist")]
 fn get_server_url() -> String {
-    // XOR obfuscated: "https://licensing.alan-design.com"
+    // XOR obfuscated: "https://alan-design.com/licensing"
     let secret: [u8; 33] = [
-        0x2a, 0x36, 0x36, 0x32, 0x31, 0x78, 0x6d, 0x6d, 0x2e, 0x2b, 0x21, 0x27, 0x2c, 0x31, 0x2b, 0x2c, 
-        0x25, 0x6c, 0x23, 0x2e, 0x23, 0x2c, 0x6f, 0x26, 0x27, 0x31, 0x2b, 0x25, 0x2c, 0x6c, 0x21, 0x2d, 0x2f
+        0x2a, 0x36, 0x36, 0x32, 0x31, 0x78, 0x6d, 0x6d, 0x23, 0x2e, 0x23, 0x2c, 0x6f, 0x26, 0x27, 0x31,
+        0x2b, 0x25, 0x2c, 0x6c, 0x21, 0x2d, 0x2f, 0x6d, 0x2e, 0x2b, 0x21, 0x27, 0x2c, 0x31, 0x2b, 0x2c, 0x25
     ];
     let key = 0x42;
     secret.iter().map(|&b| (b ^ key) as char).collect()
@@ -37,6 +37,11 @@ pub struct LicenseStatus {
     pub is_trial: bool,
     pub trial_days_remaining: Option<i64>,
     pub trial_expired: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LicenseRecoveryStatus {
+    pub message: String,
 }
 
 #[cfg(feature = "direct-dist")]
@@ -75,6 +80,56 @@ fn get_trial_path(app: &AppHandle) -> PathBuf {
 }
 
 #[cfg(feature = "direct-dist")]
+fn check_trial_status(app: &AppHandle, hwid: &str) -> Option<LicenseStatus> {
+    let trial_path = get_trial_path(app);
+    if !trial_path.exists() {
+        return None;
+    }
+
+    let obfuscated = fs::read(&trial_path).ok()?;
+    let content: String = obfuscated.iter().map(|&b| (b ^ 0x55) as char).collect();
+    let trial = serde_json::from_str::<TrialState>(&content).ok()?;
+
+    if trial.hwid != hwid {
+        return Some(LicenseStatus {
+            active: false,
+            key: None,
+            hwid: hwid.to_string(),
+            message: Some("No license found".into()),
+            is_trial: false,
+            trial_days_remaining: None,
+            trial_expired: false,
+        });
+    }
+
+    let now = chrono::Utc::now().timestamp();
+    let elapsed_days = (now - trial.started_at) / 86_400;
+    let remaining = TRIAL_DURATION_DAYS - elapsed_days;
+
+    if remaining > 0 {
+        Some(LicenseStatus {
+            active: false,
+            key: None,
+            hwid: hwid.to_string(),
+            message: None,
+            is_trial: true,
+            trial_days_remaining: Some(remaining),
+            trial_expired: false,
+        })
+    } else {
+        Some(LicenseStatus {
+            active: false,
+            key: None,
+            hwid: hwid.to_string(),
+            message: Some("Trial expired".into()),
+            is_trial: false,
+            trial_days_remaining: Some(0),
+            trial_expired: true,
+        })
+    }
+}
+
+#[cfg(feature = "direct-dist")]
 pub fn check_license(app: &AppHandle) -> LicenseStatus {
     let hwid = get_hwid();
     let path = get_license_path(app);
@@ -95,6 +150,9 @@ pub fn check_license(app: &AppHandle) -> LicenseStatus {
                     if verify_signature(&token) {
                         return LicenseStatus { active: true, key: Some(token.key), hwid, message: None, is_trial: false, trial_days_remaining: None, trial_expired: false };
                     } else {
+                        if let Some(trial_status) = check_trial_status(app, &hwid) {
+                            return trial_status;
+                        }
                         return LicenseStatus { active: false, key: Some(token.key), hwid, message: Some("Invalid signature".into()), is_trial: false, trial_days_remaining: None, trial_expired: false };
                     }
                 }
@@ -106,25 +164,8 @@ pub fn check_license(app: &AppHandle) -> LicenseStatus {
     }
 
     // No valid license — check for trial state
-    let trial_path = get_trial_path(app);
-    if trial_path.exists() {
-        if let Ok(obfuscated) = fs::read(&trial_path) {
-            let content: String = obfuscated.iter().map(|&b| (b ^ 0x55) as char).collect();
-            if let Ok(trial) = serde_json::from_str::<TrialState>(&content) {
-                // HWID must match to prevent trial copying across machines
-                if trial.hwid != hwid {
-                    return LicenseStatus { active: false, key: None, hwid, message: Some("No license found".into()), is_trial: false, trial_days_remaining: None, trial_expired: false };
-                }
-                let now = chrono::Utc::now().timestamp();
-                let elapsed_days = (now - trial.started_at) / 86_400;
-                let remaining = TRIAL_DURATION_DAYS - elapsed_days;
-                if remaining > 0 {
-                    return LicenseStatus { active: false, key: None, hwid, message: None, is_trial: true, trial_days_remaining: Some(remaining), trial_expired: false };
-                } else {
-                    return LicenseStatus { active: false, key: None, hwid, message: Some("Trial expired".into()), is_trial: false, trial_days_remaining: Some(0), trial_expired: true };
-                }
-            }
-        }
+    if let Some(trial_status) = check_trial_status(app, &hwid) {
+        return trial_status;
     }
 
     LicenseStatus { active: false, key: None, hwid, message: Some("No license found".into()), is_trial: false, trial_days_remaining: None, trial_expired: false }
@@ -163,11 +204,13 @@ fn verify_signature(token: &ActivationToken) -> bool {
 pub async fn activate_license(app: AppHandle, key: String, email: String) -> Result<LicenseStatus, String> {
     let hwid = get_hwid();
     let client = reqwest::Client::new();
+    let clean_key = key.trim().to_uppercase();
+    let clean_email = email.trim().to_lowercase();
     
     let res = client.post(format!("{}/activate", get_server_url()))
         .json(&serde_json::json!({
-            "key": key,
-            "email": email,
+            "key": clean_key,
+            "email": clean_email,
             "hwid": hwid,
         }))
         .send()
@@ -215,6 +258,64 @@ pub async fn activate_license(app: AppHandle, key: String, email: String) -> Res
             }
         }
     }
+}
+
+#[cfg(feature = "direct-dist")]
+#[tauri::command]
+pub async fn recover_license_key(email: String) -> Result<LicenseRecoveryStatus, String> {
+    let clean_email = email.trim().to_lowercase();
+    if clean_email.is_empty() {
+        return Err("Please enter your email first to recover your key.".into());
+    }
+
+    let client = reqwest::Client::new();
+    let res = client
+        .post(format!("{}/resend-key", get_server_url()))
+        .json(&serde_json::json!({ "email": clean_email }))
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+
+    if res.status().is_success() {
+        Ok(LicenseRecoveryStatus {
+            message: "License key recovery sent to your email.".into(),
+        })
+    } else {
+        let status_code = res.status();
+        let body_text = res
+            .text()
+            .await
+            .unwrap_or_else(|_| "Could not read error response".to_string());
+
+        if status_code == reqwest::StatusCode::NOT_FOUND {
+            return Err(
+                "License key recovery is not available on the licensing server yet. Please use the Support button and include the email used for purchase."
+                    .into(),
+            );
+        }
+
+        if let Ok(json_err) = serde_json::from_str::<serde_json::Value>(&body_text) {
+            let msg = json_err["error"]
+                .as_str()
+                .or_else(|| json_err["message"].as_str())
+                .unwrap_or("License key recovery failed")
+                .to_string();
+            Err(msg)
+        } else if status_code.is_client_error() || status_code.is_server_error() {
+            Err(format!("Server Error ({}): {}", status_code, summarize_server_error(&body_text)))
+        } else {
+            Err("License key recovery failed: Unknown server response".into())
+        }
+    }
+}
+
+#[cfg(feature = "direct-dist")]
+fn summarize_server_error(body: &str) -> String {
+    if body.contains("<html") || body.contains("<!DOCTYPE html") {
+        return "The licensing server returned an HTML error page.".into();
+    }
+
+    body.trim().chars().take(240).collect()
 }
 
 #[cfg(feature = "direct-dist")]
@@ -281,6 +382,12 @@ pub fn get_license_status() -> LicenseStatus {
 #[cfg(not(feature = "direct-dist"))]
 #[tauri::command]
 pub async fn activate_license(_key: String, _email: String) -> Result<LicenseStatus, String> {
+    Err("Licensing not enabled in this build".into())
+}
+
+#[cfg(not(feature = "direct-dist"))]
+#[tauri::command]
+pub async fn recover_license_key(_email: String) -> Result<LicenseRecoveryStatus, String> {
     Err("Licensing not enabled in this build".into())
 }
 
