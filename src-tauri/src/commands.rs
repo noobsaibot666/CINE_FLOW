@@ -334,6 +334,20 @@ pub async fn get_clips(
     let roots = db
         .list_project_roots(&project_id)
         .map_err(|e| format!("Failed to get project roots: {}", e))?;
+
+    // Activate security-scoped bookmarks for all roots before checking file existence.
+    // Without this, Path::exists() returns false for user-selected external locations
+    // on macOS once the original file-dialog bookmark guard has dropped.
+    #[cfg(target_os = "macos")]
+    let _bookmark_guards: Vec<_> = roots
+        .iter()
+        .filter_map(|r| {
+            r.bookmark
+                .as_ref()
+                .and_then(|data| mac_bookmarks::start_accessing_bookmark(data).ok())
+        })
+        .collect();
+
     let root_map: std::collections::HashMap<String, String> =
         roots.into_iter().map(|r| (r.id, r.root_path)).collect();
 
