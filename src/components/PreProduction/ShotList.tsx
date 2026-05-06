@@ -185,6 +185,15 @@ function inferInventoryCategory(value: string) {
   return "misc";
 }
 
+// Returns false when a name clearly belongs to a different specific category,
+// preventing cross-contamination in suggestion lists.
+function isSuggestionSafeForType(name: string | null | undefined, targetType: string): boolean {
+  if (!name || !name.trim()) return false;
+  const inferred = inferInventoryCategory(name.trim());
+  if (inferred === "misc") return true;
+  return inferred === targetType;
+}
+
 function parseMarkdownEquipmentInventory(markdown: string): InventoryEntry[] {
   const entries: InventoryEntry[] = [];
   let activeCategory = "misc";
@@ -646,7 +655,10 @@ export default function ShotList({ appVersion }: ShotListProps) {
   const cameraNameSuggestions = useMemo(() => {
     return uniqueSuggestions([
       ...getItemSuggestions("camera"),
-      ...(bundle?.items || []).filter((item) => item.item_type === "camera").flatMap((item) => [item.item_name, item.camera_label]),
+      ...(bundle?.items || [])
+        .filter((item) => item.item_type === "camera")
+        .flatMap((item) => [item.item_name, item.camera_label])
+        .filter((name) => isSuggestionSafeForType(name, "camera")),
       ...(importedSuggestionsByCategory.get("camera") || []),
     ]);
   }, [bundle?.items, importedSuggestionsByCategory]);
@@ -654,7 +666,10 @@ export default function ShotList({ appVersion }: ShotListProps) {
   const lensSuggestions = useMemo(() => {
     return uniqueSuggestions([
       ...getItemSuggestions("lens"),
-      ...(bundle?.items || []).filter((item) => item.item_type === "lens").flatMap((item) => [item.item_name, item.camera_label]),
+      ...(bundle?.items || [])
+        .filter((item) => item.item_type === "lens")
+        .flatMap((item) => [item.item_name, item.camera_label])
+        .filter((name) => isSuggestionSafeForType(name, "lens")),
       ...(importedSuggestionsByCategory.get("lens") || []),
     ]);
   }, [bundle?.items, importedSuggestionsByCategory]);
@@ -663,7 +678,10 @@ export default function ShotList({ appVersion }: ShotListProps) {
     return uniqueSuggestions([
       ...getItemSuggestions("tripod"),
       ...getItemSuggestions("motion"),
-      ...(bundle?.items || []).filter((item) => item.item_type === "tripod" || item.item_type === "motion").flatMap((item) => [item.item_name, item.camera_label]),
+      ...(bundle?.items || [])
+        .filter((item) => item.item_type === "tripod" || item.item_type === "motion")
+        .flatMap((item) => [item.item_name, item.camera_label])
+        .filter((name) => isSuggestionSafeForType(name, "tripod") || isSuggestionSafeForType(name, "motion")),
       ...(importedSuggestionsByCategory.get("tripod") || []),
       ...(importedSuggestionsByCategory.get("motion") || []),
     ]);
@@ -672,7 +690,10 @@ export default function ShotList({ appVersion }: ShotListProps) {
   const powerSuggestions = useMemo(() => {
     return uniqueSuggestions([
       ...getItemSuggestions("power"),
-      ...(bundle?.items || []).filter((item) => item.item_type === "power").flatMap((item) => [item.item_name, item.camera_label]),
+      ...(bundle?.items || [])
+        .filter((item) => item.item_type === "power")
+        .map((item) => item.item_name)
+        .filter((name) => isSuggestionSafeForType(name, "power")),
       ...(importedSuggestionsByCategory.get("power") || []),
     ]);
   }, [bundle?.items, importedSuggestionsByCategory]);
@@ -680,7 +701,10 @@ export default function ShotList({ appVersion }: ShotListProps) {
   const monitorSuggestions = useMemo(() => {
     return uniqueSuggestions([
       ...getItemSuggestions("monitor"),
-      ...(bundle?.items || []).filter((item) => item.item_type === "monitor").flatMap((item) => [item.item_name, item.camera_label]),
+      ...(bundle?.items || [])
+        .filter((item) => item.item_type === "monitor")
+        .map((item) => item.item_name)
+        .filter((name) => isSuggestionSafeForType(name, "monitor")),
       ...(importedSuggestionsByCategory.get("monitor") || []),
     ]);
   }, [bundle?.items, importedSuggestionsByCategory]);
@@ -688,7 +712,10 @@ export default function ShotList({ appVersion }: ShotListProps) {
   const mediaSuggestions = useMemo(() => {
     return uniqueSuggestions([
       ...getItemSuggestions("media"),
-      ...(bundle?.items || []).filter((item) => item.item_type === "media").flatMap((item) => [item.item_name, item.camera_label]),
+      ...(bundle?.items || [])
+        .filter((item) => item.item_type === "media")
+        .map((item) => item.item_name)
+        .filter((name) => isSuggestionSafeForType(name, "media")),
       ...(importedSuggestionsByCategory.get("media") || []),
     ]);
   }, [bundle?.items, importedSuggestionsByCategory]);
@@ -699,7 +726,8 @@ export default function ShotList({ appVersion }: ShotListProps) {
       ...getItemSuggestions("misc"),
       ...(bundle?.items || [])
         .filter((item) => ["grip", "misc"].includes(item.item_type))
-        .flatMap((item) => [item.item_name, item.camera_label]),
+        .map((item) => item.item_name)
+        .filter((name) => isSuggestionSafeForType(name, "grip") || isSuggestionSafeForType(name, "misc")),
       ...(importedSuggestionsByCategory.get("grip") || []),
       ...(importedSuggestionsByCategory.get("misc") || []),
     ]);
@@ -709,7 +737,8 @@ export default function ShotList({ appVersion }: ShotListProps) {
     const defaults = ["Static", "Handheld", "Tripod", "Gimbal", "Slider", "Pan", "Tilt", "Crane", "Dolly"];
     const derived = (bundle?.items || [])
       .filter((item) => item.item_type === "tripod" || item.item_type === "motion")
-      .map((item) => item.item_name);
+      .map((item) => item.item_name)
+      .filter((name) => isSuggestionSafeForType(name, "tripod") || isSuggestionSafeForType(name, "motion"));
     return uniqueSuggestions([
       ...defaults,
       ...derived,
@@ -726,7 +755,10 @@ export default function ShotList({ appVersion }: ShotListProps) {
   const audioSuggestions = useMemo(() => {
     return uniqueSuggestions([
       ...getItemSuggestions("sound"),
-      ...(bundle?.items || []).filter((item) => item.item_type === "sound").map((item) => item.item_name),
+      ...(bundle?.items || [])
+        .filter((item) => item.item_type === "sound")
+        .map((item) => item.item_name)
+        .filter((name) => isSuggestionSafeForType(name, "sound")),
       ...(importedSuggestionsByCategory.get("sound") || []),
     ]);
   }, [bundle?.items, importedSuggestionsByCategory]);
@@ -734,7 +766,10 @@ export default function ShotList({ appVersion }: ShotListProps) {
   const lightingSuggestions = useMemo(() => {
     return uniqueSuggestions([
       ...getItemSuggestions("light"),
-      ...(bundle?.items || []).filter((item) => item.item_type === "light").map((item) => item.item_name),
+      ...(bundle?.items || [])
+        .filter((item) => item.item_type === "light")
+        .map((item) => item.item_name)
+        .filter((name) => isSuggestionSafeForType(name, "light")),
       ...(importedSuggestionsByCategory.get("light") || []),
     ]);
   }, [bundle?.items, importedSuggestionsByCategory]);

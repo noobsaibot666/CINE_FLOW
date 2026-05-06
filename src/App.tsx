@@ -909,18 +909,23 @@ function AppContent() {
 
     const targetPhase: Phase = (targetTab === "preproduction" || targetTab === "shot-planner" || targetTab === "mosaic-builder") ? "pre" : "post";
 
-    setPhaseState(targetPhase, { scanning: true, projectId: null, clips: [] });
+    // When loading more into an existing Shot Planner session, keep existing clips visible
+    // during the scan so the user doesn't lose their tagged references.
+    const isAppendingToShotPlanner =
+      targetTab === "shot-planner" &&
+      projectStates[targetPhase].projectId !== null &&
+      projectStates[targetPhase].clips.length > 0;
+
+    if (isAppendingToShotPlanner) {
+      setPhaseState(targetPhase, { scanning: true });
+    } else {
+      setPhaseState(targetPhase, { scanning: true, projectId: null, clips: [] });
+    }
     if (targetTab) setPostScanTab(targetTab);
 
     try {
-      // If mode is files, selected is string | string[]. We want to pass a string or handle the array.
-      // For now, let's pass a special prefix or iterate. 
-      // Actually, let's update scan_folder to handle multiple paths.
-      // But for now, if it's one path, just pass it.
-      
       const paths = Array.isArray(selected) ? selected : [selected];
-      
-      // We'll call a new scan_media command instead of scan_folder
+
       const result = await safeInvoke<ScanResult>("scan_media", {
         paths,
         phase: targetPhase,
@@ -929,13 +934,31 @@ function AppContent() {
       // Update the mapping Ref so listeners can find this project
       projectPhaseMapRef.current.set(result.project_id, targetPhase);
 
-      setPhaseState(targetPhase, {
-        projectId: result.project_id,
-        projectName: result.project_name,
-        clips: result.clips.map((clip) => ({ clip, thumbnails: [] })),
-        extracting: true,
-        extractProgress: { done: 0, total: result.clip_count }
-      });
+      if (isAppendingToShotPlanner) {
+        // Merge new clips into the existing list, deduplicating by clip id
+        setPhaseState(targetPhase, (prev) => {
+          const existingIds = new Set(prev.clips.map((c) => c.clip.id));
+          const newClips = result.clips
+            .filter((clip) => !existingIds.has(clip.id))
+            .map((clip) => ({ clip, thumbnails: [] }));
+          return {
+            ...prev,
+            projectId: result.project_id,
+            projectName: result.project_name,
+            clips: [...prev.clips, ...newClips],
+            extracting: true,
+            extractProgress: { done: 0, total: result.clip_count },
+          };
+        });
+      } else {
+        setPhaseState(targetPhase, {
+          projectId: result.project_id,
+          projectName: result.project_name,
+          clips: result.clips.map((clip) => ({ clip, thumbnails: [] })),
+          extracting: true,
+          extractProgress: { done: 0, total: result.clip_count }
+        });
+      }
 
       // Use the first path as the path for recent projects
       addRecentProject(result.project_id, result.project_name, paths[0], targetPhase);
@@ -948,16 +971,19 @@ function AppContent() {
         }
       );
 
-      refreshProjectClips(result.project_id, targetPhase).catch((err) => {
-        console.warn("Initial clip refresh failed", err);
-      });
+      // Only refresh clips from DB on initial load; in append mode we already have the merged list
+      if (!isAppendingToShotPlanner) {
+        refreshProjectClips(result.project_id, targetPhase).catch((err) => {
+          console.warn("Initial clip refresh failed", err);
+        });
+      }
     } catch (e) {
       console.error("Scan error:", e);
       setUiError({ title: "Scan failed", hint: "Verify folder access and media formats, then retry." });
     } finally {
       setPhaseState(targetPhase, { scanning: false });
     }
-  }, [addRecentProject, refreshProjectClips, safeInvoke, setPhaseState]);
+  }, [addRecentProject, projectStates, refreshProjectClips, safeInvoke, setPhaseState]);
 
   useEffect(() => {
     if (!projectId) {
@@ -2292,7 +2318,6 @@ function AppContent() {
                     >
                       <div className="module-icon"><Boxes size={22} strokeWidth={1.35} /></div>
                       <div className="module-info">
-                        <span className="module-label">Pre-Production</span>
                         <h2>Pre-Production</h2>
                         <p>Plan shots, build references, generate folder structure.</p>
                         <span className="module-action">Enter Module <ArrowRight size={16} /></span>
@@ -2308,7 +2333,6 @@ function AppContent() {
                     >
                       <div className="module-icon"><Camera size={22} strokeWidth={1.35} /></div>
                       <div className="module-info">
-                        <span className="module-label">Production</span>
                         <h2>Production</h2>
                         <p>Plan looks, lock exposure, and match cameras on set.</p>
                         <span className="module-action">Enter Module <ArrowRight size={16} /></span>
@@ -2324,7 +2348,6 @@ function AppContent() {
                     >
                       <div className="module-icon"><Briefcase size={22} strokeWidth={1.35} /></div>
                       <div className="module-info">
-                        <span className="module-label">Post-Production</span>
                         <h2>Post-Production</h2>
                         <p>Review footage, verify copies, build selects, export handoff.</p>
                         <span className="module-action">Enter Module <ArrowRight size={16} /></span>

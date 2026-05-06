@@ -296,7 +296,6 @@ export function DuplicateFinderApp() {
       <div className="duplicate-finder-header">
         <div className="header-left">
           <h2>Duplicate File Finder</h2>
-          <p>Recursive content-based scanning across multiple directories.</p>
         </div>
         <div className="header-right">
           <button className="btn btn-secondary btn-glass" onClick={addFolder} disabled={isScanning}>
@@ -498,12 +497,7 @@ export function DuplicateFinderApp() {
           font-size: 1.75rem;
           font-weight: 700;
           letter-spacing: -0.02em;
-        }
-
-        .header-left p {
-          margin: 8px 0 0;
-          color: var(--text-secondary);
-          font-size: 0.95rem;
+          white-space: nowrap;
         }
 
         .header-right {
