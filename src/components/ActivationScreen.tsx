@@ -2,11 +2,30 @@ import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ArrowRight, Loader2, AlertCircle, CheckCircle2, Monitor, Check } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
+import { openExternalUrl, PURCHASE_URL, SUPPORT_URL } from '../utils/externalLinks';
 
 interface ActivationScreenProps {
   onActivated: () => void;
-  onTrialStarted?: () => void;
+  onTrialStarted?: (status: LicenseStatus) => void | Promise<void>;
   mode?: 'inactive' | 'expired';
+}
+
+interface LicenseStatus {
+  active: boolean;
+  message?: string | null;
+  is_trial: boolean;
+  trial_days_remaining?: number | null;
+  trial_expired: boolean;
+}
+
+function getErrorMessage(error: unknown, fallback: string) {
+  if (typeof error === 'string') return error;
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === 'object' && 'message' in error) {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === 'string') return message;
+  }
+  return fallback;
 }
 
 export const ActivationScreen: React.FC<ActivationScreenProps> = ({
@@ -19,7 +38,9 @@ export const ActivationScreen: React.FC<ActivationScreenProps> = ({
   const [hwid, setHwid] = useState<string>('');
   const [loading, setLoading] = useState(false);
   const [trialLoading, setTrialLoading] = useState(false);
+  const [recoverLoading, setRecoverLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [messageTone, setMessageTone] = useState<'error' | 'success'>('error');
   const [success, setSuccess] = useState(false);
   const [copied, setCopied] = useState(false);
 
@@ -47,29 +68,70 @@ export const ActivationScreen: React.FC<ActivationScreenProps> = ({
 
     setLoading(true);
     setError(null);
+    setMessageTone('error');
 
     try {
       const cleanEmail = email.trim().toLowerCase();
-      const cleanKey = licenseKey.trim();
+      const cleanKey = licenseKey.trim().toUpperCase();
 
       await invoke('activate_license', { key: cleanKey, email: cleanEmail });
       setSuccess(true);
       setTimeout(onActivated, 1500);
-    } catch (err: any) {
-      setError(err.toString());
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, 'Activation failed. Please check your license details and try again.'));
       setLoading(false);
     }
   };
 
   const handleStartTrial = async () => {
+    if (trialLoading) return;
+
     setTrialLoading(true);
     setError(null);
+    setMessageTone('error');
     try {
-      await invoke('init_trial');
-      onTrialStarted?.();
-    } catch (err: any) {
-      setError(err.toString());
+      const status = await invoke<LicenseStatus>('init_trial');
+
+      if (status?.is_trial) {
+        await onTrialStarted?.(status);
+      } else if (status?.active) {
+        onActivated();
+      } else if (status?.trial_expired) {
+        setMessageTone('error');
+        setError('Your trial has expired. Purchase a license to continue using CineFlow Suite.');
+      } else {
+        setMessageTone('error');
+        setError(status?.message || 'Could not start trial. Please try again.');
+      }
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, 'Could not start trial. Please try again.'));
+    } finally {
       setTrialLoading(false);
+    }
+  };
+
+  const handleRecoverKey = async () => {
+    if (recoverLoading) return;
+
+    const cleanEmail = email.trim().toLowerCase();
+    if (!cleanEmail) {
+      setMessageTone('error');
+      setError('Please enter your email first to recover your key.');
+      return;
+    }
+
+    setRecoverLoading(true);
+    setError(null);
+    setMessageTone('error');
+    try {
+      const res = await invoke<{ message?: string }>('recover_license_key', { email: cleanEmail });
+      setMessageTone('success');
+      setError(res.message || 'License key recovery sent to your email.');
+    } catch (err: unknown) {
+      setMessageTone('error');
+      setError(getErrorMessage(err, 'Could not recover your license key. Please try again.'));
+    } finally {
+      setRecoverLoading(false);
     }
   };
 
@@ -223,18 +285,8 @@ export const ActivationScreen: React.FC<ActivationScreenProps> = ({
                         </label>
                         <button 
                           type="button"
-                          onClick={() => {
-                            if (!email) {
-                              setError('Please enter your email first to recover your key.');
-                              return;
-                            }
-                            // Call recover API
-                            fetch('https://licensing.alan-design.com/resend-key', {
-                              method: 'POST',
-                              headers: { 'Content-Type': 'application/json' },
-                              body: JSON.stringify({ email })
-                            }).then(() => setError('License key recovery sent to your email.'));
-                          }}
+                          onClick={handleRecoverKey}
+                          disabled={recoverLoading}
                           style={{
                             background: 'none',
                             border: 'none',
@@ -243,11 +295,11 @@ export const ActivationScreen: React.FC<ActivationScreenProps> = ({
                             fontWeight: 700,
                             textTransform: 'uppercase',
                             letterSpacing: '0.1em',
-                            cursor: 'pointer',
-                            opacity: 0.8
+                            cursor: recoverLoading ? 'default' : 'pointer',
+                            opacity: recoverLoading ? 0.5 : 0.8
                           }}
                         >
-                          Forgot Key?
+                          {recoverLoading ? 'Sending...' : 'Forgot Key?'}
                         </button>
                       </div>
                       <input
@@ -287,21 +339,21 @@ export const ActivationScreen: React.FC<ActivationScreenProps> = ({
                         animate={{ opacity: 1, y: 0 }}
                         style={{
                           width: '100%',
-                          backgroundColor: 'rgba(248,113,113,0.05)',
-                          border: '1px solid rgba(248,113,113,0.2)',
+                          backgroundColor: messageTone === 'success' ? 'rgba(16,185,129,0.06)' : 'rgba(248,113,113,0.05)',
+                          border: `1px solid ${messageTone === 'success' ? 'rgba(16,185,129,0.24)' : 'rgba(248,113,113,0.2)'}`,
                           borderRadius: '12px',
                           padding: '16px',
                           marginBottom: '32px',
                           display: 'flex',
                           alignItems: 'center',
                           gap: '12px',
-                          color: '#f87171',
+                          color: messageTone === 'success' ? '#10b981' : '#f87171',
                           fontSize: '11px',
                           fontWeight: 600,
                           textAlign: 'left'
                         }}
                       >
-                        <AlertCircle size={16} />
+                        {messageTone === 'success' ? <CheckCircle2 size={16} /> : <AlertCircle size={16} />}
                         <span>{error}</span>
                       </motion.div>
                     )}
@@ -444,7 +496,7 @@ export const ActivationScreen: React.FC<ActivationScreenProps> = ({
                     </span>
                   </div>
                   <button 
-                    onClick={() => window.open('https://alan-design.com/buy', '_blank')}
+                    onClick={() => openExternalUrl(PURCHASE_URL)}
                     style={{ 
                       background: 'none', 
                       border: 'none', 
@@ -463,7 +515,7 @@ export const ActivationScreen: React.FC<ActivationScreenProps> = ({
                     Buy License
                   </button>
                   <button 
-                    onClick={() => window.open('https://alan-design.com/support', '_blank')}
+                    onClick={() => openExternalUrl(SUPPORT_URL)}
                     style={{ 
                       background: 'none', 
                       border: 'none', 

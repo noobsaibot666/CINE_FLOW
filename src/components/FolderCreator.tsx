@@ -904,6 +904,7 @@ export function FolderCreator() {
         .visual-preview, .path-preview {
           padding: 24px;
           overflow-y: auto;
+          overflow-x: hidden;
           flex: 1;
         }
 
@@ -922,6 +923,8 @@ export function FolderCreator() {
           border: 1px solid rgba(255,255,255,0.03);
           transition: all 0.18s ease;
           animation: nodeFade 0.24s ease;
+          min-width: 0;
+          max-width: 100%;
         }
 
         .root-node {
@@ -966,6 +969,7 @@ export function FolderCreator() {
         .folder-node-content {
           flex: 1;
           min-width: 0;
+          overflow: hidden;
         }
 
         .folder-node-title-row {
@@ -980,12 +984,18 @@ export function FolderCreator() {
           color: var(--text-primary);
           font-size: 0.9rem;
           font-weight: 500;
-          flex: 1;
+          display: block;
+          width: 100%;
           outline: none;
           min-width: 0;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
         }
 
         .folder-node-tier {
+          flex: 0 1 auto;
+          max-width: 96px;
           padding: 2px 8px;
           border-radius: var(--radius-full);
           border: 1px solid rgba(255,255,255,0.05);
@@ -996,6 +1006,8 @@ export function FolderCreator() {
           letter-spacing: var(--inspector-label-spacing);
           text-transform: uppercase;
           white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
         }
 
         .folder-node-tier.depth-primary {
@@ -1011,6 +1023,7 @@ export function FolderCreator() {
         }
 
         .folder-node-actions {
+          flex: 0 0 auto;
           display: flex;
           gap: 6px;
           opacity: 0;
@@ -1168,6 +1181,10 @@ export function FolderCreator() {
           font-weight: 500;
           color: var(--text-primary);
           opacity: 0.8;
+          min-width: 0;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
         }
 
         .path-list {
@@ -1186,6 +1203,7 @@ export function FolderCreator() {
             animation: fadeInPath 0.3s ease forwards;
             opacity: 0;
             background: rgba(255,255,255,0.01);
+            min-width: 0;
         }
 
         @keyframes fadeInPath {
@@ -1201,6 +1219,10 @@ export function FolderCreator() {
         .path-string {
             opacity: 0.6;
             letter-spacing: 0.02em;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
         }
 
         .premium-scroll::-webkit-scrollbar {

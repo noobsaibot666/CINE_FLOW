@@ -81,16 +81,16 @@
       "dmg": {
         "background": "dgm_bg.png",
         "windowSize": {
-          "width": 600,
-          "height": 400
+          "width": 720,
+          "height": 460
         },
         "appPosition": {
-          "x": 140,
-          "y": 200
+          "x": 180,
+          "y": 210
         },
         "applicationFolderPosition": {
-          "x": 460,
-          "y": 200
+          "x": 540,
+          "y": 210
         }
       }
     },

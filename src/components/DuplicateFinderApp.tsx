@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useEffect } from "react";
 import { 
   Plus, 
   ExternalLink, 
@@ -10,12 +10,16 @@ import {
   Scan,
   Download,
   FileSearch,
-  Info
+  Info,
+  Eye,
+  RotateCcw
 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
-import { open, confirm, message } from "@tauri-apps/plugin-dialog";
-import { openPath } from "@tauri-apps/plugin-opener";
+import { open, confirm, message, save } from "@tauri-apps/plugin-dialog";
+import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
+import { writeFile } from "@tauri-apps/plugin-fs";
 import { jsPDF } from "jspdf";
 
 interface DuplicateFile {
@@ -60,6 +64,7 @@ export function DuplicateFinderApp() {
   const [errors, setErrors] = useState<string[]>([]);
   const [uiError, setUiError] = useState<string | null>(null);
   const [scanStats, setScanStats] = useState<{ startTime: number; endTime: number } | null>(null);
+  const [isDragTargetActive, setIsDragTargetActive] = useState(false);
 
   const addFolder = useCallback(async () => {
     try {
@@ -79,9 +84,44 @@ export function DuplicateFinderApp() {
     }
   }, []);
 
+  const addFolders = useCallback((paths: string[]) => {
+    const cleanPaths = paths.map(path => path.trim()).filter(Boolean);
+    if (cleanPaths.length === 0) return;
+    setFolders(prev => [...new Set([...prev, ...cleanPaths])]);
+  }, []);
+
+  useEffect(() => {
+    const appWindow = getCurrentWindow();
+
+    const unlistenDrop = appWindow.listen<{ paths: string[] }>("tauri://drag-drop", (event) => {
+      setIsDragTargetActive(false);
+      addFolders(event.payload.paths);
+    });
+    const unlistenEnter = appWindow.listen("tauri://drag-enter", () => setIsDragTargetActive(true));
+    const unlistenOver = appWindow.listen("tauri://drag-over", () => setIsDragTargetActive(true));
+    const unlistenLeave = appWindow.listen("tauri://drag-leave", () => setIsDragTargetActive(false));
+
+    return () => {
+      unlistenDrop.then(fn => fn());
+      unlistenEnter.then(fn => fn());
+      unlistenOver.then(fn => fn());
+      unlistenLeave.then(fn => fn());
+    };
+  }, [addFolders]);
+
   const removeFolder = (path: string) => {
     setFolders(prev => prev.filter(p => p !== path));
   };
+
+  const resetDuplicateFinder = useCallback(() => {
+    setFolders([]);
+    setIsScanning(false);
+    setProgress(null);
+    setResults([]);
+    setErrors([]);
+    setUiError(null);
+    setScanStats(null);
+  }, []);
 
   const startScan = async () => {
     if (folders.length === 0) return;
@@ -145,10 +185,19 @@ export function DuplicateFinderApp() {
 
   const revealInFinder = async (path: string) => {
     try {
+      await revealItemInDir(path);
+    } catch (err) {
+      console.error(err);
+      setUiError("Failed to reveal file in Finder or Explorer.");
+    }
+  };
+
+  const watchFile = async (path: string) => {
+    try {
       await openPath(path);
     } catch (err) {
       console.error(err);
-      setUiError("Failed to open file path.");
+      setUiError("Failed to open file for preview.");
     }
   };
 
@@ -224,13 +273,18 @@ export function DuplicateFinderApp() {
         y += 10;
       });
 
-      // Save using existing Tauri pipeline if possible, otherwise direct download
       const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
       const filename = `DuplicateReport_${timestamp}.pdf`;
-      
-      // In this app, we can just use the manual save or just let browser handle it if not in tauri
-      // but we ARE in tauri.
-      doc.save(filename);
+
+      const filePath = await save({
+        filters: [{ name: "PDF Document", extensions: ["pdf"] }],
+        defaultPath: filename,
+        title: "Export Duplicate Files Report"
+      });
+      if (!filePath) return;
+
+      await writeFile(filePath, new Uint8Array(doc.output("arraybuffer")));
+      await message(`Duplicate report saved to ${filePath}`, { title: "PDF Export Complete", kind: "info" });
     } catch (err) {
       console.error(err);
       setUiError("Failed to generate PDF report.");
@@ -259,6 +313,11 @@ export function DuplicateFinderApp() {
           {results.length > 0 && (
             <button className="btn btn-secondary btn-glass" onClick={exportPDF}>
               <Download size={16} /> Export PDF
+            </button>
+          )}
+          {(folders.length > 0 || results.length > 0 || scanStats || errors.length > 0 || uiError) && (
+            <button className="btn btn-secondary btn-glass" onClick={resetDuplicateFinder} disabled={isScanning}>
+              <RotateCcw size={16} /> Reset
             </button>
           )}
         </div>
@@ -293,9 +352,12 @@ export function DuplicateFinderApp() {
               <Folder size={14} />
               <span>SCAN TARGETS</span>
             </div>
-            <div className="folder-list premium-scroll">
+            <div className={`folder-list premium-scroll ${isDragTargetActive ? "drag-active" : ""}`}>
               {folders.length === 0 ? (
-                <div className="empty-state">No folders selected</div>
+                <div className="empty-state">
+                  <Folder size={20} />
+                  <span>Drop folders here or click Add Folders</span>
+                </div>
               ) : (
                 folders.map((path, idx) => (
                   <div key={idx} className="folder-tag">
@@ -384,6 +446,10 @@ export function DuplicateFinderApp() {
                           <button className="btn-browse" onClick={() => revealInFinder(file.path)}>
                             <ExternalLink size={14} />
                             <span>Browse</span>
+                          </button>
+                          <button className="btn-watch" onClick={() => watchFile(file.path)}>
+                            <Eye size={14} />
+                            <span>Watch</span>
                           </button>
                           <button className="btn-trash" onClick={() => deleteFile(file.path, group.hash)}>
                             <X size={14} />
@@ -489,6 +555,29 @@ export function DuplicateFinderApp() {
           display: flex;
           flex-direction: column;
           gap: 8px;
+          border: 1px dashed transparent;
+          border-radius: var(--radius-sm);
+          transition: border-color 0.2s ease, background 0.2s ease;
+        }
+
+        .folder-list.drag-active {
+          background: rgba(0, 209, 255, 0.06);
+          border-color: rgba(0, 209, 255, 0.32);
+        }
+
+        .empty-state {
+          flex: 1;
+          min-height: 108px;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          gap: 10px;
+          color: var(--text-muted);
+          text-align: center;
+          font-size: 0.88rem;
+          line-height: 1.35;
+          padding: 16px;
         }
 
         .folder-tag {
@@ -672,13 +761,11 @@ export function DuplicateFinderApp() {
           opacity: 0.7;
         }
 
-        .btn-browse {
+        .btn-browse,
+        .btn-watch {
           display: flex;
           align-items: center;
           gap: 6px;
-          background: rgba(0, 209, 255, 0.05);
-          border: 1px solid rgba(0, 209, 255, 0.1);
-          color: var(--phase-preproduction);
           padding: 4px 10px;
           border-radius: 4px;
           font-size: 0.8rem;
@@ -687,10 +774,27 @@ export function DuplicateFinderApp() {
           transition: all 0.2s ease;
         }
 
+        .btn-browse {
+          background: rgba(0, 209, 255, 0.05);
+          border: 1px solid rgba(0, 209, 255, 0.1);
+          color: var(--phase-preproduction);
+        }
+
+        .btn-watch {
+          background: rgba(255, 255, 255, 0.04);
+          border: 1px solid rgba(255, 255, 255, 0.08);
+          color: var(--text-primary);
+        }
+
         .btn-browse:hover {
           background: var(--phase-preproduction);
           color: white;
           border-color: var(--phase-preproduction);
+        }
+
+        .btn-watch:hover {
+          background: rgba(255, 255, 255, 0.12);
+          border-color: rgba(255, 255, 255, 0.18);
         }
 
         .loading-state, .empty-state-large {
@@ -825,6 +929,8 @@ export function DuplicateFinderApp() {
 
         .file-actions {
           display: flex;
+          flex-wrap: wrap;
+          justify-content: flex-end;
           gap: 8px;
         }
 

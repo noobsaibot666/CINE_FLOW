@@ -87,6 +87,7 @@ import { convertFileSrc, invokeGuarded, isTauriReloading } from "./utils/tauri";
 import { ActivationScreen } from "./components/ActivationScreen";
 import TrialBanner from "./components/TrialBanner";
 import TrialLockBadge from "./components/TrialLockBadge";
+import { UpgradeLicenseModal } from "./components/UpgradeLicenseModal";
 
 type LicenseMode = 'loading' | 'trial' | 'full' | 'expired' | 'inactive';
 
@@ -155,6 +156,7 @@ function AppContent() {
 
   const [licenseMode, setLicenseMode] = useState<LicenseMode>('loading');
   const [trialDaysRemaining, setTrialDaysRemaining] = useState<number | null>(null);
+  const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
 
   const isModuleLocked = (moduleId: string): boolean =>
     licenseMode === 'trial' && !TRIAL_ALLOWED_MODULES.has(moduleId);
@@ -1394,13 +1396,11 @@ function AppContent() {
       <ActivationScreen
         mode="inactive"
         onActivated={() => setLicenseMode('full')}
-        onTrialStarted={() => {
-          invoke<any>("get_license_status").then((res) => {
-            if (res.is_trial) {
-              setLicenseMode('trial');
-              setTrialDaysRemaining(res.trial_days_remaining ?? null);
-            }
-          });
+        onTrialStarted={(res) => {
+          if (res.is_trial) {
+            setLicenseMode('trial');
+            setTrialDaysRemaining(res.trial_days_remaining ?? null);
+          }
         }}
       />
     );
@@ -1420,7 +1420,17 @@ function AppContent() {
       {licenseMode === 'trial' && trialDaysRemaining !== null && (
         <TrialBanner
           daysRemaining={trialDaysRemaining}
-          onUpgrade={() => window.open('https://alan-design.com/buy', '_blank')}
+          onUpgrade={() => setUpgradeModalOpen(true)}
+        />
+      )}
+      {upgradeModalOpen && (
+        <UpgradeLicenseModal
+          onClose={() => setUpgradeModalOpen(false)}
+          onActivated={() => {
+            setUpgradeModalOpen(false);
+            setLicenseMode('full');
+            setTrialDaysRemaining(null);
+          }}
         />
       )}
       <CommandPalette

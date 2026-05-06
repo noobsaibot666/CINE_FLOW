@@ -6610,7 +6610,103 @@ pub async fn scan_duplicates(
 
 #[tauri::command]
 pub async fn delete_duplicate_file(path: String) -> Result<(), String> {
-    trash::delete(path).map_err(|e| format!("Failed to move to trash: {}", e))
+    let path = std::path::PathBuf::from(path);
+    trash::delete(&path).or_else(|primary_error| {
+        move_duplicate_to_trash_fallback(&path).map_err(|fallback_error| {
+            format!(
+                "Failed to move to trash: {}; fallback failed: {}",
+                primary_error, fallback_error
+            )
+        })
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn move_duplicate_to_trash_fallback(path: &std::path::Path) -> Result<(), String> {
+    use std::fs;
+
+    if !path.is_file() {
+        return Err("Only files can be moved to trash from Duplicate Finder".into());
+    }
+
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| "File path does not have a file name".to_string())?;
+    let trash_dir = duplicate_file_trash_dir(path)?;
+    fs::create_dir_all(&trash_dir)
+        .map_err(|e| format!("Could not create trash folder {}: {}", trash_dir.display(), e))?;
+
+    let destination = unique_duplicate_trash_path(&trash_dir, file_name);
+    fs::rename(path, &destination).map_err(|e| {
+        format!(
+            "Could not move {} to {}: {}",
+            path.display(),
+            destination.display(),
+            e
+        )
+    })
+}
+
+#[cfg(not(target_os = "macos"))]
+fn move_duplicate_to_trash_fallback(_path: &std::path::Path) -> Result<(), String> {
+    Err("No platform fallback is available".into())
+}
+
+#[cfg(target_os = "macos")]
+fn duplicate_file_trash_dir(path: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    let components: Vec<_> = path.components().collect();
+    if components.len() >= 3
+        && components[0].as_os_str() == "/"
+        && components[1].as_os_str() == "Volumes"
+    {
+        let uid = std::process::Command::new("id")
+            .arg("-u")
+            .output()
+            .map_err(|e| format!("Could not read current user id: {}", e))
+            .and_then(|output| {
+                if output.status.success() {
+                    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+                } else {
+                    Err("id -u failed".to_string())
+                }
+            })?;
+        return Ok(std::path::Path::new("/")
+            .join("Volumes")
+            .join(components[2].as_os_str())
+            .join(".Trashes")
+            .join(uid));
+    }
+
+    let home = std::env::var_os("HOME").ok_or_else(|| "HOME is not set".to_string())?;
+    Ok(std::path::PathBuf::from(home).join(".Trash"))
+}
+
+#[cfg(target_os = "macos")]
+fn unique_duplicate_trash_path(
+    trash_dir: &std::path::Path,
+    file_name: &std::ffi::OsStr,
+) -> std::path::PathBuf {
+    let candidate = trash_dir.join(file_name);
+    if !candidate.exists() {
+        return candidate;
+    }
+
+    let source = std::path::Path::new(file_name);
+    let stem = source.file_stem().unwrap_or(file_name).to_string_lossy();
+    let extension = source.extension().map(|ext| ext.to_string_lossy());
+
+    for suffix in 1..10_000 {
+        let name = match &extension {
+            Some(ext) if !ext.is_empty() => format!("{} {}.{}", stem, suffix, ext),
+            _ => format!("{} {}", stem, suffix),
+        };
+        let candidate = trash_dir.join(name);
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+
+    trash_dir.join(format!("{} {}", file_name.to_string_lossy(), uuid::Uuid::new_v4()))
 }
 
 fn read_partial_hash(path: &std::path::Path) -> Result<String, std::io::Error> {

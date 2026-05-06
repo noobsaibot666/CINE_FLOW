@@ -393,6 +393,7 @@ pub fn run() {
             commands::camera_match_analyze_clip,
             commands::reset_app_data,
             license::activate_license,
+            license::recover_license_key,
             license::get_license_status,
             license::get_hwid,
             license::init_trial,
