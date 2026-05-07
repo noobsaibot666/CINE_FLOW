@@ -1,6 +1,6 @@
 {
+  "identifier": "com.exposeu.cineflow-direct",
   "bundle": {
-    "identifier": "com.exposeu.cineflow-direct",
     "macOS": {
       "entitlements": "entitlements.direct.plist"
     }
