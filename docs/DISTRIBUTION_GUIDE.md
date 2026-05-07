@@ -41,7 +41,9 @@ Run from Terminal (not from IDE) — the frontend build requires more memory tha
 
 ### DMG Creation
 
-Tauri's `bundle_dmg.sh` cannot access signed `.app` bundles from sandboxed processes. Create the DMG manually from Terminal after the build:
+Tauri's `bundle_dmg.sh` cannot access signed `.app` bundles from sandboxed processes. Create the DMG manually from Terminal after the build.
+
+> **Note:** Do NOT use `hdiutil create` + mount + `cp`/`ditto` — writing to mounted disk images is blocked by macOS ("Operation not permitted"). Use a local staging directory with `hdiutil create -srcfolder` instead.
 
 ```bash
 cd /path/to/exposeu_wrapkit
@@ -49,10 +51,9 @@ cd /path/to/exposeu_wrapkit
 IDENTITY="Developer ID Application: Nudson Alan Terrinha Alves (RD7UU4Z3D2)"
 APP="src-tauri/target/release/bundle/macos/CineFlow Suite.app"
 ENT="src-tauri/entitlements.direct.plist"
-TMP="/tmp/cineflow_final.dmg"
 DMG="src-tauri/target/release/bundle/dmg/CineFlow Suite_1.0.4_aarch64.dmg"
 
-# Sign all dylibs (Resources/libs has 45 vendor dylibs; find -exec breaks on paths with spaces)
+# Sign all dylibs (find -exec breaks on paths with spaces — always use print0)
 while IFS= read -r -d '' f; do
   codesign --force --options runtime --timestamp -s "$IDENTITY" "$f"
 done < <(find "$APP/Contents/Resources/libs" -name "*.dylib" -print0)
@@ -74,15 +75,16 @@ codesign --force --options runtime --timestamp --entitlements "$ENT" \
 
 codesign --verify --deep --strict "$APP" && echo "Signature OK"
 
-# The app is ~366MB uncompressed — needs a 600MB volume
-hdiutil create -size 600m -fs APFS -volname "CineFlowSuite" "$TMP" -ov
-hdiutil attach "$TMP" -mountpoint /Volumes/CineFlowSuite
-cp -R "$APP" "/Volumes/CineFlowSuite/CineFlow Suite.app" && echo "Copy OK"
-ln -s /Applications "/Volumes/CineFlowSuite/Applications"
-hdiutil detach /Volumes/CineFlowSuite
-rm -f "$DMG"
-hdiutil convert "$TMP" -format UDZO -o "$DMG"
-codesign --force --timestamp -s "$IDENTITY" "$DMG"
+# Stage into a local temp directory, then create DMG from srcfolder
+rm -rf /tmp/cineflow_stage && mkdir /tmp/cineflow_stage
+ditto "$APP" "/tmp/cineflow_stage/CineFlow Suite.app"
+ln -s /Applications /tmp/cineflow_stage/Applications
+
+hdiutil create -srcfolder /tmp/cineflow_stage -volname "CineFlowSuite" \
+  -fs HFS+ -format UDZO -o /tmp/cineflow_final.dmg -ov
+
+codesign --force --timestamp -s "$IDENTITY" /tmp/cineflow_final.dmg
+cp /tmp/cineflow_final.dmg "$DMG"
 echo "Done: $(ls -lh "$DMG")"
 ```
 
@@ -112,6 +114,8 @@ xcrun stapler staple "$DMG"
 - **APFS volume must be ≥600MB** — the uncompressed `.app` is ~366MB; HFS+ at 250MB silently fails mid-copy, producing a DMG that passes local verification but fails Apple's notarization.
 - **Broken Qt symlinks** — the bundled Qt frameworks ship with self-referential `Versions/5/Resources/Resources` symlinks that Gatekeeper rejects. These have been removed from `src-tauri/Frameworks/` and the build output. If they reappear after a Qt upgrade, delete them: `find "$APP" -type l -name "Resources" ! -e -delete`.
 - **Sandbox container conflict** — never test with a build signed by a different identity on the same machine without first clearing `~/Library/Containers/com.exposeu.cineflow-direct/`. The direct and App Store builds use different identifiers to avoid this problem across machines.
+- **`com.apple.application-identifier` / `com.apple.developer.team-identifier` must NOT be in `entitlements.direct.plist`** — these keys are only valid for App Store apps backed by a provisioning profile. Including them in a Developer ID build causes launchd errno 163 ("Launchd job spawn failed") at launch, even after successful notarization. The direct entitlements file intentionally omits them.
+- **Mounted volume writes blocked** — `cp -R` and `ditto` to a manually-mounted HFS+/APFS image fail with "Operation not permitted" in Terminal. Use `hdiutil create -srcfolder` on a local staging directory instead: `ditto` to `/tmp/cineflow_stage/`, add the Applications symlink, then `hdiutil create -srcfolder /tmp/cineflow_stage`.
 
 ---
 
