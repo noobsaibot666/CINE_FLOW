@@ -117,6 +117,13 @@ cargo check --manifest-path src-tauri/Cargo.toml --features direct-dist   # dire
 
 `src-tauri/libs/` and `src-tauri/Frameworks/` contain macOS dylibs and frameworks. They are referenced in `tauri.conf.json` resources and the macOS `frameworks` array. Do not add them to any Windows-facing config key. The MSI bundler (WiX `light.exe`) will fail if it tries to harvest those paths as Windows resources.
 
+### Two bundle identifiers — never merge them
+
+- App Store build: `com.exposeu.cineflow` — uses `entitlements.app.plist`
+- Direct distribution build: `com.exposeu.cineflow-direct` — uses `entitlements.direct.plist` + `tauri.direct.conf.json`
+
+`build:direct` passes `--config src-tauri/tauri.direct.conf.json` which overrides the identifier at build time. This prevents sandbox container conflicts when both builds are installed on the same machine. Never change `tauri.conf.json`'s identifier to the `-direct` variant — that file is shared by all builds.
+
 ### Build targets reference
 
 | Purpose | Command | Installer |
