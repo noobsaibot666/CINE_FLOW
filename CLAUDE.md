@@ -77,6 +77,56 @@ These rules come from `docs/AI_DEV_RULES.md` and `docs/AI_UI_CONTRACT.md` — fo
 7. **Text/card sizing rules.** Paths truncate with ellipsis on one line. Buttons never wrap. Camera cards never overflow their container.
 8. **No breaking changes.** Match Lab must always support BRAW, MP4, MOV, cached runs, and export.
 
+## Release & Distribution
+
+### Versioning — bump all three files in sync before any release build
+
+- `package.json` → `"version"`
+- `src-tauri/Cargo.toml` → `version`
+- `src-tauri/tauri.conf.json` → `"version"`
+
+### Direct Distribution (macOS DMG)
+
+One command from the project root — handles build, DMG creation, signing, notarization, stapling, and file delivery:
+
+```bash
+bash scripts/production/deploy_direct_macos.sh
+```
+
+What it does:
+
+1. `npm run build:direct` — builds with `direct-dist` feature + Developer ID signing
+2. Creates DMG via bundled `bundle_dmg.sh` (sandbox-safe, works in any terminal)
+3. Signs the DMG with Developer ID
+4. Notarizes via `notarytool` using the `cineflow-notary` keychain profile
+5. Staples and validates
+6. Copies to `builds/direct_distribution/macos/CineFlow Suite_<version>_aarch64.dmg`
+7. Copies to `web_three/licensing-server/releases/actual/CineFlow.dmg` (the live download endpoint)
+
+After the script: `cd /Users/alan/_localDEV/web_three && git push`, then on the server `sudo docker compose down && sudo docker compose up -d`.
+
+Signing identity: `Developer ID Application: Nudson Alan Terrinha Alves (RD7UU4Z3D2)`
+Keychain profile: `cineflow-notary` (apple-id: `alan.creative@icloud.com`, team: `RD7UU4Z3D2`)
+
+### Mac App Store (.pkg)
+
+```bash
+npx tauri build   # builds the .app, signed with 3rd Party Mac Developer Application cert
+bash scripts/production/mac_sign_and_package.sh   # re-signs + packages → .pkg
+```
+
+Then open Transporter, drop the `.pkg`, and deliver. Finished builds go to `builds/app_stores/macos_app_store/`.
+
+The App Store build uses `entitlements.app.plist` (full sandbox). Nested executables (ffmpeg, ffprobe, braw_bridge) must be signed with `entitlements.child.plist` (`app-sandbox=true` + `inherit=true`) before the main `.app` is signed — Transporter rejects them otherwise.
+
+Provisioning profile must be installed via Xcode (right-click → Open With → Xcode), not System Settings.
+
+### Build output folders
+
+| Distribution | Local archive | Live endpoint |
+| --- | --- | --- |
+| Direct DMG | `builds/direct_distribution/macos/` | `web_three/licensing-server/releases/actual/CineFlow.dmg` |
+| App Store pkg | `builds/app_stores/macos_app_store/` | Transporter → App Store Connect |
 ## Cross-Platform Rules (macOS ↔ Windows)
 
 This repo ships on **both macOS and Windows**. Changes made on one side must not break the other. The rules below come from real regressions caught during Windows builds — treat them as hard constraints, not suggestions.
