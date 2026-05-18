@@ -370,7 +370,73 @@ pub fn detect_spydercheckr(
     _crop_rect: Option<&CalibrationCropRectNormalized>,
     _manual_corners: Option<&[CalibrationPoint]>,
 ) -> Result<CalibrationChartDetection, String> {
-    Err("SpyderCHECKR detection is currently only supported on macOS. OpenCV is required for this feature on Windows.".to_string())
+    Ok(CalibrationChartDetection {
+        chart_detected: false,
+        detection_attempts: 0,
+        candidate_count: 0,
+        best_aspect_ratio: None,
+        best_area_ratio: None,
+        fallback_used: false,
+        frame_width: 0,
+        frame_height: 0,
+        chart_corners: Vec::new(),
+        patch_samples: Vec::new(),
+        delta_e: Vec::new(),
+        mean_delta_e: 0.0,
+        max_delta_e: 0.0,
+        neutral_mean_delta_e: 0.0,
+        skin_mean_delta_e: 0.0,
+        exposure_offset_stops: 0.0,
+        wb_kelvin_shift: 0,
+        tint_shift: 0,
+        corrected_preview_path: String::new(),
+        calibration_transform: None,
+        lut_path: None,
+        cube_size: None,
+        transform_type: None,
+        transform_target_slot: None,
+        mean_delta_e_before: 0.0,
+        mean_delta_e_after: None,
+        transform_preview_path: None,
+        chart_area_ratio: 0.0,
+        chart_skew_score: 0.0,
+        clipped_patch_count: 0,
+        crushed_patch_count: 0,
+        lighting_uniformity_score: 0.0,
+        calibration_quality_score: 0,
+        calibration_quality_level: "Unavailable".to_string(),
+        transform_quality_flag: None,
+        warnings: vec![
+            "SpyderCHECKR detection is unavailable in this build because OpenCV calibration support is disabled.".to_string(),
+        ],
+        detection_score: 0.0,
+    })
+}
+
+#[cfg(all(test, not(feature = "calibration")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unsupported_calibration_returns_not_detected_result() {
+        let result = detect_spydercheckr(
+            Path::new("/tmp/cache"),
+            "project",
+            "A",
+            Path::new("/tmp/frame.jpg"),
+            None,
+            None,
+        )
+        .expect("unsupported calibration should not fail match lab analysis");
+
+        assert!(!result.chart_detected);
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("SpyderCHECKR detection is unavailable"))
+        );
+    }
 }
 
 #[cfg(feature = "calibration")]

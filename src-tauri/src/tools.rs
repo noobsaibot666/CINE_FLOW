@@ -11,6 +11,14 @@ pub fn init(handle: AppHandle) {
     let _ = APP_HANDLE.set(handle);
 }
 
+pub fn executable_file_names_for_platform(name: &str, target: &str, is_windows: bool) -> Vec<String> {
+    if is_windows {
+        vec![format!("{}.exe", name), format!("{}-{}.exe", name, target)]
+    } else {
+        vec![name.to_string(), format!("{}-{}", name, target)]
+    }
+}
+
 pub fn find_executable(name: &str) -> String {
     let requested_path = std::path::Path::new(name);
     if requested_path.is_absolute() || requested_path.components().count() > 1 {
@@ -21,21 +29,6 @@ pub fn find_executable(name: &str) -> String {
 
     // 1. Try to find as a Tauri Sidecar first
     if let Some(handle) = APP_HANDLE.get() {
-        // Production bundles can strip the target triple from externalBin sidecars.
-        // In that case the binary lands next to the app executable itself.
-        if let Ok(exe_path) = std::env::current_exe() {
-            if let Some(exe_dir) = exe_path.parent() {
-                let candidate = exe_dir.join(if cfg!(target_os = "windows") {
-                    format!("{}.exe", name)
-                } else {
-                    name.to_string()
-                });
-                if candidate.exists() {
-                    return candidate.to_string_lossy().to_string();
-                }
-            }
-        }
-
         let arch = std::env::consts::ARCH;
         let os = if cfg!(target_os = "macos") {
             "apple-darwin"
@@ -45,6 +38,20 @@ pub fn find_executable(name: &str) -> String {
             "unknown-linux-gnu"
         };
         let target = format!("{}-{}", arch, os);
+        let file_names = executable_file_names_for_platform(name, &target, cfg!(target_os = "windows"));
+
+        // Production bundles can strip the target triple from externalBin sidecars,
+        // but Windows builds may keep the target-triple filename next to the app exe.
+        if let Ok(exe_path) = std::env::current_exe() {
+            if let Some(exe_dir) = exe_path.parent() {
+                for file_name in &file_names {
+                    let candidate = exe_dir.join(file_name);
+                    if candidate.exists() {
+                        return candidate.to_string_lossy().to_string();
+                    }
+                }
+            }
+        }
 
         // Dev mode: look for the triple-suffixed binary in src-tauri/bin/
         let project_root = handle
@@ -57,30 +64,42 @@ pub fn find_executable(name: &str) -> String {
 
         let local_bin = project_root.join("src-tauri").join("bin");
 
-        let sidecar_name = if cfg!(target_os = "windows") {
-            format!("{}-{}.exe", name, target)
-        } else {
-            format!("{}-{}", name, target)
-        };
-
-        let dev_path = local_bin.join(&sidecar_name);
-        if dev_path.exists() {
-            return dev_path.to_string_lossy().to_string();
+        for file_name in &file_names {
+            let dev_path = local_bin.join(file_name);
+            if dev_path.exists() {
+                return dev_path.to_string_lossy().to_string();
+            }
         }
 
-        // macOS/Linux production: resolve via Tauri resource path
-        #[cfg(not(target_os = "windows"))]
-        if let Ok(path) = handle.path().resolve(
-            format!("bin/{}", sidecar_name),
-            tauri::path::BaseDirectory::Resource,
-        ) {
-            if path.exists() {
-                return path.to_string_lossy().to_string();
+        // Production resource dir: Tauri can place externalBin sidecars under resources.
+        for file_name in &file_names {
+            if let Ok(path) = handle.path().resolve(
+                format!("bin/{}", file_name),
+                tauri::path::BaseDirectory::Resource,
+            ) {
+                if path.exists() {
+                    return path.to_string_lossy().to_string();
+                }
             }
         }
     }
 
-    // 2. Try which (Unix only — `which` does not exist on Windows)
+    // 2. Try PATH explicitly on Windows for diagnostics and version probes.
+    #[cfg(target_os = "windows")]
+    if let Ok(output) = Command::new("where").arg(name).output() {
+        if output.status.success() {
+            let path = String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .next()
+                .map(|s| s.trim().to_string())
+                .unwrap_or_default();
+            if !path.is_empty() {
+                return path;
+            }
+        }
+    }
+
+    // 3. Try which (Unix only — `which` does not exist on Windows)
     #[cfg(not(target_os = "windows"))]
     if let Ok(output) = Command::new("which").arg(name).output() {
         if output.status.success() {
@@ -91,7 +110,7 @@ pub fn find_executable(name: &str) -> String {
         }
     }
 
-    // 3. Check common macOS paths (legacy fallback)
+    // 4. Check common macOS paths (legacy fallback)
     #[cfg(target_os = "macos")]
     {
         let common_paths = [
@@ -138,7 +157,7 @@ pub fn create_command(name: &str) -> Command {
 
 #[cfg(test)]
 mod tests {
-    use super::find_executable;
+    use super::{executable_file_names_for_platform, find_executable};
 
     #[test]
     fn missing_executable_lookup_does_not_recurse() {
@@ -150,5 +169,13 @@ mod tests {
     #[test]
     fn absolute_executable_path_is_used_directly() {
         assert_eq!(find_executable("/bin/sh"), "/bin/sh");
+    }
+
+    #[test]
+    fn windows_lookup_includes_tauri_sidecar_name() {
+        let names = executable_file_names_for_platform("ffmpeg", "x86_64-pc-windows-msvc", true);
+
+        assert!(names.contains(&"ffmpeg.exe".to_string()));
+        assert!(names.contains(&"ffmpeg-x86_64-pc-windows-msvc.exe".to_string()));
     }
 }
