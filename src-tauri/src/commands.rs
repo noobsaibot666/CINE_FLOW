@@ -2462,6 +2462,10 @@ pub struct AppInfo {
     pub build_date: String,
     pub ffmpeg_version: String,
     pub ffprobe_version: String,
+    pub ffmpeg_path: String,
+    pub ffprobe_path: String,
+    pub braw_bridge_path: String,
+    pub redline_path: String,
     pub macos_version: String,
     pub arch: String,
     pub braw_bridge_active: bool,
@@ -2640,16 +2644,21 @@ pub async fn export_director_pack(
 
 #[tauri::command]
 pub async fn get_app_info() -> Result<AppInfo, String> {
+    let ffmpeg_path = crate::tools::find_executable("ffmpeg");
+    let ffprobe_path = crate::tools::find_executable("ffprobe");
+    let braw_bridge_path = crate::tools::find_executable("braw_bridge");
+    let redline_path = crate::tools::find_executable("REDline");
     Ok(AppInfo {
         version: env!("CARGO_PKG_VERSION").to_string(),
         build_date: option_env!("BUILD_DATE").unwrap_or("unknown").to_string(),
-        ffmpeg_version: command_first_line(&crate::tools::find_executable("ffmpeg"), &["-version"])
+        ffmpeg_version: command_first_line(&ffmpeg_path, &["-version"])
             .unwrap_or_else(|| "Unavailable".to_string()),
-        ffprobe_version: command_first_line(
-            &crate::tools::find_executable("ffprobe"),
-            &["-version"],
-        )
-        .unwrap_or_else(|| "Unavailable".to_string()),
+        ffprobe_version: command_first_line(&ffprobe_path, &["-version"])
+            .unwrap_or_else(|| "Unavailable".to_string()),
+        ffmpeg_path,
+        ffprobe_path,
+        braw_bridge_path,
+        redline_path,
         macos_version: command_first_line("sw_vers", &["-productVersion"])
             .unwrap_or_else(|| "Unknown".to_string()),
         arch: std::env::consts::ARCH.to_string(),

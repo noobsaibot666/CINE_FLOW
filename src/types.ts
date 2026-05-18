@@ -124,6 +124,10 @@ export interface AppInfo {
     build_date: string;
     ffmpeg_version: string;
     ffprobe_version: string;
+    ffmpeg_path: string;
+    ffprobe_path: string;
+    braw_bridge_path: string;
+    redline_path: string;
     macos_version: string;
     arch: string;
     braw_bridge_active?: boolean;

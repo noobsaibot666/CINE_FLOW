@@ -29,8 +29,8 @@ pub(crate) mod mac_bookmarks;
 
 use commands::AppState;
 use std::sync::Arc;
+#[cfg(target_os = "macos")]
 use tauri::Emitter;
-// Unused imports removed
 
 fn cache_root_dir() -> std::path::PathBuf {
     #[cfg(debug_assertions)]

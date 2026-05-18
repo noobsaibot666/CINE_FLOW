@@ -59,6 +59,9 @@ export function AboutPanel({ open, info, onResetTour, onClose }: AboutPanelProps
                 <p style={{ fontSize: '11px', opacity: 0.7, marginTop: '2px' }}>
                   FFmpeg: {formatVersion(info.ffmpeg_version)}
                 </p>
+                <p style={{ fontSize: '10px', opacity: 0.5, marginTop: '4px', wordBreak: 'break-all' }}>
+                  {info.ffmpeg_path}
+                </p>
               </div>
             </div>
 

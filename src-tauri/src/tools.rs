@@ -1,3 +1,4 @@
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 use tauri::{AppHandle, Manager};
@@ -19,8 +20,24 @@ pub fn executable_file_names_for_platform(name: &str, target: &str, is_windows: 
     }
 }
 
+pub fn executable_candidate_paths(base_dir: &Path, file_names: &[String]) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    let search_dirs = [
+        base_dir.to_path_buf(),
+        base_dir.join("resources"),
+        base_dir.join("resources").join("bin"),
+        base_dir.join("bin"),
+    ];
+    for dir in search_dirs {
+        for file_name in file_names {
+            candidates.push(dir.join(file_name));
+        }
+    }
+    candidates
+}
+
 pub fn find_executable(name: &str) -> String {
-    let requested_path = std::path::Path::new(name);
+    let requested_path = Path::new(name);
     if requested_path.is_absolute() || requested_path.components().count() > 1 {
         if requested_path.exists() {
             return name.to_string();
@@ -44,8 +61,7 @@ pub fn find_executable(name: &str) -> String {
         // but Windows builds may keep the target-triple filename next to the app exe.
         if let Ok(exe_path) = std::env::current_exe() {
             if let Some(exe_dir) = exe_path.parent() {
-                for file_name in &file_names {
-                    let candidate = exe_dir.join(file_name);
+                for candidate in executable_candidate_paths(exe_dir, &file_names) {
                     if candidate.exists() {
                         return candidate.to_string_lossy().to_string();
                     }
@@ -73,6 +89,14 @@ pub fn find_executable(name: &str) -> String {
 
         // Production resource dir: Tauri can place externalBin sidecars under resources.
         for file_name in &file_names {
+            if let Ok(path) = handle.path().resolve(
+                file_name,
+                tauri::path::BaseDirectory::Resource,
+            ) {
+                if path.exists() {
+                    return path.to_string_lossy().to_string();
+                }
+            }
             if let Ok(path) = handle.path().resolve(
                 format!("bin/{}", file_name),
                 tauri::path::BaseDirectory::Resource,
@@ -122,7 +146,7 @@ pub fn find_executable(name: &str) -> String {
             "/Library/Application Support/Blackmagic Design/Blackmagic RAW"
         ];
         for path in common_paths {
-            let full_path = std::path::PathBuf::from(path).join(name);
+            let full_path = PathBuf::from(path).join(name);
             if full_path.exists() {
                 return full_path.to_string_lossy().to_string();
             }
@@ -157,7 +181,8 @@ pub fn create_command(name: &str) -> Command {
 
 #[cfg(test)]
 mod tests {
-    use super::{executable_file_names_for_platform, find_executable};
+    use super::{executable_candidate_paths, executable_file_names_for_platform, find_executable};
+    use std::path::Path;
 
     #[test]
     fn missing_executable_lookup_does_not_recurse() {
@@ -177,5 +202,16 @@ mod tests {
 
         assert!(names.contains(&"ffmpeg.exe".to_string()));
         assert!(names.contains(&"ffmpeg-x86_64-pc-windows-msvc.exe".to_string()));
+    }
+
+    #[test]
+    fn candidate_paths_include_tauri_resource_layouts() {
+        let names = executable_file_names_for_platform("ffmpeg", "x86_64-pc-windows-msvc", true);
+        let candidates = executable_candidate_paths(Path::new("C:/Program Files/CineFlow Suite"), &names);
+
+        assert!(candidates.iter().any(|path| path.ends_with("ffmpeg.exe")));
+        assert!(candidates.iter().any(|path| path.ends_with("resources/ffmpeg-x86_64-pc-windows-msvc.exe")));
+        assert!(candidates.iter().any(|path| path.ends_with("resources/bin/ffmpeg-x86_64-pc-windows-msvc.exe")));
+        assert!(candidates.iter().any(|path| path.ends_with("bin/ffmpeg-x86_64-pc-windows-msvc.exe")));
     }
 }
