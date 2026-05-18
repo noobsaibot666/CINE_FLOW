@@ -4999,6 +4999,15 @@ impl Database {
         )?;
         Ok(())
     }
+
+    pub fn clear_completed_jobs(&self) -> SqlResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM jobs WHERE status IN ('done', 'failed', 'cancelled')",
+            [],
+        )?;
+        Ok(())
+    }
 }
 
 #[allow(dead_code)]

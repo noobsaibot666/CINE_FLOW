@@ -89,7 +89,6 @@ pub fn run() {
         production_matchlab_proxy_tracker: crate::production_match_lab::MatchLabProxyTracker::default(),
         production_matchlab_analysis_tracker: crate::production_match_lab::MatchLabAnalysisTracker::default(),
         production_matchlab_braw_decoder_caps: std::sync::Mutex::new(None),
-        production_matchlab_redline_decoder_caps: std::sync::Mutex::new(None),
     });
 
     tauri::Builder::default()
@@ -270,6 +269,7 @@ pub fn run() {
             commands::get_job,
             commands::list_jobs,
             commands::cancel_job,
+            commands::clear_completed_jobs,
             commands::get_app_info,
             commands::get_cache_dir,
             commands::export_feedback_bundle,

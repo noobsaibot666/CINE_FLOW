@@ -253,6 +253,19 @@ impl JobManager {
         }
         jobs.clear();
     }
+
+    pub fn clear_completed(&self) {
+        let mut jobs = lock_or_recover(&self.jobs);
+        jobs.retain(|_, record| {
+            matches!(
+                record.info.status,
+                JobStatus::Running | JobStatus::Queued
+            )
+        });
+        if let Some(db) = lock_or_recover(&self.db).as_ref() {
+            let _ = db.clear_completed_jobs();
+        }
+    }
 }
 
 fn lock_or_recover<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {

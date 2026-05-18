@@ -1217,10 +1217,6 @@ export const FramePreviewApp: React.FC<FramePreviewAppProps> = ({ project, onBac
     setHoverResizeHandles({});
   }, []);
 
-  const handleFitButtonClick = useCallback((event: React.MouseEvent<HTMLButtonElement>) => {
-    fitToFrame(state.activeRatio, event.shiftKey ? 'cover' : 'contain');
-  }, [fitToFrame, state.activeRatio]);
-
   const handleRatioChipClick = (ratio: RatioType, event: React.MouseEvent) => {
     const shouldAutoFitNewRatio = !event.shiftKey
       && !!activeMedia
@@ -1349,8 +1345,11 @@ export const FramePreviewApp: React.FC<FramePreviewAppProps> = ({ project, onBac
                 </div>
                 
                 <div className="frame-preview-btn-group">
-                    <button className="btn btn-ghost btn-xs" onClick={handleFitButtonClick} title="Fit to Frame. Shift-click to FILL (Cover) frame.">
-                        <Maximize2 size={14} /> <span>Fit / Fill</span>
+                    <button className="btn btn-ghost btn-xs" onClick={() => activeMedia && fitToFrame(state.activeRatio, 'contain')} title="Fit: scale video to show the full frame (letterbox/pillarbox)">
+                        <Maximize2 size={14} /> <span>Fit</span>
+                    </button>
+                    <button className="btn btn-ghost btn-xs" onClick={() => activeMedia && fitToFrame(state.activeRatio, 'cover')} title="Fill: scale video to cover the full frame (crop edges)">
+                        <Maximize2 size={14} /> <span>Fill</span>
                     </button>
                     <button className="btn btn-ghost btn-xs" onClick={() => activeMedia && resetTransform(activeMedia.id, state.activeRatio)}>
                         <RotateCcw size={14} /> <span>Reset</span>

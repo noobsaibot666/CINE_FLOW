@@ -35,7 +35,6 @@ export function SettingsPanel({ open, info, onClose }: SettingsPanelProps) {
           <div><strong>Version</strong><p>{info?.version ?? "—"}</p></div>
           <div><strong>Platform</strong><p>{info?.arch ?? "—"}</p></div>
           <div><strong>BRAW Bridge</strong><p>{info?.braw_bridge_active ? "Active" : "Not Detected"}</p></div>
-          <div><strong>REDline</strong><p>{info?.redline_bridge_active ? "Active" : "Not Detected"}</p></div>
         </div>
 
         <div style={{ marginTop: 20 }}>

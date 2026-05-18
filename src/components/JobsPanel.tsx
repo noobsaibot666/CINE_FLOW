@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
-import { X, Pause, Trash2, CheckCircle2, AlertTriangle, Loader2, Clock } from "lucide-react";
+import { X, Pause, Trash2, CheckCircle2, AlertTriangle, Loader2, Clock, XCircle } from "lucide-react";
 import { JobInfo } from "../types";
 import { useState } from "react";
 
@@ -90,7 +90,12 @@ function JobSection({
                 <span>{Math.round(job.progress * 100)}%</span>
                 <span className="job-message">{job.message}</span>
               </div>
-              {job.error && <div className="job-error-banner"><AlertTriangle size={12} /> {job.error}</div>}
+              {job.error && (
+                <div className="job-error-banner">
+                  <AlertTriangle size={12} />
+                  {job.error.match(/^Summary:\s*(.+)$/m)?.[1] ?? job.error.split('\n')[0]}
+                </div>
+              )}
               {job.status === "running" && (
                 <button className="btn btn-secondary btn-sm job-cancel-btn" onClick={() => cancelJob(job.id)}>
                   <Pause size={14} /> Cancel
@@ -113,6 +118,17 @@ export function JobsPanel({ open, jobs, onClose, onRefresh, extracting, extractP
 
   const cancelJob = async (jobId: string) => {
     await invoke("cancel_job", { jobId });
+    onRefresh();
+  };
+
+  const handleCancelAll = async () => {
+    const running = jobs.filter((j) => j.status === "running" || j.status === "queued");
+    await Promise.all(running.map((j) => invoke("cancel_job", { jobId: j.id })));
+    onRefresh();
+  };
+
+  const handleClearCompleted = async () => {
+    await invoke("clear_completed_jobs");
     onRefresh();
   };
 
@@ -166,7 +182,19 @@ export function JobsPanel({ open, jobs, onClose, onRefresh, extracting, extractP
       <aside className="jobs-drawer" onClick={(e) => e.stopPropagation()}>
         <div className="jobs-header">
           <h3>Jobs & History</h3>
-          <button className="btn-link" onClick={onClose}><X size={16} /></button>
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            {runningJobs.length > 0 && (
+              <button className="btn btn-secondary btn-sm" onClick={handleCancelAll} title="Cancel all running jobs" style={{ fontSize: 11, padding: "3px 8px" }}>
+                <XCircle size={12} /> Kill All
+              </button>
+            )}
+            {(completedJobs.length > 0 || failedJobs.length > 0) && (
+              <button className="btn btn-secondary btn-sm" onClick={handleClearCompleted} title="Clear completed and failed jobs" style={{ fontSize: 11, padding: "3px 8px" }}>
+                <Trash2 size={12} /> Clear All
+              </button>
+            )}
+            <button className="btn-link" onClick={onClose}><X size={16} /></button>
+          </div>
         </div>
 
         {/* Live Status */}

@@ -37,9 +37,14 @@ function assetUrlToPath(url: string): string {
     return path.startsWith("/") ? path : `/${path}`;
   }
 
-  // Tauri 2 / macOS: asset://<encoded_path>
+  // Tauri 2 / macOS: asset://localhost/<encoded_path>
+  if (url.startsWith("asset://localhost/")) {
+    return decodeURIComponent(url.slice("asset://localhost".length));
+  }
+
+  // Fallback asset:// without host
   if (url.startsWith("asset://")) {
-    const path = decodeURIComponent(url.replace("asset://", ""));
+    const path = decodeURIComponent(url.slice("asset://".length));
     return path.startsWith("/") ? path : `/${path}`;
   }
 

@@ -203,16 +203,11 @@ pub struct ProductionMatchLabRun {
 pub struct BrawDecoderCaps {
     pub found: bool,
     pub executable_path: Option<String>,
+    /// Directory to set as cwd when spawning the decoder so it can find
+    /// ./Libraries/BlackmagicRawAPI.framework/ at a relative path.
+    pub working_dir: Option<String>,
     pub supports_stdout: bool,
     pub supports_output_flag: bool,
-    pub help_excerpt: String,
-    pub version: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct RedlineDecoderCaps {
-    pub found: bool,
-    pub executable_path: Option<String>,
     pub help_excerpt: String,
     pub version: Option<String>,
 }
@@ -296,28 +291,8 @@ pub fn is_braw_path(clip_path: &str) -> bool {
         .unwrap_or(false)
 }
 
-pub fn is_nraw_path(clip_path: &str) -> bool {
-    Path::new(clip_path)
-        .extension()
-        .and_then(|value| value.to_str())
-        .map(|value| value.eq_ignore_ascii_case("nev"))
-        .unwrap_or(false)
-}
-
-pub fn is_r3d_path(clip_path: &str) -> bool {
-    Path::new(clip_path)
-        .extension()
-        .and_then(|value| value.to_str())
-        .map(|value| value.eq_ignore_ascii_case("r3d"))
-        .unwrap_or(false)
-}
-
-pub fn is_proxy_only_raw_path(clip_path: &str) -> bool {
-    is_nraw_path(clip_path) || is_r3d_path(clip_path)
-}
-
 pub fn is_decoder_backed_raw_path(clip_path: &str) -> bool {
-    is_braw_path(clip_path) || is_nraw_path(clip_path) || is_r3d_path(clip_path)
+    is_braw_path(clip_path)
 }
 
 pub fn classify_source_format(clip_path: &str) -> String {
@@ -327,8 +302,6 @@ pub fn classify_source_format(clip_path: &str) -> String {
         .map(|value| value.to_ascii_lowercase())
         .unwrap_or_default();
     match extension.as_str() {
-        "nev" => "NIKON_NRAW".to_string(),
-        "r3d" => "RED_R3D".to_string(),
         "braw" => "BLACKMAGIC_RAW".to_string(),
         "mov" => "MOV".to_string(),
         "mp4" => "MP4".to_string(),
@@ -463,10 +436,10 @@ pub fn choose_source_path_for_analysis(clip_path: &str) -> Result<String, String
         return Err("BRAW analysis requires a proxy (MP4). Generate proxy first.".to_string());
     }
     if extension == "nev" {
-        return Err("N-RAW analysis requires a proxy (MP4 or MOV). Pick an operator proxy first.".to_string());
+        return Err("N-RAW (.nev) is not supported. Export an MP4 or ProRes proxy from Nikon NX Studio, then use 'Select Existing Proxy'.".to_string());
     }
     if extension == "r3d" {
-        return Err("R3D analysis requires a proxy (MP4 or MOV). Pick an operator proxy first.".to_string());
+        return Err("R3D is not supported. Export an MP4 or ProRes proxy from REDCINE-X PRO, then use 'Select Existing Proxy'.".to_string());
     }
 
     if is_ffmpeg_reliable_extension(&extension) {
@@ -982,12 +955,12 @@ pub fn validate_proxy_output_path(input_path: &str, output_path: &Path) -> Resul
     Ok(())
 }
 
-pub fn probe_braw_decoder() -> BrawDecoderCaps {
-    let executable_path = locate_braw_decoder();
-    let Some(executable_path) = executable_path else {
+pub fn probe_braw_decoder(resource_dir: Option<&Path>) -> BrawDecoderCaps {
+    let Some((executable_path, working_dir)) = locate_braw_decoder(resource_dir) else {
         return BrawDecoderCaps {
             found: false,
             executable_path: None,
+            working_dir: None,
             supports_stdout: false,
             supports_output_flag: false,
             help_excerpt: "braw-decode not found".to_string(),
@@ -995,10 +968,21 @@ pub fn probe_braw_decoder() -> BrawDecoderCaps {
         };
     };
 
-    let help_output = crate::tools::create_command(&executable_path)
-        .arg("--help")
+    let mut help_cmd = crate::tools::create_command(&executable_path);
+    help_cmd.arg("--help");
+    if let Some(ref dir) = working_dir {
+        help_cmd.current_dir(dir);
+    }
+    let help_output = help_cmd
         .output()
-        .or_else(|_| crate::tools::create_command(&executable_path).arg("-h").output());
+        .or_else(|_| {
+            let mut cmd = crate::tools::create_command(&executable_path);
+            cmd.arg("-h");
+            if let Some(ref dir) = working_dir {
+                cmd.current_dir(dir);
+            }
+            cmd.output()
+        });
 
     let (help_text, help_excerpt) = match help_output {
         Ok(output) => {
@@ -1021,22 +1005,6 @@ pub fn probe_braw_decoder() -> BrawDecoderCaps {
         ),
     };
 
-    let version = crate::tools::create_command(&executable_path)
-        .arg("--version")
-        .output()
-        .ok()
-        .and_then(|output| {
-            let combined = format!(
-                "{}\n{}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            );
-            combined
-                .lines()
-                .find(|line| !line.trim().is_empty())
-                .map(|line| line.trim().to_string())
-        });
-
     let supports_output_flag = help_text.contains("--output")
         || help_text.contains("-o ")
         || help_text.contains(" output file");
@@ -1048,88 +1016,77 @@ pub fn probe_braw_decoder() -> BrawDecoderCaps {
     BrawDecoderCaps {
         found: true,
         executable_path: Some(executable_path),
+        working_dir,
         supports_stdout,
         supports_output_flag,
         help_excerpt,
-        version,
+        version: None,
     }
 }
 
-pub fn probe_redline_decoder() -> RedlineDecoderCaps {
-    let executable_path = locate_redline_decoder();
-    let Some(executable_path) = executable_path else {
-        return RedlineDecoderCaps {
-            found: false,
-            executable_path: None,
-            help_excerpt: "REDline not found".to_string(),
-            version: None,
-        };
-    };
-
-    let help_output = crate::tools::create_command(&executable_path)
-        .arg("--help")
-        .output()
-        .or_else(|_| crate::tools::create_command(&executable_path).arg("-h").output());
-
-    let help_excerpt = match help_output {
-        Ok(output) => format!(
-            "{}\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        )
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .take(2)
-        .collect::<Vec<_>>()
-        .join(" | "),
-        Err(error) => format!("help unavailable: {}", error),
-    };
-
-    let version = crate::tools::create_command(&executable_path)
-        .arg("--version")
-        .output()
-        .ok()
-        .and_then(|output| {
-            let combined = format!(
-                "{}\n{}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            );
-            combined
-                .lines()
-                .find(|line| !line.trim().is_empty())
-                .map(|line| line.trim().to_string())
-        });
-
-    RedlineDecoderCaps {
-        found: true,
-        executable_path: Some(executable_path),
-        help_excerpt,
-        version,
+/// Build ffmpeg input arguments for a braw_bridge stdout pipe by probing the BRAW
+/// file with ffprobe.  This replaces the old `braw-decode -f` probe which tried to
+/// run an internal ffmpeg encode pipeline instead of just printing format args.
+pub fn build_braw_ffmpeg_input_args(input_path: &str) -> Result<String, String> {
+    #[derive(serde::Deserialize)]
+    struct ProbeOut { streams: Option<Vec<ProbeStream>> }
+    #[derive(serde::Deserialize)]
+    struct ProbeStream {
+        codec_type: Option<String>,
+        width: Option<u32>,
+        height: Option<u32>,
+        r_frame_rate: Option<String>,
+        avg_frame_rate: Option<String>,
     }
-}
 
-pub fn probe_braw_ffmpeg_format(caps: &BrawDecoderCaps, input_path: &str) -> Result<String, String> {
-    let executable = caps
-        .executable_path
-        .as_ref()
-        .ok_or("Decoder executable missing".to_string())?;
-    let output = crate::tools::create_command(executable)
-        .args(["-f", input_path])
+    let output = crate::tools::create_command("ffprobe")
+        .args(["-v", "quiet", "-print_format", "json", "-show_streams", input_path])
         .output()
-        .map_err(|e| format!("Failed to run braw-decode -f: {}", e))?;
+        .map_err(|e| format!("ffprobe failed on BRAW file: {}", e))?;
+
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(format!(
-            "braw-decode format probe failed: {}",
-            tail_lines(&stderr, 20)
+            "ffprobe could not read BRAW file — install Blackmagic RAW SDK or use an MP4 proxy.\nDetails: {}",
+            String::from_utf8_lossy(&output.stderr)
         ));
     }
-    let fmt_args = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if fmt_args.is_empty() {
-        return Err("BRAW decoder returned empty ffmpeg format args".to_string());
+
+    let probe: ProbeOut = serde_json::from_slice(&output.stdout)
+        .map_err(|e| format!("Failed to parse ffprobe output for BRAW file: {}", e))?;
+
+    let video = probe
+        .streams
+        .unwrap_or_default()
+        .into_iter()
+        .find(|s| s.codec_type.as_deref() == Some("video"));
+
+    let width = video.as_ref().and_then(|s| s.width).unwrap_or(0);
+    let height = video.as_ref().and_then(|s| s.height).unwrap_or(0);
+
+    if width == 0 || height == 0 {
+        return Err(format!(
+            "Could not determine video dimensions from BRAW file — use an MP4 proxy.\nFile: {}",
+            input_path
+        ));
     }
-    Ok(fmt_args)
+
+    let fps_raw = video
+        .as_ref()
+        .and_then(|s| s.avg_frame_rate.as_ref().or(s.r_frame_rate.as_ref()))
+        .cloned()
+        .unwrap_or_else(|| "24/1".to_string());
+
+    // Simplify clean fractions: "25/1" → "25", "24000/1001" stays as-is
+    let fps = if fps_raw.ends_with("/1") {
+        fps_raw.trim_end_matches("/1").to_string()
+    } else {
+        fps_raw
+    };
+
+    Ok(format!(
+        "-f rawvideo -pixel_format rgba -s {}x{} -r {} -i pipe:0",
+        width, height, fps
+    ))
 }
 
 pub fn create_braw_proxy_via_stdout(
@@ -1141,7 +1098,7 @@ pub fn create_braw_proxy_via_stdout(
         .executable_path
         .as_ref()
         .ok_or("Decoder executable missing".to_string())?;
-    let fmt_args = probe_braw_ffmpeg_format(caps, input_path)?;
+    let fmt_args = build_braw_ffmpeg_input_args(input_path)?;
     validate_proxy_output_path(input_path, output_path)?;
 
     let mut braw_decode_cmd = crate::tools::create_command(executable);
@@ -1149,6 +1106,9 @@ pub fn create_braw_proxy_via_stdout(
         .args(["-c", "rgba", input_path])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if let Some(ref dir) = caps.working_dir {
+        braw_decode_cmd.current_dir(dir);
+    }
 
     let mut braw_child = braw_decode_cmd
         .spawn()
@@ -1181,22 +1141,46 @@ pub fn create_braw_proxy_via_stdout(
     let braw_stderr = read_child_stderr(&mut braw_child);
 
     if !ffmpeg_status.success() || !braw_status.success() {
-        let exit_code = ffmpeg_status
-            .code()
-            .or_else(|| braw_status.code())
+        let braw_code = braw_status.code();
+        let ffmpeg_code = ffmpeg_status.code();
+        let exit_code = ffmpeg_code
+            .or(braw_code)
             .map(|value| value.to_string())
-            .unwrap_or_else(|| "unknown".to_string());
+            .unwrap_or_else(|| "signal".to_string());
+
         let excerpt = if !ffmpeg_stderr.trim().is_empty() {
             tail_lines(&ffmpeg_stderr, 20)
         } else {
             tail_lines(&braw_stderr, 20)
         };
+
+        // Detect braw_bridge crash (SIGSEGV = 139, or no exit code = killed by signal)
+        // This usually means the Blackmagic RAW SDK is not installed on this machine.
+        let sdk_hint = if braw_code.is_none() || braw_code == Some(139) || braw_code.map(|c| c > 127).unwrap_or(false) {
+            "\nBRAW decoder crashed — Blackmagic RAW SDK may not be installed.\nNext steps: Install Blackmagic RAW SDK or use an MP4/ProRes proxy file instead."
+        } else {
+            "\nNext steps: Use an MP4/ProRes proxy file instead."
+        };
+
         return Err(format!(
-            "Input: {}\nOutput: {}\nExit code: {}\n{}",
+            "Input: {}\nOutput: {}\nExit code: {}\n{}{}",
             input_path,
             output_path.display(),
             exit_code,
-            excerpt
+            excerpt,
+            sdk_hint
+        ));
+    }
+
+    // Both processes exited 0 but braw_bridge may have silently produced no frames
+    // when the Blackmagic RAW SDK is not installed on this machine.
+    let output_size = std::fs::metadata(output_path).map(|m| m.len()).unwrap_or(0);
+    if output_size == 0 {
+        let _ = std::fs::remove_file(output_path);
+        return Err(format!(
+            "Input: {}\nOutput: {}\nBRAW decoder produced no frames — Blackmagic RAW SDK may not be installed.\nNext steps: Install Blackmagic RAW SDK or use an MP4/ProRes proxy file instead.",
+            input_path,
+            output_path.display()
         ));
     }
 
@@ -1221,21 +1205,28 @@ pub fn create_braw_proxy_via_file(
     } else {
         "-o"
     };
-    let decode_output = crate::tools::create_command(executable)
-        .args([input_path, output_flag, &decoded_path.to_string_lossy()])
+    let mut file_decode_cmd = crate::tools::create_command(executable);
+    file_decode_cmd.args([input_path, output_flag, &decoded_path.to_string_lossy()]);
+    if let Some(ref dir) = caps.working_dir {
+        file_decode_cmd.current_dir(dir);
+    }
+    let decode_output = file_decode_cmd
         .output()
         .map_err(|e| format!("Failed to start BRAW decoder file output: {}", e))?;
     if !decode_output.status.success() {
+        let code = decode_output.status.code();
+        let sdk_hint = if code.is_none() || code == Some(139) || code.map(|c| c > 127).unwrap_or(false) {
+            "\nBRAW decoder crashed — Blackmagic RAW SDK may not be installed.\nNext steps: Install Blackmagic RAW SDK or use an MP4/ProRes proxy file instead."
+        } else {
+            "\nNext steps: Use an MP4/ProRes proxy file instead."
+        };
         return Err(format!(
-            "Input: {}\nOutput: {}\nExit code: {}\n{}",
+            "Input: {}\nOutput: {}\nExit code: {}\n{}{}",
             input_path,
             decoded_path.display(),
-            decode_output
-                .status
-                .code()
-                .map(|value| value.to_string())
-                .unwrap_or_else(|| "unknown".to_string()),
-            tail_lines(&String::from_utf8_lossy(&decode_output.stderr), 20)
+            code.map(|value| value.to_string()).unwrap_or_else(|| "signal".to_string()),
+            tail_lines(&String::from_utf8_lossy(&decode_output.stderr), 20),
+            sdk_hint
         ));
     }
 
@@ -1281,144 +1272,79 @@ fn tail_lines(value: &str, limit: usize) -> String {
     lines[start..].join("\n")
 }
 
-fn locate_braw_decoder() -> Option<String> {
-    // 1. Try braw_bridge first (standard sidecar name)
+/// Returns `(executable_path, working_dir)`.
+/// The binary loads `./Libraries/BlackmagicRawAPI.framework/` relative to its cwd,
+/// so we must set current_dir to a directory that has that folder adjacent.
+fn locate_braw_decoder(resource_dir: Option<&Path>) -> Option<(String, Option<String>)> {
+    let sdk_subpath = Path::new("Libraries").join("BlackmagicRawAPI.framework");
+
+    let sdk_present_at = |dir: &Path| dir.join(&sdk_subpath).exists();
+
+    // 1. Bundled sidecar — preferred in production when SDK is adjacent (dev) or in resources
     let path = crate::tools::find_executable("braw_bridge");
     if path != "braw_bridge" && Path::new(&path).exists() {
-        return Some(path);
+        // Check SDK next to binary (dev: src-tauri/bin/Libraries/, or prod: Contents/MacOS/Libraries/)
+        let bin_parent = Path::new(&path).parent().map(|p| p.to_path_buf());
+        if let Some(ref parent) = bin_parent {
+            if sdk_present_at(parent) {
+                return Some((path, Some(parent.to_string_lossy().to_string())));
+            }
+        }
+        // Check SDK in Tauri resource dir (prod: Contents/Resources/Libraries/)
+        if let Some(res_dir) = resource_dir {
+            if sdk_present_at(res_dir) {
+                return Some((path, Some(res_dir.to_string_lossy().to_string())));
+            }
+        }
+        // SDK not adjacent — fall through to Homebrew before giving up on bundled binary.
+        // Homebrew wrapper script (bundles its own SDK, handles cwd via exec wrapper)
+        #[cfg(target_os = "macos")]
+        for wrapper in ["/opt/homebrew/bin/braw-decode", "/usr/local/bin/braw-decode"] {
+            if Path::new(wrapper).exists() {
+                return Some((wrapper.to_string(), None));
+            }
+        }
+
+        // Homebrew binary directly (needs its own dir as cwd)
+        #[cfg(target_os = "macos")]
+        {
+            let opt_bin = "/opt/homebrew/opt/braw-decode/braw-decode-bin";
+            let opt_dir = Path::new("/opt/homebrew/opt/braw-decode");
+            if Path::new(opt_bin).exists() && sdk_present_at(opt_dir) {
+                return Some((opt_bin.to_string(), Some(opt_dir.to_string_lossy().to_string())));
+            }
+        }
+
+        // Bundled binary found but no SDK anywhere — not usable
+        return None;
     }
 
-    // 2. Fallback to braw-decode
+    // 5. Try braw-decode sidecar name
     let path = crate::tools::find_executable("braw-decode");
     if path != "braw-decode" && Path::new(&path).exists() {
-        return Some(path);
+        let working_dir = Path::new(&path)
+            .parent()
+            .filter(|p| sdk_present_at(p))
+            .map(|p| p.to_string_lossy().to_string());
+        return Some((path, working_dir));
     }
 
-    // 3. Last resort fallback for PATH
-    if let Ok(output) = crate::tools::create_command(if cfg!(target_os = "windows") { "where" } else { "which" })
-        .arg("braw-decode")
-        .output()
+    // 6. Homebrew fallback when no bundled sidecar
+    #[cfg(target_os = "macos")]
     {
-        if output.status.success() {
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !path.is_empty() {
-                return Some(path);
+        for wrapper in ["/opt/homebrew/bin/braw-decode", "/usr/local/bin/braw-decode"] {
+            if Path::new(wrapper).exists() {
+                return Some((wrapper.to_string(), None));
             }
+        }
+        let opt_bin = "/opt/homebrew/opt/braw-decode/braw-decode-bin";
+        let opt_dir = Path::new("/opt/homebrew/opt/braw-decode");
+        if Path::new(opt_bin).exists() && sdk_present_at(opt_dir) {
+            return Some((opt_bin.to_string(), Some(opt_dir.to_string_lossy().to_string())));
         }
     }
 
     None
-}
-
-fn locate_redline_decoder() -> Option<String> {
-    for binary in ["REDline", "redline"] {
-        if let Ok(output) = crate::tools::create_command(if cfg!(target_os = "windows") { "where" } else { "which" }).arg(binary).output() {
-            if output.status.success() {
-                let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                if !path.is_empty() {
-                    return Some(path);
-                }
-            }
-        }
-    }
-    let common_paths = [
-        "/Applications/REDCINE-X PRO.app/Contents/MacOS/REDline",
-        "/usr/local/bin/REDline",
-        "/opt/homebrew/bin/REDline",
-        "/usr/local/bin/redline",
-        "/opt/homebrew/bin/redline",
-    ];
-    common_paths
-        .into_iter()
-        .find(|path| Path::new(path).exists())
-        .map(|path| path.to_string())
-}
-
-pub fn create_redline_proxy_via_file(
-    caps: &RedlineDecoderCaps,
-    input_path: &str,
-    decoded_path: &Path,
-    output_path: &Path,
-) -> Result<(), String> {
-    let executable = caps
-        .executable_path
-        .as_ref()
-        .ok_or("Decoder executable missing".to_string())?;
-    validate_proxy_output_path(input_path, decoded_path)?;
-    validate_proxy_output_path(input_path, output_path)?;
-
-    let decode_output = crate::tools::create_command(executable)
-        .args([
-            "--i",
-            input_path,
-            "--format",
-            "201",
-            "--PRcodec",
-            "3",
-            "--resizeX",
-            "1920",
-            "--resizeY",
-            "1080",
-            "--useMeta",
-            "--o",
-            &decoded_path.to_string_lossy(),
-        ])
-        .output()
-        .map_err(|e| format!("Failed to start REDline: {}", e))?;
-    if !decode_output.status.success() {
-        return Err(format!(
-            "Input: {}\nOutput: {}\nExit code: {}\n{}",
-            input_path,
-            decoded_path.display(),
-            decode_output
-                .status
-                .code()
-                .map(|value| value.to_string())
-                .unwrap_or_else(|| "unknown".to_string()),
-            tail_lines(&String::from_utf8_lossy(&decode_output.stderr), 20)
-        ));
-    }
-    let resolved_decoded_path = if decoded_path.exists() {
-        decoded_path.to_path_buf()
-    } else {
-        let appended_mov = PathBuf::from(format!("{}.mov", decoded_path.to_string_lossy()));
-        if appended_mov.exists() {
-            appended_mov
-        } else {
-            return Err(format!(
-                "Input: {}\nRequested output: {}\nREDline completed but no decoded file was created.",
-                input_path,
-                decoded_path.display()
-            ));
-        }
-    };
-
-    let ffmpeg_output = crate::tools::create_command("ffmpeg")
-        .args(["-nostdin"])
-        .args([
-            "-hide_banner",
-            "-y",
-            "-i",
-            &resolved_decoded_path.to_string_lossy(),
-        ])
-        .args(proxy_ffmpeg_args(output_path))
-        .output()
-        .map_err(|e| format!("Failed to run ffmpeg for proxy encode: {}", e))?;
-    if !ffmpeg_output.status.success() {
-        return Err(format!(
-            "Input: {}\nOutput: {}\nExit code: {}\n{}",
-            resolved_decoded_path.display(),
-            output_path.display(),
-            ffmpeg_output
-                .status
-                .code()
-                .map(|value| value.to_string())
-                .unwrap_or_else(|| "unknown".to_string()),
-            tail_lines(&String::from_utf8_lossy(&ffmpeg_output.stderr), 20)
-        ));
-    }
-    let _ = std::fs::remove_file(&resolved_decoded_path);
-    Ok(())
 }
 
 fn proxy_ffmpeg_args(output_path: &Path) -> Vec<String> {

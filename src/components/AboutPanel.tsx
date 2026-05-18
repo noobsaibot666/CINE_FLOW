@@ -54,12 +54,29 @@ export function AboutPanel({ open, info, onResetTour, onClose }: AboutPanelProps
               <div><strong>System</strong><p>macOS {info.macos_version} ({info.arch})</p></div>
               <div><strong>LUTs</strong><p>Supported (.cube)</p></div>
               <div><strong>BRAW Bridge</strong><p>{info.braw_bridge_active ? "Active" : "Not Detected"}</p></div>
-              <div><strong>REDline</strong><p>{info.redline_bridge_active ? "Active" : "Not Detected"}</p></div>
               <div style={{ gridColumn: 'span 2' }}>
                 <strong>Engine</strong>
                 <p style={{ fontSize: '11px', opacity: 0.7, marginTop: '2px' }}>
                   FFmpeg: {formatVersion(info.ffmpeg_version)}
                 </p>
+              </div>
+            </div>
+
+            <div style={{ marginTop: 20, padding: '12px 14px', background: 'rgba(255,255,255,0.04)', borderRadius: 8, border: '1px solid rgba(255,255,255,0.08)' }}>
+              <strong style={{ fontSize: 11, opacity: 0.6, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Supported Formats — Camera Match Lab</strong>
+              <div style={{ marginTop: 10, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px 20px', fontSize: 12 }}>
+                <div>
+                  <div style={{ opacity: 0.5, fontSize: 11, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Direct Analysis</div>
+                  <div style={{ opacity: 0.85, lineHeight: 1.6 }}>MP4 · MOV · ProRes 422 / 4444 · MXF</div>
+                </div>
+                <div>
+                  <div style={{ opacity: 0.5, fontSize: 11, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Auto-Proxied</div>
+                  <div style={{ opacity: 0.85, lineHeight: 1.6 }}>BRAW — requires braw-decode (Homebrew)</div>
+                </div>
+                <div style={{ gridColumn: 'span 2' }}>
+                  <div style={{ opacity: 0.5, fontSize: 11, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Not Supported — Export a Proxy First</div>
+                  <div style={{ opacity: 0.6, lineHeight: 1.6 }}>R3D (RED) · N-RAW (Nikon) · XAVC-I (Sony) and other formats requiring proprietary SDKs. Export MP4 or ProRes from your camera software, then use "Select Existing Proxy".</div>
+                </div>
               </div>
             </div>
 

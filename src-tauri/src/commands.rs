@@ -25,8 +25,8 @@ use crate::production_match_lab::{
     build_measurement_bundle,
     build_proxy_decode_path, build_proxy_paths, choose_source_path_for_analysis,
     classify_source_format, clip_name_from_path, create_braw_proxy_via_file, create_braw_proxy_via_stdout,
-    create_redline_proxy_via_file, hash_source_signature, is_braw_path, is_decoder_backed_raw_path, is_proxy_only_raw_path,
-    probe_braw_decoder, probe_redline_decoder, BrawDecoderCaps, RedlineDecoderCaps,
+    hash_source_signature, is_braw_path, is_decoder_backed_raw_path,
+    probe_braw_decoder, BrawDecoderCaps,
     validate_proxy_output_path,
     CameraMatchAnalysisResult, MatchLabAnalysisTracker, MatchLabProxyAttempt, MatchLabProxyTracker,
     ProductionMatchLabProxyResult, ProductionMatchLabRun, ProductionMatchLabRunResult,
@@ -52,7 +52,7 @@ use std::path::Path;
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::Semaphore;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -78,7 +78,6 @@ pub struct AppState {
     pub production_matchlab_proxy_tracker: MatchLabProxyTracker,
     pub production_matchlab_analysis_tracker: MatchLabAnalysisTracker,
     pub production_matchlab_braw_decoder_caps: Mutex<Option<BrawDecoderCaps>>,
-    pub production_matchlab_redline_decoder_caps: Mutex<Option<RedlineDecoderCaps>>,
 }
 
 // ─── Tauri Commands ───
@@ -825,6 +824,12 @@ pub async fn cancel_job(
         emit_job_state(&app, &state.job_manager, &job_id);
     }
     Ok(cancelled)
+}
+
+#[tauri::command]
+pub async fn clear_completed_jobs(state: State<'_, Arc<AppState>>) -> Result<(), String> {
+    state.job_manager.clear_completed();
+    Ok(())
 }
 
 #[tauri::command]
@@ -2460,7 +2465,6 @@ pub struct AppInfo {
     pub macos_version: String,
     pub arch: String,
     pub braw_bridge_active: bool,
-    pub redline_bridge_active: bool,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
@@ -2650,7 +2654,6 @@ pub async fn get_app_info() -> Result<AppInfo, String> {
             .unwrap_or_else(|| "Unknown".to_string()),
         arch: std::env::consts::ARCH.to_string(),
         braw_bridge_active: command_exists("braw_bridge") || command_exists("braw-decode"),
-        redline_bridge_active: command_exists("REDline") || command_exists("redline"),
     })
 }
 
@@ -5506,7 +5509,7 @@ async fn camera_match_analyze_clip_internal(
         Ok(CameraMatchAnalysisResult {
             measurement_bundle: build_measurement_bundle(
                 &source_path,
-                Some(if analysis_source_override_path.is_some() || is_braw_path(clip_path) || is_proxy_only_raw_path(clip_path) {
+                Some(if analysis_source_override_path.is_some() || is_braw_path(clip_path) {
                     "proxy".to_string()
                 } else {
                     "original".to_string()
@@ -5516,7 +5519,7 @@ async fn camera_match_analyze_clip_internal(
                 &aggregate,
             ),
             source_path,
-            source_kind: Some(if analysis_source_override_path.is_some() || is_braw_path(clip_path) || is_proxy_only_raw_path(clip_path) {
+            source_kind: Some(if analysis_source_override_path.is_some() || is_braw_path(clip_path) {
                 "proxy".to_string()
             } else {
                 "original".to_string()
@@ -5665,12 +5668,7 @@ async fn ensure_matchlab_proxy_internal(
     let final_string = final_path.to_string_lossy().to_string();
     let is_braw_source = is_braw_path(source_path);
     let braw_decoder_caps = if is_braw_source {
-        Some(get_cached_braw_decoder_caps(&state))
-    } else {
-        None
-    };
-    let redline_decoder_caps = if !is_braw_source {
-        Some(get_cached_redline_decoder_caps(&state))
+        Some(get_cached_braw_decoder_caps(&state, app))
     } else {
         None
     };
@@ -5679,25 +5677,10 @@ async fn ensure_matchlab_proxy_internal(
             mark_proxy_attempt_failure(&state, &proxy_key, None);
             return Err(format_matchlab_proxy_error(
                 "Proxy generation failed",
-                "BRAW decode unavailable — install braw-decode or use an MP4 proxy.",
+                "BRAW decoder not available — install Blackmagic RAW Player or use an MP4 proxy.",
                 &format!(
-                    "Tool found: {}\nHelp: {}\nNext steps: Install braw-decode on this machine, or pick Use existing MP4 proxy.",
-                    decoder_caps.found,
-                    decoder_caps.help_excerpt
-                ),
-            ));
-        }
-    }
-    if let Some(decoder_caps) = redline_decoder_caps.as_ref() {
-        if !decoder_caps.found {
-            mark_proxy_attempt_failure(&state, &proxy_key, None);
-            return Err(format_matchlab_proxy_error(
-                "Proxy generation failed",
-                "REDline decode unavailable — install REDline/REDCINE-X or use an MP4 proxy.",
-                &format!(
-                    "Tool found: {}\nHelp: {}\nNext steps: Install REDline on this machine so R3D and Nikon N-RAW can be proxied automatically, or pick Use existing MP4 proxy.",
-                    decoder_caps.found,
-                    decoder_caps.help_excerpt
+                    "File: {}\n\nTo decode BRAW files, install one of:\n  • Blackmagic RAW Player (free) — blackmagicdesign.com/support\n  • DaVinci Resolve (free edition)\n\nAlternatively, export an MP4 or ProRes proxy from your camera software, then use 'Select Existing Proxy' in Camera Match Lab.",
+                    source_path
                 ),
             ));
         }
@@ -5705,7 +5688,7 @@ async fn ensure_matchlab_proxy_internal(
 
     // Activate any security-scoped bookmark for the source file's volume before
     // spawning the blocking decoder task. Without this, sandboxed processes
-    // (REDline, braw-decode) cannot access files on user-selected external volumes.
+    // (braw-decode) cannot access files on user-selected external volumes.
     #[cfg(target_os = "macos")]
     let _proxy_bookmark_guard: Option<crate::mac_bookmarks::BookmarkGuard> = {
         state
@@ -5759,21 +5742,14 @@ async fn ensure_matchlab_proxy_internal(
                         )?;
                         return Ok(("decoder-file-output".to_string(), decoder_caps_for_task.executable_path.clone()));
                     }
-                    return Err(format!(
-                        "Tool found: {}\nHelp: {}\nVersion: {}\nNext steps: Verify braw-decode can output a file or stdout stream, or pick Use existing MP4 proxy.",
-                        decoder_caps_for_task.found,
-                        decoder_caps_for_task.help_excerpt,
-                        decoder_caps_for_task.version.unwrap_or_else(|| "unknown".to_string())
+                    return Err(format_matchlab_proxy_error(
+                        "Proxy generation failed",
+                        "BRAW decoder found but no output method available — use an MP4 proxy.",
+                        &format!(
+                            "File: {}\n\nThe BRAW decoder was detected but does not support stdout or file output on this system.\nAlternatively, export an MP4 or ProRes proxy and use 'Select Existing Proxy' in Camera Match Lab.",
+                            source_for_task
+                        ),
                     ));
-                }
-                if let Some(decoder_caps_for_task) = redline_decoder_caps {
-                    create_redline_proxy_via_file(
-                        &decoder_caps_for_task,
-                        &source_for_task,
-                        &decoded_for_task,
-                        &tmp_for_task,
-                    )?;
-                    return Ok(("redline-file-output".to_string(), decoder_caps_for_task.executable_path.clone()));
                 }
                 Err("No decoder available for this raw source.".to_string())
             }),
@@ -5794,10 +5770,10 @@ async fn ensure_matchlab_proxy_internal(
             &format!("Input: {}\nOutput: {}\n{}", source_path, tmp_path.display(), e),
         ))?
         .map_err(|details| {
-            let summary = if is_braw_source {
-                "ffmpeg failed writing proxy."
+            let summary = if details.contains("SDK") || details.contains("ffprobe") || details.contains("MP4 proxy") || details.contains("no frames") {
+                "BRAW SDK not available — use an MP4/ProRes proxy file instead."
             } else {
-                "REDline failed writing proxy."
+                "BRAW decode failed — check file and SDK, or use an MP4 proxy."
             };
             format_matchlab_proxy_error("Proxy generation failed", summary, &details)
         })?;
@@ -5856,25 +5832,13 @@ async fn ensure_matchlab_proxy_internal(
     result
 }
 
-fn get_cached_braw_decoder_caps(state: &Arc<AppState>) -> BrawDecoderCaps {
+fn get_cached_braw_decoder_caps(state: &Arc<AppState>, app: &AppHandle) -> BrawDecoderCaps {
     let mut lock = state.production_matchlab_braw_decoder_caps.lock().unwrap();
     if let Some(caps) = lock.as_ref() {
         return caps.clone();
     }
-    let caps = probe_braw_decoder();
-    *lock = Some(caps.clone());
-    caps
-}
-
-fn get_cached_redline_decoder_caps(state: &Arc<AppState>) -> RedlineDecoderCaps {
-    let mut lock = state
-        .production_matchlab_redline_decoder_caps
-        .lock()
-        .unwrap();
-    if let Some(caps) = lock.as_ref() {
-        return caps.clone();
-    }
-    let caps = probe_redline_decoder();
+    let resource_dir = app.path().resource_dir().ok();
+    let caps = probe_braw_decoder(resource_dir.as_deref());
     *lock = Some(caps.clone());
     caps
 }
@@ -6852,10 +6816,6 @@ pub async fn reset_app_data(
     state.production_matchlab_analysis_tracker.running.lock().unwrap().clear();
     {
         let mut caps = state.production_matchlab_braw_decoder_caps.lock().unwrap();
-        *caps = None;
-    }
-    {
-        let mut caps = state.production_matchlab_redline_decoder_caps.lock().unwrap();
         *caps = None;
     }
 

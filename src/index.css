@@ -5760,11 +5760,11 @@ body {
 }
 
 .jobs-section-title {
-  font-size: var(--inspector-label-size);
-  font-weight: var(--inspector-label-weight);
-  letter-spacing: var(--inspector-label-spacing);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .jobs-section-count {

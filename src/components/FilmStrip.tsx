@@ -88,7 +88,7 @@ export const FilmStrip = memo(function FilmStrip({
                 {indices.map((idx) => (
                     <div key={idx} className="film-strip-placeholder">
                         {idx === Math.floor(effectivePlaceholderCount / 2) ? (
-                            <span className="thumb-warning">No thumbnails</span>
+                            <span className="thumb-warning">{status === "ok" ? "Extracting…" : "No thumbnails"}</span>
                         ) : (
                             <span className="thumb-warning">—</span>
                         )}

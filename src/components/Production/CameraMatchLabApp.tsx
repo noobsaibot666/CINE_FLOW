@@ -112,6 +112,7 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
   const [heroSlot, setHeroSlot] = useState<CameraSlot>("A");
   const [analyzing, setAnalyzing] = useState(false);
   const [activeSlots, setActiveSlots] = useState<string[]>([]);
+  const abortAnalysisRef = useRef(false);
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const [runSummaries, setRunSummaries] = useState<ProductionMatchLabRunSummary[]>([]);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
@@ -476,9 +477,10 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
         } catch (error) {
           if (cancelled) return;
           const message = error instanceof Error ? error.message : String(error);
+          const parsedCalibErr = parseStructuredError(message);
           startTransition(() => {
-            setSlotErrors((prev) => ({ ...prev, [slot]: message.split("\n")[0] }));
-            setSlotErrorDetails((prev) => ({ ...prev, [slot]: message }));
+            setSlotErrors((prev) => ({ ...prev, [slot]: parsedCalibErr.summary || message.split("\n")[0] }));
+            setSlotErrorDetails((prev) => parsedCalibErr.details ? { ...prev, [slot]: parsedCalibErr.details } : prev);
           });
         } finally {
           if (!cancelled) {
@@ -536,7 +538,7 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
       title: `Select camera ${slot} test clip`,
       filters: [{
         name: "Video",
-        extensions: ["mov", "mp4", "mxf", "mkv", "avi", "braw", "r3d", "nev"],
+        extensions: ["mov", "mp4", "mxf", "mkv", "avi", "braw"],
       }],
     });
     if (typeof selected !== "string") return;
@@ -725,9 +727,10 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      const parsedRecalibErr = parseStructuredError(message);
       startTransition(() => {
-        setSlotErrors((prev) => ({ ...prev, [slot]: message.split("\n")[0] }));
-        setSlotErrorDetails((prev) => ({ ...prev, [slot]: message }));
+        setSlotErrors((prev) => ({ ...prev, [slot]: parsedRecalibErr.summary || message.split("\n")[0] }));
+        setSlotErrorDetails((prev) => parsedRecalibErr.details ? { ...prev, [slot]: parsedRecalibErr.details } : prev);
       });
     } finally {
       setCalibratingSlots((prev) => ({ ...prev, [slot]: false }));
@@ -736,6 +739,7 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
 
   const analyzeClips = async () => {
     if (selectedSlots.length === 0) return;
+    abortAnalysisRef.current = false;
     setAnalyzing(true);
     setActiveSlots(selectedSlots);
     setSlotErrors({});
@@ -745,6 +749,7 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
 
     try {
       for (const slot of selectedSlots) {
+        if (abortAnalysisRef.current) break;
         const clipPath = clipsBySlot[slot];
         if (!clipPath) continue;
         try {
@@ -1015,6 +1020,18 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
     <div className="scrollable-view" style={{ padding: 24 }}>
       <div className="production-matchlab-shell" style={matchLabLayoutStyle}>
         <main style={{ minWidth: 0, paddingBottom: 48 }}>
+          {analyzing && (
+            <div style={{ background: "rgba(245, 158, 11, 0.1)", border: "1px solid rgba(245, 158, 11, 0.25)", borderRadius: 8, padding: "8px 14px", marginBottom: 12, display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "#f59e0b" }}>
+              <RefreshCw size={13} style={{ flexShrink: 0, animation: "spin 1s linear infinite" }} />
+              <span>Analysis running — this may take a few minutes per clip. Use short representative clips (&lt;60s) for best performance.</span>
+            </div>
+          )}
+          {!analyzing && selectedSlots.length > 0 && (
+            <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 8, padding: "6px 14px", marginBottom: 10, fontSize: 11, color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 6 }}>
+              <HelpCircle size={11} />
+              <span>For fastest results, use short representative clips under 60 seconds.</span>
+            </div>
+          )}
           <div style={headerRowStyle}>
             <div style={headerTitleRowStyle}>
               <div style={headerTitleStyle}>Camera Match Lab</div>
@@ -1064,6 +1081,16 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                 >
                   <RefreshCw size={14} /> {analyzing ? "Analyzing..." : "Analyze"}
                 </button>
+                {analyzing && (
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => { abortAnalysisRef.current = true; }}
+                    title="Stop after current clip finishes"
+                  >
+                    Stop
+                  </button>
+                )}
                 <div style={{ position: "relative", minWidth: 0 }}>
                   <button
                     type="button"
@@ -2922,26 +2949,16 @@ function isBrawClip(path: string) {
   return path.toLowerCase().endsWith(".braw");
 }
 
-function isNrawClip(path: string) {
-  return path.toLowerCase().endsWith(".nev");
-}
-
-function isR3dClip(path: string) {
-  return path.toLowerCase().endsWith(".r3d");
-}
-
-function isProxyOnlyRawClip(path: string) {
-  return isNrawClip(path) || isR3dClip(path);
+function isProxyOnlyRawClip(_path: string) {
+  return false;
 }
 
 function isDecoderBackedRawClip(path: string) {
-  return isBrawClip(path) || isProxyOnlyRawClip(path);
+  return isBrawClip(path);
 }
 
 function getProxyOnlyFormatBadge(path: string) {
   if (isBrawClip(path)) return "BRAW";
-  if (isNrawClip(path)) return "N-RAW";
-  if (isR3dClip(path)) return "R3D";
   return "RAW";
 }
 
@@ -2957,8 +2974,6 @@ function getClipExtension(path: string) {
 
 function getClipFormatBadge(path: string, analysis?: CameraMatchAnalysisResult | null) {
   if (isBrawClip(path)) return "BRAW";
-  if (isNrawClip(path)) return "N-RAW";
-  if (isR3dClip(path)) return "R3D";
   if (isProResCodec(analysis?.measurement_bundle?.codec_name) || path.toLowerCase().includes("prores")) return "PRORES";
   const extension = getClipExtension(path);
   if (extension === "mp4") return "MP4";
@@ -2968,8 +2983,6 @@ function getClipFormatBadge(path: string, analysis?: CameraMatchAnalysisResult |
 
 function clipFormatBadgeStyle(path: string, analysis?: CameraMatchAnalysisResult | null): React.CSSProperties {
   const badge = getClipFormatBadge(path, analysis);
-  if (badge === "R3D") return { background: "rgba(239,68,68,0.12)", color: "rgba(252,165,165,0.98)", border: "1px solid rgba(239,68,68,0.22)" };
-  if (badge === "N-RAW") return { background: "rgba(245,158,11,0.12)", color: "rgba(253,224,71,0.98)", border: "1px solid rgba(245,158,11,0.24)" };
   if (badge === "BRAW") return { background: "rgba(249,115,22,0.12)", color: "rgba(253,186,116,0.98)", border: "1px solid rgba(249,115,22,0.24)" };
   if (badge === "MP4") return { background: "rgba(56,189,248,0.12)", color: "rgba(186,230,253,0.98)", border: "1px solid rgba(56,189,248,0.22)" };
   if (badge === "MOV") return { background: "rgba(161,161,170,0.12)", color: "rgba(228,228,231,0.98)", border: "1px solid rgba(161,161,170,0.22)" };
@@ -2979,8 +2992,6 @@ function clipFormatBadgeStyle(path: string, analysis?: CameraMatchAnalysisResult
 
 function formatSourceKindLabel(analysis: CameraMatchAnalysisResult) {
   const kind = analysis.original_format_kind || "";
-  if (kind === "NIKON_NRAW") return "N-RAW";
-  if (kind === "RED_R3D") return "R3D";
   if (kind === "BLACKMAGIC_BRAW" || kind === "BLACKMAGIC_RAW") return "BRAW";
   if (kind) return kind.replace(/_/g, " ");
   return "Video";

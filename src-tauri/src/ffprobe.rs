@@ -72,7 +72,6 @@ pub fn probe_file(file_path: &str) -> Result<ClipMetadata, String> {
         .args([
             "-v",
             "quiet",
-            "-nostdin",
             "-print_format",
             "json",
             "-show_format",

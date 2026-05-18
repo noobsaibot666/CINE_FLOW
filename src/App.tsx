@@ -2402,20 +2402,24 @@ function AppContent() {
           )}
 
           {showExportPanel && projectId && (
-            <ExportPanel
-              projectId={projectId}
-              clips={clips.map(c => c.clip).filter((c) => c.flag !== "reject")}
-              selectedBlockIds={selectedBlockIds}
-              currentFilterMode={viewFilter}
-              currentFilterMinRating={viewMinRating}
-              onError={setUiError}
-              onClose={() => setShowExportPanel(false)}
-            />
+            <Suspense fallback={null}>
+              <ExportPanel
+                projectId={projectId}
+                clips={clips.map(c => c.clip).filter((c) => c.flag !== "reject")}
+                selectedBlockIds={selectedBlockIds}
+                currentFilterMode={viewFilter}
+                currentFilterMinRating={viewMinRating}
+                onError={setUiError}
+                onClose={() => setShowExportPanel(false)}
+              />
+            </Suspense>
           )}
 
-          <JobsPanel open={jobsOpen} jobs={jobs} onClose={() => setJobsOpen(false)} onRefresh={refreshJobs} extracting={extracting} extractProgress={extractProgress} scanning={scanning} />
-          <AboutPanel open={aboutOpen} info={appInfo} onResetTour={resetTour} onClose={() => setAboutOpen(false)} />
-          <SettingsPanel open={settingsOpen} info={appInfo} onClose={() => setSettingsOpen(false)} />
+          <Suspense fallback={null}>
+            <JobsPanel open={jobsOpen} jobs={jobs} onClose={() => setJobsOpen(false)} onRefresh={refreshJobs} extracting={extracting} extractProgress={extractProgress} scanning={scanning} />
+            <AboutPanel open={aboutOpen} info={appInfo} onResetTour={resetTour} onClose={() => setAboutOpen(false)} />
+            <SettingsPanel open={settingsOpen} info={appInfo} onClose={() => setSettingsOpen(false)} />
+          </Suspense>
 
           <TourGuide
             run={tourRun}
