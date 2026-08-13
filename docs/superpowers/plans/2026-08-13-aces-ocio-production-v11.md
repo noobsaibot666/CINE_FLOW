@@ -371,7 +371,7 @@ git commit -m "Add production match confidence scoring"
 - Modify: `docs/src/content/docs/product/roadmap.md` only after a phase is production-approved
 - Modify: the relevant user-guide or technical Astro page for the approved feature
 
-- [ ] **Step 1: Confirm production approval**
+- [x] **Step 1: Confirm production approval**
 
 Do not publish active development status in Astro. Publish only finalized user-facing behavior, such as:
 
@@ -380,13 +380,13 @@ Camera Match Lab now labels original, vendor-decoded, and proxy-based analysis p
 Match & Normalize now includes confidence and provenance in exported reports.
 ```
 
-- [ ] **Step 2: Verify docs**
+- [x] **Step 2: Verify docs**
 
 Run: `cd docs && npm run build`
 
 Expected: Astro builds successfully.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add docs/src/content/docs/product/roadmap.md docs/src/content/docs/technical/media-processing.md docs/src/content/docs/user-guide/production.md

@@ -10,12 +10,18 @@ description: Current CineFlow Suite roadmap by production phase.
 CineFlow Suite 1.x focuses on local-first production workflows across macOS and Windows:
 
 - Pre-production folder setup, references, shot lists, and camera starter sheets
-- Production project management, look setup, camera matching, on-set coaching, normalization, and frame preview
+- Production project management, look setup, camera matching, on-set coaching, evidence-backed normalization, and frame preview
 - Post-production contact sheets, scene organization, safe copy verification, review notes, and export packaging
+
+## Recent Production Workflow Improvements
+
+- Camera Match Lab labels original, vendor-decoded, operator-proxy, and proxy-required analysis paths.
+- Camera Match Lab saves provenance with analysis runs, including decode path, capability report data, and confidence.
+- Match & Normalize can use saved Match Lab runs to build measured normalization steps and exports with confidence and evidence.
 
 ## Near-Term Priorities
 
-- Harden media import and fallback handling across MP4, MOV, and BRAW workflows
+- Harden media import and fallback handling across MP4, MOV, BRAW, and vendor/proxy RAW workflows
 - Keep export branding consistent across PDF, image, CSV, and review handoff outputs
 - Improve Windows packaging and Microsoft Store submission readiness
 - Continue tightening App Store compliance, privacy documentation, and sandbox behavior
