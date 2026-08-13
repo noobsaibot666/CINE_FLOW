@@ -7233,6 +7233,13 @@ pub async fn production_get_media_capability_report(
 }
 
 #[tauri::command]
+pub async fn production_get_raw_ingest_report(
+    source_path: String,
+) -> Result<crate::production_raw_ingest::RawIngestReport, String> {
+    Ok(crate::production_raw_ingest::build_raw_ingest_report(&source_path))
+}
+
+#[tauri::command]
 pub async fn production_matchlab_ensure_proxy(
     project_id: String,
     slot: String,
