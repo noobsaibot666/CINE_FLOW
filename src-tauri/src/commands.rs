@@ -7378,6 +7378,19 @@ pub async fn production_matchlab_save_run(
         let confidence_score = compute_production_match_confidence(&ProductionMatchConfidenceInput {
             decode_path_kind: Some(capability_report.decode_path_kind.as_str()),
             source_profile_id: item.analysis.source_profile_id.as_deref(),
+            color_transform_status: item.analysis.color_transform_status.as_deref(),
+            metrics_trusted: item.analysis.metrics_trusted,
+            proxy_validation_status: item
+                .analysis
+                .proxy_validation
+                .as_ref()
+                .map(|report| report.validation_status.as_str()),
+            proxy_warning_count: item
+                .analysis
+                .proxy_validation
+                .as_ref()
+                .map(|report| report.warnings.len())
+                .unwrap_or(0),
             chart_detected: item.calibration.as_ref().map(|calibration| calibration.chart_detected),
             calibration_quality_score: item
                 .calibration

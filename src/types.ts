@@ -479,6 +479,8 @@ export interface ProductionMatchPresetPayload {
         camera_label: string;
         checklist: string[];
         evidence?: string[];
+        trust_label?: string;
+        trust_reasons?: string[];
         confidence_score?: number | null;
         decode_path_kind?: string | null;
     }>;
@@ -791,6 +793,7 @@ export interface CameraMatchAnalysis {
     metrics: CameraMatchMetrics;
     delta_vs_hero?: CameraMatchDelta | null;
     suggestions?: CameraMatchSuggestionSet | null;
+    provenance?: string[];
 }
 
 export interface CameraMatchResult {

@@ -912,6 +912,8 @@ export function buildMatchPresetPayload(
       camera_label: `${camera.brand || "Camera"} ${camera.model || camera.slot}`.trim(),
       checklist: buildMatchNormalizeChecklist(camera.slot, heroSlot, runResultsBySlot.get(camera.slot), heroRunResult),
       evidence: buildMatchNormalizeEvidence(runResultsBySlot.get(camera.slot)),
+      trust_label: buildMatchNormalizeTrustSummary(runResultsBySlot.get(camera.slot)).label,
+      trust_reasons: buildMatchNormalizeTrustSummary(runResultsBySlot.get(camera.slot)).reasons,
       confidence_score: runResultsBySlot.get(camera.slot)?.confidence_score ?? null,
       decode_path_kind: runResultsBySlot.get(camera.slot)?.decode_path_kind ?? null,
     })),
@@ -962,6 +964,9 @@ function buildMatchNormalizeChecklist(
   if (heroDecode && result.decode_path_kind && heroDecode !== result.decode_path_kind) {
     checklist.push(`Decode path differs from Hero ${heroSlot}; keep this preset tied to the saved analysis run.`);
   }
+  for (const reason of buildMatchNormalizeTrustSummary(result).reasons.slice(0, 3)) {
+    checklist.push(`Trust note: ${reason}`);
+  }
 
   return checklist;
 }
@@ -977,6 +982,17 @@ function buildMatchNormalizeEvidence(result?: ProductionMatchLabRunResult): stri
   if (result.confidence_score != null) {
     evidence.push(`Confidence ${formatConfidenceLabel(result.confidence_score)}`);
   }
+  evidence.push(`Trust ${buildMatchNormalizeTrustSummary(result).label}`);
+  const analysis = result.analysis;
+  if (analysis.source_profile_id) {
+    evidence.push(`Source profile ${analysis.source_profile_id}`);
+  }
+  if (analysis.analysis_color_space || analysis.color_transform_status) {
+    evidence.push(`Color path ${analysis.analysis_color_space ?? "ACEScct"} · ${formatTransformStatus(analysis.color_transform_status)}`);
+  }
+  if (analysis.proxy_validation) {
+    evidence.push(`Proxy ${formatProxyValidationStatus(analysis.proxy_validation.validation_status)} · ${formatProxyPairing(analysis.proxy_validation.source_pairing)}`);
+  }
   if (result.capability_json) {
     try {
       const capability = JSON.parse(result.capability_json) as { warnings?: string[] };
@@ -986,6 +1002,78 @@ function buildMatchNormalizeEvidence(result?: ProductionMatchLabRunResult): stri
     }
   }
   return evidence;
+}
+
+function buildMatchNormalizeTrustSummary(result?: ProductionMatchLabRunResult): { label: string; reasons: string[] } {
+  if (!result) {
+    return {
+      label: "Setup only",
+      reasons: ["No Match Lab run selected; preset is based on setup guidance only."],
+    };
+  }
+  const reasons: string[] = [];
+  const analysis = result.analysis;
+
+  if (!analysis.source_profile_id) {
+    reasons.push("Source profile is missing.");
+  }
+  if (!analysis.metrics_trusted) {
+    reasons.push(`ACES metrics are provisional: ${formatTransformStatus(analysis.color_transform_status)}.`);
+  }
+  if (analysis.proxy_validation?.validation_status === "warnings") {
+    reasons.push("Proxy provenance has warnings.");
+  }
+  if (analysis.proxy_validation?.warnings?.[0]) {
+    reasons.push(analysis.proxy_validation.warnings[0]);
+  }
+  if (result.decode_path_kind === "operator_proxy") {
+    reasons.push("Analysis used an operator proxy; keep the preset tied to that proxy export.");
+  }
+  if (result.calibration?.chart_detected === false) {
+    reasons.push("Chart calibration was not approved for this slot.");
+  }
+  if (result.calibration?.calibration_quality_score != null && result.calibration.calibration_quality_score < 65) {
+    reasons.push(`Calibration quality is ${result.calibration.calibration_quality_level}.`);
+  }
+
+  const score = result.confidence_score == null ? null : result.confidence_score <= 1 ? result.confidence_score * 100 : result.confidence_score;
+  if (score != null && score < 65 && !reasons.some((reason) => reason.includes("Confidence"))) {
+    reasons.push(`Confidence is ${formatConfidenceLabel(score)}.`);
+  }
+
+  if (reasons.length === 0) {
+    return { label: "Trusted", reasons: ["Decode, transform, proxy, and chart provenance are acceptable."] };
+  }
+  if (analysis.source_kind === "proxy" || result.decode_path_kind === "operator_proxy") {
+    return { label: "Proxy-only", reasons };
+  }
+  return { label: "Provisional", reasons };
+}
+
+function formatTransformStatus(status?: string | null) {
+  if (status === "transform_applied") return "Transform applied";
+  if (status === "metadata_only") return "Metadata only";
+  if (status === "processor_not_linked") return "Processor not linked";
+  if (status === "config_missing") return "Config missing";
+  if (status === "unsupported_transform") return "Unsupported transform";
+  if (status === "display_referred_fallback") return "Display fallback";
+  if (!status) return "Unknown transform";
+  return status.replace(/_/g, " ");
+}
+
+function formatProxyValidationStatus(status?: string | null) {
+  if (status === "validated") return "Validated";
+  if (status === "warnings") return "Needs review";
+  if (!status) return "Not checked";
+  return status.replace(/_/g, " ");
+}
+
+function formatProxyPairing(pairing?: string | null) {
+  if (pairing === "generated_from_source") return "Generated";
+  if (pairing === "operator_filename_match") return "Filename match";
+  if (pairing === "operator_unverified") return "Verify manually";
+  if (!pairing) return "Unknown";
+  return pairing.replace(/_/g, " ");
 }
 
 function formatDecodePathKind(kind: string) {

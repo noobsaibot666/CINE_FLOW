@@ -48,6 +48,7 @@ interface ProductionMatchSheetOptions {
     delta: CameraMatchDelta | null;
     suggestions: CameraMatchSuggestionSet | null;
     calibration?: CalibrationChartDetection | null;
+    provenance?: string[];
   }>;
 }
 
@@ -393,7 +394,8 @@ async function drawMatchSheetPage(options: ProductionMatchSheetOptions): Promise
     cursorY += 126;
     const suggestionLines = buildAdjustmentLines(camera.suggestions);
     const calibrationLines = buildCalibrationLines(camera.calibration, camera.slot, options.heroSlot);
-    const adjustmentsHeight = calibrationLines.length > 0 ? 194 : 156;
+    const provenanceLines = camera.provenance ?? [];
+    const adjustmentsHeight = provenanceLines.length > 0 ? 236 : calibrationLines.length > 0 ? 194 : 156;
     ctx.fillStyle = "#f4f6f9";
     roundRect(ctx, x + 18, cursorY, columnWidth - 36, adjustmentsHeight, 16, true, false);
     ctx.fillStyle = "#111827";
@@ -416,6 +418,21 @@ async function drawMatchSheetPage(options: ProductionMatchSheetOptions): Promise
           truncateText(ctx, line, columnWidth - 72, "600 12px Helvetica"),
           x + 30,
           calibrationTop + 18 + lineIndex * 16,
+        );
+      });
+    }
+    if (provenanceLines.length > 0) {
+      const provenanceTop = cursorY + adjustmentsHeight - 58;
+      ctx.fillStyle = "#6b7280";
+      ctx.font = "700 10px Helvetica";
+      ctx.fillText("PROVENANCE", x + 30, provenanceTop);
+      ctx.fillStyle = "#374151";
+      ctx.font = "600 11px Helvetica";
+      provenanceLines.slice(0, 2).forEach((line, lineIndex) => {
+        ctx.fillText(
+          truncateText(ctx, line, columnWidth - 72, "600 11px Helvetica"),
+          x + 30,
+          provenanceTop + 17 + lineIndex * 15,
         );
       });
     }

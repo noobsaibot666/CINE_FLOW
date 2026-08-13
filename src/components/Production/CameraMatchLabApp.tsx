@@ -982,15 +982,19 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
         clientName: project.client_name,
         heroSlot,
         generatedAt: matchResult.generated_at,
-        cameras: matchResult.analyses.map((analysis) => ({
-          slot: analysis.slot,
-          title: analysis.clip_name,
-          frameDataUrl: frameDataUrls[analysis.representative_frame_path] ?? "",
-          metrics: analysis.metrics,
-          delta: analysis.delta_vs_hero ?? null,
-          suggestions: analysis.suggestions ?? null,
-          calibration: calibrationBySlot[analysis.slot] ?? null,
-        })),
+        cameras: matchResult.analyses.map((analysis) => {
+          const rawAnalysis = analysisBySlot[analysis.slot];
+          return {
+            slot: analysis.slot,
+            title: analysis.clip_name,
+            frameDataUrl: frameDataUrls[analysis.representative_frame_path] ?? "",
+            metrics: analysis.metrics,
+            delta: analysis.delta_vs_hero ?? null,
+            suggestions: analysis.suggestions ?? null,
+            calibration: calibrationBySlot[analysis.slot] ?? null,
+            provenance: rawAnalysis ? buildExportProvenance(rawAnalysis) : [],
+          };
+        }),
       };
       const success = kind === "pdf"
         ? await exportProductionMatchSheetPdf(exportPayload)
@@ -3267,6 +3271,25 @@ function formatMetricTrustLabel(analysis?: CameraMatchAnalysisResult | null) {
   if (analysis.metrics_trusted) return "Trusted ACES metrics";
   const status = formatTransformStatus(analysis.color_transform_status);
   return `Provisional · ${status}`;
+}
+
+function buildExportProvenance(analysis: CameraMatchAnalysisResult) {
+  const lines = [
+    `Metric trust: ${formatMetricTrustLabel(analysis)}`,
+    `Source profile: ${analysis.source_profile_id ?? "Unconfirmed"}`,
+    `Color path: ${analysis.analysis_color_space ?? ANALYSIS_COLOR_SPACE} · ${formatTransformStatus(analysis.color_transform_status)}`,
+  ];
+  if (analysis.proxy_validation) {
+    lines.push(`Proxy: ${formatProxyValidationStatus(analysis.proxy_validation.validation_status)} · ${formatProxyPairing(analysis.proxy_validation.source_pairing)}`);
+    lines.push(`Proxy codec/resolution: ${analysis.proxy_validation.proxy_codec ?? "Unknown"} · ${analysis.proxy_validation.proxy_resolution ?? "Unknown"}`);
+    if (analysis.proxy_validation.warnings[0]) {
+      lines.push(`Proxy warning: ${analysis.proxy_validation.warnings[0]}`);
+    }
+  }
+  if (analysis.ocio_config_status) {
+    lines.push(`OCIO: ${analysis.ocio_config_status.replace(/_/g, " ")} · ${analysis.ocio_config_source ?? "unknown"}`);
+  }
+  return lines;
 }
 
 function metricTrustToneStyle(analysis?: CameraMatchAnalysisResult | null): React.CSSProperties {

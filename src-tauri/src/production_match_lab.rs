@@ -248,6 +248,10 @@ pub struct ProductionMatchLabRun {
 pub struct ProductionMatchConfidenceInput<'a> {
     pub decode_path_kind: Option<&'a str>,
     pub source_profile_id: Option<&'a str>,
+    pub color_transform_status: Option<&'a str>,
+    pub metrics_trusted: Option<bool>,
+    pub proxy_validation_status: Option<&'a str>,
+    pub proxy_warning_count: usize,
     pub chart_detected: Option<bool>,
     pub calibration_quality_score: Option<f64>,
     pub clipped_patch_count: u32,
@@ -268,6 +272,28 @@ pub fn compute_production_match_confidence(input: &ProductionMatchConfidenceInpu
     if input.source_profile_id.is_none() {
         score -= 14;
     }
+
+    match input.color_transform_status {
+        Some("transform_applied") => {}
+        Some("metadata_only") | Some("processor_not_linked") => score -= 14,
+        Some("config_missing") | Some("unsupported_transform") => score -= 22,
+        Some(_) => score -= 8,
+        None => score -= 10,
+    }
+
+    match input.metrics_trusted {
+        Some(true) => {}
+        Some(false) => score -= 12,
+        None => score -= 8,
+    }
+
+    match input.proxy_validation_status {
+        Some("validated") => {}
+        Some("warnings") => score -= 8,
+        Some(_) => score -= 6,
+        None => {}
+    }
+    score -= (input.proxy_warning_count.min(3) as i32) * 4;
 
     match input.chart_detected {
         Some(true) => {}
@@ -1624,6 +1650,10 @@ mod tests {
         ProductionMatchConfidenceInput {
             decode_path_kind: Some("direct_original"),
             source_profile_id: Some("SONY_SLOG3_SGAMUT3_CINE"),
+            color_transform_status: Some("transform_applied"),
+            metrics_trusted: Some(true),
+            proxy_validation_status: None,
+            proxy_warning_count: 0,
             chart_detected: Some(true),
             calibration_quality_score: Some(0.92),
             clipped_patch_count: 0,
@@ -1832,5 +1862,23 @@ mod tests {
         let mut low_frame_count = baseline_input();
         low_frame_count.frame_count = 1;
         assert!(compute_production_match_confidence(&low_frame_count) < 85);
+    }
+
+    #[test]
+    fn confidence_decreases_for_transform_and_proxy_risks() {
+        let mut metadata_only = baseline_input();
+        metadata_only.color_transform_status = Some("metadata_only");
+        metadata_only.metrics_trusted = Some(false);
+        assert!(compute_production_match_confidence(&metadata_only) < 75);
+
+        let mut weak_proxy = baseline_input();
+        weak_proxy.decode_path_kind = Some("operator_proxy");
+        weak_proxy.proxy_validation_status = Some("warnings");
+        weak_proxy.proxy_warning_count = 2;
+        assert!(compute_production_match_confidence(&weak_proxy) < 65);
+
+        let mut missing_trust = baseline_input();
+        missing_trust.metrics_trusted = None;
+        assert!(compute_production_match_confidence(&missing_trust) < 90);
     }
 }

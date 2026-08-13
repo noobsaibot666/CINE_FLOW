@@ -146,7 +146,12 @@ export function MatchNormalizeApp({ project }: MatchNormalizeAppProps) {
         { title: `Hero Camera ${payload.hero_slot}`, lines: [payload.hero_summary] },
         ...payload.steps.map((step) => ({
           title: `${step.slot} Camera · ${step.camera_label}`,
-          lines: step.evidence?.length ? [...step.checklist, ...step.evidence.map((item) => `Evidence: ${item}`)] : step.checklist,
+          lines: [
+            `Trust: ${step.trust_label ?? "Not scored"}`,
+            ...(step.trust_reasons ?? []).map((item) => `Trust reason: ${item}`),
+            ...step.checklist,
+            ...(step.evidence ?? []).map((item) => `Evidence: ${item}`),
+          ],
         })),
       ],
     });
@@ -219,6 +224,12 @@ export function MatchNormalizeApp({ project }: MatchNormalizeAppProps) {
                 <h3 style={{ margin: "4px 0 10px" }}>{step.camera_label}</h3>
                 {step.confidence_score != null ? <span style={confidenceBadgeStyle}>{formatConfidenceLabel(step.confidence_score)}</span> : null}
               </div>
+              <div style={trustPanelStyle}>
+                <span style={trustLabelStyle}>{step.trust_label ?? "Not scored"}</span>
+                {(step.trust_reasons ?? []).slice(0, 2).map((reason) => (
+                  <span key={reason} style={trustReasonStyle}>{reason}</span>
+                ))}
+              </div>
               <ul style={bulletListStyle}>
                 {step.checklist.map((item) => <li key={item}>{item}</li>)}
               </ul>
@@ -275,6 +286,9 @@ const stepGridStyle: React.CSSProperties = { display: "grid", gridTemplateColumn
 const stepCardStyle: React.CSSProperties = { padding: 14, borderRadius: 14, background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" };
 const stepTitleRowStyle: React.CSSProperties = { display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10, minWidth: 0 };
 const confidenceBadgeStyle: React.CSSProperties = { marginTop: 4, flexShrink: 0, padding: "4px 7px", borderRadius: 999, border: "1px solid rgba(255,255,255,0.08)", color: "var(--text-secondary)", fontSize: "0.68rem", fontWeight: 800 };
+const trustPanelStyle: React.CSSProperties = { display: "grid", gap: 5, marginBottom: 12, padding: "9px 10px", borderRadius: 10, border: "1px solid rgba(255,255,255,0.07)", background: "rgba(255,255,255,0.018)" };
+const trustLabelStyle: React.CSSProperties = { color: "rgba(186,230,253,0.94)", fontSize: "0.74rem", fontWeight: 800 };
+const trustReasonStyle: React.CSSProperties = { color: "var(--text-muted)", fontSize: "0.72rem", lineHeight: 1.35 };
 const bulletListStyle: React.CSSProperties = { margin: 0, paddingLeft: 18, color: "var(--text-secondary)", display: "grid", gap: 6 };
 const evidenceListStyle: React.CSSProperties = { marginTop: 12, display: "grid", gap: 6 };
 const evidenceItemStyle: React.CSSProperties = { color: "var(--text-muted)", fontSize: "0.74rem", lineHeight: 1.35, padding: "7px 9px", borderRadius: 10, border: "1px solid rgba(255,255,255,0.05)", background: "rgba(255,255,255,0.018)" };

@@ -165,10 +165,10 @@ git commit -m "Carry Match Lab color transform intent"
 - Modify: `src/components/Production/productionLogic.ts`
 - Modify: `src-tauri/src/production_match_lab.rs`
 
-- [ ] Penalize confidence when source profile is missing, OCIO is metadata-only, proxy provenance is weak, or chart calibration failed.
-- [ ] Show the user why a match is trusted, provisional, or proxy-only.
-- [ ] Export provenance in PDF/image reports.
-- [ ] Commit with `git commit -m "Use transform provenance in Match Normalize"`.
+- [x] Penalize confidence when source profile is missing, OCIO is metadata-only, proxy provenance is weak, or chart calibration failed.
+- [x] Show the user why a match is trusted, provisional, or proxy-only.
+- [x] Export provenance in PDF/image reports.
+- [x] Commit with `git commit -m "Use transform provenance in Match Normalize"`.
 
 ## Phase 9: Public Astro Documentation
 
