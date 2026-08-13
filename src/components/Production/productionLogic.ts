@@ -4,6 +4,8 @@ import {
   ProductionLookOutputs,
   ProductionLookRecommendation,
   ProductionLookSetup,
+  ProductionMatchLabRun,
+  ProductionMatchLabRunResult,
   ProductionMatchPresetPayload,
   ProductionQuickSetupRow,
   ProductionUsageGuidance,
@@ -889,9 +891,12 @@ export function buildMatchPresetPayload(
   heroSlot: string,
   cameras: ProductionCameraConfig[],
   outputs: ProductionLookOutputs | null,
+  matchLabRun?: ProductionMatchLabRun | null,
 ): ProductionMatchPresetPayload {
   const heroRecommendation = outputs?.recommendations.find((item) => item.slot === heroSlot) ?? null;
   const heroCamera = cameras.find((item) => item.slot === heroSlot) ?? null;
+  const runResultsBySlot = new Map((matchLabRun?.results ?? []).map((result) => [result.slot, result]));
+  const heroRunResult = runResultsBySlot.get(heroSlot);
   const others = cameras.filter((item) => item.slot !== heroSlot && (item.brand || item.model || item.recording_mode));
 
   return {
@@ -899,15 +904,108 @@ export function buildMatchPresetPayload(
     hero_summary: heroRecommendation
       ? `${heroRecommendation.camera_label}: ${heroRecommendation.exposure_target}`
       : `${heroCamera?.brand || "Hero"} ${heroCamera?.model || heroSlot}: build a clean baseline in Look Setup first.`,
+    evidence_summary: matchLabRun
+      ? `Using Match Lab run from ${formatMatchRunTimestamp(matchLabRun.created_at)} with Hero ${matchLabRun.hero_slot}.`
+      : "No Match Lab run selected; using setup checklist guidance.",
     steps: others.map((camera) => ({
       slot: camera.slot,
       camera_label: `${camera.brand || "Camera"} ${camera.model || camera.slot}`.trim(),
-      checklist: [
-        `Match exposure method to hero camera ${heroSlot}; confirm on zebra or waveform, not just a Rec709 monitor.`,
-        "Align kelvin and tint before moving contrast or saturation.",
-        "Confirm sharpening, NR, and detail processing are off.",
-        "Stay in the same monitoring class as the hero camera.",
-      ],
+      checklist: buildMatchNormalizeChecklist(camera.slot, heroSlot, runResultsBySlot.get(camera.slot), heroRunResult),
+      evidence: buildMatchNormalizeEvidence(runResultsBySlot.get(camera.slot)),
+      confidence_score: runResultsBySlot.get(camera.slot)?.confidence_score ?? null,
+      decode_path_kind: runResultsBySlot.get(camera.slot)?.decode_path_kind ?? null,
     })),
   };
+}
+
+function buildMatchNormalizeChecklist(
+  slot: string,
+  heroSlot: string,
+  result?: ProductionMatchLabRunResult,
+  heroResult?: ProductionMatchLabRunResult,
+): string[] {
+  if (!result) {
+    return [
+      `Match exposure method to hero camera ${heroSlot}; confirm on zebra or waveform, not just a Rec709 monitor.`,
+      "Align kelvin and tint before moving contrast or saturation.",
+      "Confirm sharpening, NR, and detail processing are off.",
+      "Stay in the same monitoring class as the hero camera.",
+    ];
+  }
+
+  const lumaDelta = heroResult
+    ? result.analysis.aggregate.luma_median - heroResult.analysis.aggregate.luma_median
+    : null;
+  const redDelta = heroResult
+    ? result.analysis.aggregate.rgb_medians.red - heroResult.analysis.aggregate.rgb_medians.red
+    : null;
+  const blueDelta = heroResult
+    ? result.analysis.aggregate.rgb_medians.blue - heroResult.analysis.aggregate.rgb_medians.blue
+    : null;
+  const calibration = result.calibration;
+  const checklist = [
+    lumaDelta != null
+      ? `Measured exposure delta vs Hero ${heroSlot}: ${formatSigned(lumaDelta)} median luma; normalize exposure before color trims.`
+      : `Camera ${slot} is the selected measurement baseline; keep exposure stable before matching other cameras.`,
+    redDelta != null && blueDelta != null
+      ? `Measured WB/tint drift: red ${formatSigned(redDelta)}, blue ${formatSigned(blueDelta)} vs hero. Apply WB/tint before contrast or saturation.`
+      : "Check WB/tint against the hero scope before moving contrast or saturation.",
+    calibration?.chart_detected
+      ? `Chart quality ${calibration.calibration_quality_level}; ${formatDeltaEChange(calibration.mean_delta_e_before, calibration.mean_delta_e_after)}.`
+      : "No approved chart calibration on this slot; treat recommendations as signal-only.",
+    result.decode_path_kind
+      ? `Decode path: ${formatDecodePathKind(result.decode_path_kind)}.`
+      : "Decode path not persisted; confirm original/proxy relationship before saving a final preset.",
+  ];
+
+  const heroDecode = heroResult?.decode_path_kind;
+  if (heroDecode && result.decode_path_kind && heroDecode !== result.decode_path_kind) {
+    checklist.push(`Decode path differs from Hero ${heroSlot}; keep this preset tied to the saved analysis run.`);
+  }
+
+  return checklist;
+}
+
+function buildMatchNormalizeEvidence(result?: ProductionMatchLabRunResult): string[] {
+  if (!result) return [];
+  const bundle = result.analysis.measurement_bundle;
+  const evidence = [
+    `Clip ${result.analysis.clip_name}`,
+    `Frames analyzed: ${result.analysis.frame_paths.length}`,
+    `Midtone ${Math.round(bundle.midtone_percentage * 100)}%, highlights ${Math.round(bundle.highlight_percentage * 100)}%`,
+  ];
+  if (result.confidence_score != null) {
+    evidence.push(`Confidence ${Math.round(result.confidence_score * 100)}%`);
+  }
+  if (result.capability_json) {
+    try {
+      const capability = JSON.parse(result.capability_json) as { warnings?: string[] };
+      if (capability.warnings?.[0]) evidence.push(capability.warnings[0]);
+    } catch {
+      evidence.push("Capability report could not be parsed.");
+    }
+  }
+  return evidence;
+}
+
+function formatDecodePathKind(kind: string) {
+  if (kind === "direct_original") return "Original";
+  if (kind === "vendor_decoded") return "Vendor decode";
+  if (kind === "operator_proxy") return "Operator proxy";
+  if (kind === "unsupported_original") return "Unsupported original";
+  return kind.replace(/_/g, " ");
+}
+
+function formatDeltaEChange(before?: number | null, after?: number | null) {
+  if (before == null || after == null) return "DeltaE unavailable";
+  return `DeltaE ${before.toFixed(2)} -> ${after.toFixed(2)}`;
+}
+
+function formatSigned(value: number) {
+  return `${value >= 0 ? "+" : ""}${value.toFixed(3)}`;
+}
+
+function formatMatchRunTimestamp(value: string) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }

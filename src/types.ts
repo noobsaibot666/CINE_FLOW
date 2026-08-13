@@ -473,10 +473,14 @@ export interface ProductionUsageGuidance {
 export interface ProductionMatchPresetPayload {
     hero_slot: string;
     hero_summary: string;
+    evidence_summary?: string;
     steps: Array<{
         slot: string;
         camera_label: string;
         checklist: string[];
+        evidence?: string[];
+        confidence_score?: number | null;
+        decode_path_kind?: string | null;
     }>;
 }
 

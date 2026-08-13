@@ -3,6 +3,8 @@ import { Download, Save } from "lucide-react";
 import {
   ProductionCameraConfig,
   ProductionLookSetup,
+  ProductionMatchLabRun,
+  ProductionMatchLabRunSummary,
   ProductionMatchPresetPayload,
   ProductionPreset,
   ProductionProject,
@@ -22,23 +24,53 @@ export function MatchNormalizeApp({ project }: MatchNormalizeAppProps) {
   const [heroSlot, setHeroSlot] = useState("A");
   const [presetName, setPresetName] = useState("");
   const [presets, setPresets] = useState<ProductionPreset[]>([]);
+  const [matchLabRuns, setMatchLabRuns] = useState<ProductionMatchLabRunSummary[]>([]);
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [selectedRun, setSelectedRun] = useState<ProductionMatchLabRun | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     void load();
   }, [project.id]);
 
+  useEffect(() => {
+    if (!selectedRunId) {
+      setSelectedRun(null);
+      return;
+    }
+    let cancelled = false;
+    const loadRun = async () => {
+      try {
+        const run = await invokeGuarded<ProductionMatchLabRun | null>("production_matchlab_get_run", { runId: selectedRunId });
+        if (cancelled) return;
+        setSelectedRun(run);
+        if (run?.hero_slot) {
+          setHeroSlot(run.hero_slot);
+        }
+      } catch {
+        if (!cancelled) setSelectedRun(null);
+      }
+    };
+    void loadRun();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedRunId]);
+
   const load = async () => {
     setLoading(true);
     try {
-      const [configs, savedSetup, savedPresets] = await Promise.all([
+      const [configs, savedSetup, savedPresets, savedRuns] = await Promise.all([
         invokeGuarded<ProductionCameraConfig[]>("list_production_camera_configs", { projectId: project.id }),
         invokeGuarded<ProductionLookSetup | null>("production_get_look_setup", { projectId: project.id }),
         invokeGuarded<ProductionPreset[]>("production_list_presets", { projectId: project.id }),
+        invokeGuarded<ProductionMatchLabRunSummary[]>("production_matchlab_list_runs", { projectId: project.id }),
       ]);
       setCameraConfigs(configs);
       setSetup(savedSetup);
       setPresets(savedPresets);
+      setMatchLabRuns(savedRuns);
+      setSelectedRunId((current) => current ?? savedRuns[0]?.run_id ?? null);
 
       const savedOutputs = parseLookOutputs(savedSetup?.outputs_json);
       if (savedOutputs?.hero_slot && configs.some((config) => config.slot === savedOutputs.hero_slot)) {
@@ -53,6 +85,9 @@ export function MatchNormalizeApp({ project }: MatchNormalizeAppProps) {
       setCameraConfigs([]);
       setSetup(null);
       setPresets([]);
+      setMatchLabRuns([]);
+      setSelectedRunId(null);
+      setSelectedRun(null);
       setHeroSlot("A");
     } finally {
       setLoading(false);
@@ -60,7 +95,7 @@ export function MatchNormalizeApp({ project }: MatchNormalizeAppProps) {
   };
 
   const outputs = useMemo(() => parseLookOutputs(setup?.outputs_json), [setup?.outputs_json]);
-  const payload = useMemo<ProductionMatchPresetPayload>(() => buildMatchPresetPayload(heroSlot, cameraConfigs, outputs), [cameraConfigs, heroSlot, outputs]);
+  const payload = useMemo<ProductionMatchPresetPayload>(() => buildMatchPresetPayload(heroSlot, cameraConfigs, outputs, selectedRun), [cameraConfigs, heroSlot, outputs, selectedRun]);
 
   const saveHeroPreference = async (slot: string) => {
     if (!setup) return;
@@ -111,7 +146,7 @@ export function MatchNormalizeApp({ project }: MatchNormalizeAppProps) {
         { title: `Hero Camera ${payload.hero_slot}`, lines: [payload.hero_summary] },
         ...payload.steps.map((step) => ({
           title: `${step.slot} Camera · ${step.camera_label}`,
-          lines: step.checklist,
+          lines: step.evidence?.length ? [...step.checklist, ...step.evidence.map((item) => `Evidence: ${item}`)] : step.checklist,
         })),
       ],
     });
@@ -136,6 +171,28 @@ export function MatchNormalizeApp({ project }: MatchNormalizeAppProps) {
 
       <section style={panelStyle}>
         <div style={panelTitleStyle}>Hero Camera</div>
+        {matchLabRuns.length > 0 ? (
+          <div style={runSelectRowStyle}>
+            <label style={runSelectLabelStyle} htmlFor="match-normalize-run">Match Lab run</label>
+            <select
+              id="match-normalize-run"
+              value={selectedRunId ?? ""}
+              onChange={(event) => setSelectedRunId(event.target.value || null)}
+              style={selectStyle}
+            >
+              <option value="">Setup checklist only</option>
+              {matchLabRuns.map((run) => (
+                <option key={run.run_id} value={run.run_id}>
+                  Hero {run.hero_slot} · {formatRunDate(run.created_at)}
+                </option>
+              ))}
+            </select>
+            {selectedRun ? (
+              <span style={runMetaStyle}>Selected run · Hero {selectedRun.hero_slot} · {formatRunDate(selectedRun.created_at)}</span>
+            ) : null}
+          </div>
+        ) : null}
+        {payload.evidence_summary ? <div style={evidenceSummaryStyle}>{payload.evidence_summary}</div> : null}
         <div style={heroRowStyle}>
           {cameraConfigs.map((config) => (
             <button
@@ -162,6 +219,11 @@ export function MatchNormalizeApp({ project }: MatchNormalizeAppProps) {
               <ul style={bulletListStyle}>
                 {step.checklist.map((item) => <li key={item}>{item}</li>)}
               </ul>
+              {step.evidence && step.evidence.length > 0 ? (
+                <div style={evidenceListStyle}>
+                  {step.evidence.map((item) => <div key={item} style={evidenceItemStyle}>{item}</div>)}
+                </div>
+              ) : null}
             </div>
           ))}
         </div>
@@ -196,6 +258,11 @@ const subtleHintStyle: React.CSSProperties = { margin: 0, color: "var(--text-mut
 const headerActionsStyle: React.CSSProperties = { display: "flex", gap: 10, alignItems: "center", flexWrap: "nowrap", justifyContent: "flex-end" };
 const panelStyle: React.CSSProperties = { padding: 18, borderRadius: 18, background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.08)" };
 const panelTitleStyle: React.CSSProperties = { marginBottom: 12, fontSize: "0.78rem", textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--text-muted)", fontWeight: 800 };
+const runSelectRowStyle: React.CSSProperties = { display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 12 };
+const runSelectLabelStyle: React.CSSProperties = { color: "var(--text-muted)", fontSize: "0.74rem", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.08em" };
+const selectStyle: React.CSSProperties = { minWidth: 260, padding: "10px 12px", borderRadius: 10, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.03)", color: "var(--text-primary)" };
+const runMetaStyle: React.CSSProperties = { color: "var(--text-secondary)", fontSize: "0.78rem", fontWeight: 700 };
+const evidenceSummaryStyle: React.CSSProperties = { color: "var(--text-secondary)", padding: "9px 11px", borderRadius: 12, border: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.02)", marginBottom: 12, fontSize: "0.82rem" };
 const heroRowStyle: React.CSSProperties = { display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 };
 const heroButtonStyle: React.CSSProperties = { borderColor: "rgba(255,255,255,0.08)" };
 const heroButtonActiveStyle: React.CSSProperties = { borderColor: "rgba(0,209,255,0.28)", color: "var(--color-accent)" };
@@ -204,6 +271,13 @@ const sectionEyebrowStyle: React.CSSProperties = { fontSize: "0.7rem", textTrans
 const stepGridStyle: React.CSSProperties = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 14, alignItems: "stretch" };
 const stepCardStyle: React.CSSProperties = { padding: 14, borderRadius: 14, background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" };
 const bulletListStyle: React.CSSProperties = { margin: 0, paddingLeft: 18, color: "var(--text-secondary)", display: "grid", gap: 6 };
+const evidenceListStyle: React.CSSProperties = { marginTop: 12, display: "grid", gap: 6 };
+const evidenceItemStyle: React.CSSProperties = { color: "var(--text-muted)", fontSize: "0.74rem", lineHeight: 1.35, padding: "7px 9px", borderRadius: 10, border: "1px solid rgba(255,255,255,0.05)", background: "rgba(255,255,255,0.018)" };
 const saveRowStyle: React.CSSProperties = { display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" };
 const inputStyle: React.CSSProperties = { flex: 1, padding: "12px 14px", borderRadius: 12, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.03)", color: "var(--text-primary)" };
 const savedPresetRowStyle: React.CSSProperties = { display: "flex", justifyContent: "space-between", gap: 12, padding: "10px 12px", borderRadius: 12, background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)" };
+
+function formatRunDate(value: string) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+}

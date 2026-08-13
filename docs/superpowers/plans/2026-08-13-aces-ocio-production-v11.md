@@ -300,25 +300,25 @@ git commit -m "Persist Camera Match Lab provenance"
 - Modify: `src/components/Production/productionLogic.ts`
 - Modify: `src/types.ts`
 
-- [ ] **Step 1: Add payload builder tests**
+- [x] **Step 1: Add payload builder tests**
 
 Verify payload generation uses saved analysis metrics when a run is selected and falls back to setup checklist only when no run exists.
 
-- [ ] **Step 2: Add run selection UI**
+- [x] **Step 2: Add run selection UI**
 
 Load `production_matchlab_list_runs`, allow selecting a run, and display the selected run timestamp and hero slot.
 
-- [ ] **Step 3: Generate evidence-backed steps**
+- [x] **Step 3: Generate evidence-backed steps**
 
 Steps must include measured exposure, WB/tint, chart quality, and decode path warnings when available.
 
-- [ ] **Step 4: Verify**
+- [x] **Step 4: Verify**
 
 Run: `npm run lint`
 
 Expected: no TypeScript errors.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/components/Production/MatchNormalizeApp.tsx src/components/Production/productionLogic.ts src/types.ts
