@@ -7430,6 +7430,33 @@ pub async fn production_get_ocio_config_status(
 }
 
 #[tauri::command]
+pub async fn production_get_v12_readiness_report(
+    app: AppHandle,
+) -> Result<crate::production_v12_readiness::V12ReadinessReport, String> {
+    let resource_dir = app.path().resource_dir().ok();
+    let ocio_status = crate::production_ocio::build_ocio_config_status_from_environment_and_resources(
+        "SONY_SLOG3_SGAMUT3_CINE",
+        "ACEScct",
+        resource_dir.as_deref(),
+    );
+    let libraw_status = crate::production_libraw::inspect_libraw_adapter("/diagnostics/A001.nef");
+
+    Ok(crate::production_v12_readiness::build_v12_readiness_report(
+        crate::production_v12_readiness::V12ReadinessDependencyState {
+            import_picker_extended: true,
+            decode_labels_visible: true,
+            ocio_config_ready: ocio_status.config_status == "ocio_ready",
+            ocio_processor_available: ocio_status.processor_available,
+            libraw_frame_decode_available: libraw_status.frame_decode_available,
+            app_info_diagnostics_visible: true,
+            macos_build_passed: cfg!(target_os = "macos"),
+            windows_build_passed: false,
+            astro_docs_approved: false,
+        },
+    ))
+}
+
+#[tauri::command]
 pub async fn production_matchlab_ensure_proxy(
     project_id: String,
     slot: String,

@@ -25,6 +25,7 @@ pub mod production_libraw;
 mod production_match_lab;
 pub mod production_media_capabilities;
 pub mod production_raw_ingest;
+pub mod production_v12_readiness;
 mod review_core;
 mod scanner;
 mod thumbnail;
@@ -225,6 +226,7 @@ pub fn run() {
                     "production_get_media_capability_report",
                     "production_get_raw_ingest_report",
                     "production_get_ocio_config_status",
+                    "production_get_v12_readiness_report",
                     "production_matchlab_ensure_proxy",
                     "camera_match_analyze_clip",
                     "production_matchlab_save_run",
@@ -392,6 +394,7 @@ pub fn run() {
             commands::production_get_media_capability_report,
             commands::production_get_raw_ingest_report,
             commands::production_get_ocio_config_status,
+            commands::production_get_v12_readiness_report,
             commands::production_matchlab_ensure_proxy,
             commands::production_matchlab_save_run,
             commands::production_matchlab_save_sources,

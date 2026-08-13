@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
-import { X, FolderOpen } from "lucide-react";
+import { AlertTriangle, CheckCircle2, FolderOpen, X } from "lucide-react";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { invokeGuarded } from "../utils/tauri";
-import { AppInfo } from "../types";
+import { AppInfo, V12ReadinessReport } from "../types";
 
 interface SettingsPanelProps {
   open: boolean;
@@ -12,6 +12,7 @@ interface SettingsPanelProps {
 
 export function SettingsPanel({ open, info, onClose }: SettingsPanelProps) {
   const [cacheDir, setCacheDir] = useState<string>("");
+  const [readiness, setReadiness] = useState<V12ReadinessReport | null>(null);
   const formatStatus = (s?: string | null) => (s || "Unavailable").replace(/_/g, " ");
 
   useEffect(() => {
@@ -19,6 +20,9 @@ export function SettingsPanel({ open, info, onClose }: SettingsPanelProps) {
       invokeGuarded<string>("get_cache_dir")
         .then(setCacheDir)
         .catch((e) => console.error("get_cache_dir failed", e));
+      invokeGuarded<V12ReadinessReport>("production_get_v12_readiness_report")
+        .then(setReadiness)
+        .catch((e) => console.error("production_get_v12_readiness_report failed", e));
     }
   }, [open]);
 
@@ -39,6 +43,44 @@ export function SettingsPanel({ open, info, onClose }: SettingsPanelProps) {
           <div><strong>LibRaw Bridge</strong><p>{info?.libraw_bridge_active ? "Frame Decode" : formatStatus(info?.libraw_bridge_status)}</p></div>
           <div><strong>OCIO Config</strong><p>{formatStatus(info?.ocio_config_status)} · {formatStatus(info?.ocio_config_source)}</p></div>
           <div><strong>OCIO Processor</strong><p>{info?.ocio_processor_active ? "Active" : formatStatus(info?.ocio_processor_status)}</p></div>
+        </div>
+
+        <div style={{ marginTop: 20 }}>
+          <strong style={{ fontSize: 11, opacity: 0.6, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+            V1.2 RAW / OCIO Readiness
+          </strong>
+          <div style={{ marginTop: 8, padding: "10px 12px", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 6, background: "rgba(0,0,0,0.1)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+              <span style={{ fontSize: 12, opacity: 0.78 }}>
+                {readiness ? `${readiness.ready_count}/${readiness.total_count} checks ready` : "Checking readiness..."}
+              </span>
+              <span style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                fontSize: 11,
+                color: readiness?.release_ready ? "#9be7b0" : "#ffd37a",
+                whiteSpace: "nowrap",
+              }}>
+                {readiness?.release_ready ? <CheckCircle2 size={13} /> : <AlertTriangle size={13} />}
+                {readiness?.release_ready ? "Release ready" : "Blocked"}
+              </span>
+            </div>
+            <div style={{ marginTop: 10, display: "grid", gap: 6 }}>
+              {(readiness?.items ?? []).map((item) => (
+                <div key={item.id} title={item.detail} style={{ display: "grid", gridTemplateColumns: "18px 1fr", alignItems: "center", gap: 6 }}>
+                  {item.status === "ready" ? (
+                    <CheckCircle2 size={13} color="#9be7b0" />
+                  ) : (
+                    <AlertTriangle size={13} color="#ffd37a" />
+                  )}
+                  <span style={{ fontSize: 11, opacity: item.status === "ready" ? 0.72 : 0.9, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {item.label}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
 
         <div style={{ marginTop: 20 }}>

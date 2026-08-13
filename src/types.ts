@@ -139,6 +139,21 @@ export interface AppInfo {
     libraw_bridge_active?: boolean;
 }
 
+export interface V12ReadinessItem {
+    id: string;
+    label: string;
+    status: "ready" | "blocked" | string;
+    detail: string;
+}
+
+export interface V12ReadinessReport {
+    release_ready: boolean;
+    ready_count: number;
+    total_count: number;
+    blockers: string[];
+    items: V12ReadinessItem[];
+}
+
 export interface ReviewCoreAsset {
     id: string;
     project_id: string;
