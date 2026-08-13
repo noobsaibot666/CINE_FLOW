@@ -18,6 +18,7 @@ mod perf;
 mod production;
 mod production_calibration;
 pub mod production_color_pipeline;
+pub mod production_ocio_frame_transform;
 pub mod production_ocio;
 pub mod production_ocio_processor;
 pub mod production_libraw;

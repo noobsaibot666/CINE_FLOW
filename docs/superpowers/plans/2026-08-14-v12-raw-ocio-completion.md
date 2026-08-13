@@ -212,12 +212,12 @@ git commit -m "Add OCIO processor readiness reporting"
 - Modify: `src-tauri/src/commands.rs`
 - Test: `src-tauri/tests/production_ocio_frame_transform_tests.rs`
 
-- [ ] Add an execution function that receives input frame path, output frame path, config path, source color space, destination analysis space, and processor executable.
-- [ ] Test a fake processor executable that copies input to output and returns exit 0.
-- [ ] Test failure when the processor exits non-zero.
-- [ ] Wire Match Lab frame analysis to analyze transformed frames only when execution succeeds.
-- [ ] Set `execution_status = "transform_applied"` and `metrics_trusted = true` only for successfully transformed frames.
-- [ ] Commit with `git commit -m "Apply OCIO transforms to analysis frames"`.
+- [x] Add an execution function that receives input frame path, output frame path, config path, source color space, destination analysis space, and processor executable.
+- [x] Test a fake processor executable that copies input to output and returns exit 0.
+- [x] Test failure when the processor exits non-zero.
+- [x] Wire Match Lab frame analysis to analyze transformed frames only when execution succeeds.
+- [x] Set `execution_status = "transform_applied"` and `metrics_trusted = true` only for successfully transformed frames.
+- [x] Commit with `git commit -m "Apply OCIO transforms to analysis frames"`.
 
 ### Task 3: LibRaw Runtime Bridge
 

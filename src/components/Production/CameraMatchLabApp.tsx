@@ -3247,6 +3247,7 @@ function formatTransformStatus(status?: string | null) {
   if (status === "config_missing") return "Config missing";
   if (status === "processor_not_available") return "Processor not available";
   if (status === "processor_ready") return "Processor ready";
+  if (status === "transform_failed") return "Transform failed";
   if (status === "transform_applied") return "Transform applied";
   return status.replace(/_/g, " ");
 }

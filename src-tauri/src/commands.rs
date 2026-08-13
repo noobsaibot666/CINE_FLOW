@@ -5459,6 +5459,24 @@ async fn camera_match_analyze_clip_internal(
         if let Some(report) = &proxy_validation {
             analysis_warnings.extend(report.warnings.clone());
         }
+        let requested_analysis_color_space = analysis_color_space.unwrap_or("ACEScct");
+        let ocio_resource_dir = app.path().resource_dir().ok();
+        let ocio_processor_status =
+            crate::production_ocio_processor::probe_ocio_processor(ocio_resource_dir.as_deref());
+        let mut ocio_execution_report = source_profile_id.map(|profile_id| {
+            crate::production_ocio::build_ocio_transform_execution_report_from_discovery_and_processor(
+                profile_id,
+                requested_analysis_color_space,
+                std::env::var("OCIO").ok().as_deref(),
+                ocio_resource_dir.as_deref(),
+                ocio_processor_status.clone(),
+            )
+        });
+        if let Some(report) = &ocio_execution_report {
+            analysis_warnings.extend(report.warnings.clone());
+        }
+        let mut ocio_transform_attempted = false;
+        let mut ocio_transformed_frame_count = 0usize;
 
         for (index, timestamp_ms) in timestamps.iter().enumerate() {
             if crate::jobs::JobManager::is_cancelled(&cancel_flag) {
@@ -5503,9 +5521,43 @@ async fn camera_match_analyze_clip_internal(
                 }
             };
 
-            let output_path_for_metrics = output_path.clone();
+            let mut output_path_for_metrics = output_path.clone();
             let used_timestamp_ms = extraction_result.used_timestamp_ms;
-            let extraction_strategy = extraction_result.strategy_label;
+            let mut extraction_strategy = extraction_result.strategy_label;
+            if let Some(report) = &ocio_execution_report {
+                if report.execution_status == "processor_ready" {
+                    if let (Some(config_path), Some(processor_path)) = (
+                        report.config_path.as_ref(),
+                        ocio_processor_status.executable_path.as_ref(),
+                    ) {
+                        ocio_transform_attempted = true;
+                        let transformed_output_path = cache_dir.join(format!("frame_{}_ocio.jpg", index));
+                        let transform_report =
+                            crate::production_ocio_frame_transform::execute_ocio_frame_transform(
+                                &crate::production_ocio_frame_transform::ProductionOcioFrameTransformRequest {
+                                    input_frame_path: output_path.clone(),
+                                    output_frame_path: transformed_output_path.clone(),
+                                    config_path: std::path::PathBuf::from(config_path),
+                                    source_color_space: report.source_profile_id.clone(),
+                                    destination_color_space: report.analysis_color_space.clone(),
+                                    processor_executable_path: std::path::PathBuf::from(processor_path),
+                                },
+                            );
+
+                        if transform_report.transform_status == "transform_applied" {
+                            output_path_for_metrics = transformed_output_path;
+                            extraction_strategy = format!("{} + OCIO transform", extraction_strategy);
+                            ocio_transformed_frame_count += 1;
+                        } else if let Some(warning) = transform_report.warning {
+                            analysis_warnings.push(format!(
+                                "Frame {} OCIO transform failed: {}",
+                                index + 1,
+                                warning
+                            ));
+                        }
+                    }
+                }
+            }
             let frame_metric = tokio::time::timeout(
                 analysis_timeout(),
                 tokio::task::spawn_blocking(move || {
@@ -5538,17 +5590,20 @@ async fn camera_match_analyze_clip_internal(
         let representative_index = per_frame.len() / 2;
         let representative_frame_path = per_frame[representative_index].frame_path.clone();
         let frame_paths = per_frame.iter().map(|item| item.frame_path.clone()).collect();
-        let requested_analysis_color_space = analysis_color_space.unwrap_or("ACEScct");
-        let ocio_resource_dir = app.path().resource_dir().ok();
-        let ocio_execution_report = source_profile_id.map(|profile_id| {
-            crate::production_ocio::build_ocio_transform_execution_report_from_environment_and_resources(
-                profile_id,
-                requested_analysis_color_space,
-                ocio_resource_dir.as_deref(),
-            )
-        });
-        if let Some(report) = &ocio_execution_report {
-            analysis_warnings.extend(report.warnings.clone());
+        if let Some(report) = &mut ocio_execution_report {
+            if ocio_transform_attempted && ocio_transformed_frame_count == per_frame.len() {
+                report.execution_status = "transform_applied".to_string();
+                report.metrics_trusted = true;
+            } else if ocio_transform_attempted {
+                report.execution_status = "transform_failed".to_string();
+                report.metrics_trusted = false;
+                report.warnings.push(format!(
+                    "OCIO transform succeeded for {} of {} analyzed frames; metrics remain provisional.",
+                    ocio_transformed_frame_count,
+                    per_frame.len()
+                ));
+                analysis_warnings.extend(report.warnings.clone());
+            }
         }
         let transform_engine = ocio_execution_report
             .as_ref()

@@ -277,6 +277,7 @@ pub fn compute_production_match_confidence(input: &ProductionMatchConfidenceInpu
         Some("transform_applied") => {}
         Some("metadata_only") | Some("processor_not_available") => score -= 14,
         Some("processor_ready") => score -= 10,
+        Some("transform_failed") => score -= 18,
         Some("config_missing") | Some("unsupported_transform") => score -= 22,
         Some(_) => score -= 8,
         None => score -= 10,

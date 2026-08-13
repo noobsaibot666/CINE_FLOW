@@ -1055,6 +1055,7 @@ function formatTransformStatus(status?: string | null) {
   if (status === "metadata_only") return "Metadata only";
   if (status === "processor_not_available") return "Processor not available";
   if (status === "processor_ready") return "Processor ready";
+  if (status === "transform_failed") return "Transform failed";
   if (status === "config_missing") return "Config missing";
   if (status === "unsupported_transform") return "Unsupported transform";
   if (status === "display_referred_fallback") return "Display fallback";

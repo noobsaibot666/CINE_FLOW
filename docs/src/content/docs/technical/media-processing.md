@@ -39,6 +39,7 @@ Current transform states include:
 - `metadata_only`: source profile and ACES intent are known, but no OCIO config is configured.
 - `processor_not_available`: an OCIO config is available, but no packaged or configured OCIO processor executable is available.
 - `processor_ready`: an OCIO config and processor executable are available, but the current analysis has not yet recorded a successful frame transform.
+- `transform_failed`: frame transform execution was attempted, but at least one analysis frame failed to transform.
 - `config_missing`: an OCIO config path is configured but unavailable.
 - `unsupported_transform`: no registered transform metadata exists for the selected source profile.
 
