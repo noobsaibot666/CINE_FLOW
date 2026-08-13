@@ -265,11 +265,11 @@ git commit -m "Add OCIO processor readiness reporting"
 - Modify: `docs/development/v1.2-raw-ocio-roadmap.md`
 - Modify: `docs/astro/` only after manual approval.
 
-- [ ] Include bundled OCIO configs and processor binaries when present.
-- [ ] Add startup diagnostics for OCIO config, OCIO processor, LibRaw bridge, BRAW, and FFmpeg.
-- [ ] Add release checklist proving decode, transform, analysis, UI, and package states.
-- [ ] Build and test the app.
-- [ ] Commit with `git commit -m "Finalize V1.2 RAW OCIO release gate"`.
+- [x] Include bundled OCIO configs and processor binaries when present.
+- [x] Add startup diagnostics for OCIO config, OCIO processor, LibRaw bridge, BRAW, and FFmpeg.
+- [x] Add release checklist proving decode, transform, analysis, UI, and package states.
+- [x] Build and test the app.
+- [x] Commit with `git commit -m "Finalize V1.2 RAW OCIO release gate"`.
 
 ---
 

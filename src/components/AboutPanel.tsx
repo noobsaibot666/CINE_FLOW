@@ -36,6 +36,7 @@ export function AboutPanel({ open, info, onResetTour, onClose }: AboutPanelProps
   // Helper to shorten long version strings
   const formatVersion = (s: string) => s.split('\n')[0].split(' Copyright')[0].replace('https://', '').trim();
   const formatDate = (s: string) => s.split('T')[0];
+  const formatStatus = (s?: string | null) => (s || "Unavailable").replace(/_/g, " ");
 
   return (
     <div className="jobs-drawer-backdrop" onClick={onClose}>
@@ -54,6 +55,9 @@ export function AboutPanel({ open, info, onResetTour, onClose }: AboutPanelProps
               <div><strong>System</strong><p>macOS {info.macos_version} ({info.arch})</p></div>
               <div><strong>LUTs</strong><p>Supported (.cube)</p></div>
               <div><strong>BRAW Bridge</strong><p>{info.braw_bridge_active ? "Active" : "Not Detected"}</p></div>
+              <div><strong>LibRaw Bridge</strong><p>{info.libraw_bridge_active ? "Frame Decode" : formatStatus(info.libraw_bridge_status)}</p></div>
+              <div><strong>OCIO Config</strong><p>{formatStatus(info.ocio_config_status)} · {formatStatus(info.ocio_config_source)}</p></div>
+              <div><strong>OCIO Processor</strong><p>{info.ocio_processor_active ? "Active" : formatStatus(info.ocio_processor_status)}</p></div>
               <div style={{ gridColumn: 'span 2' }}>
                 <strong>Engine</strong>
                 <p style={{ fontSize: '11px', opacity: 0.7, marginTop: '2px' }}>

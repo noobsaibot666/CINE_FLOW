@@ -128,9 +128,15 @@ export interface AppInfo {
     ffprobe_path: string;
     braw_bridge_path: string;
     redline_path: string;
+    ocio_config_status?: string;
+    ocio_config_source?: string;
+    ocio_processor_status?: string;
+    libraw_bridge_status?: string;
     macos_version: string;
     arch: string;
     braw_bridge_active?: boolean;
+    ocio_processor_active?: boolean;
+    libraw_bridge_active?: boolean;
 }
 
 export interface ReviewCoreAsset {

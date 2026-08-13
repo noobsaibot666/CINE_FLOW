@@ -101,6 +101,7 @@
       "bin/REDline"
     ],
     "resources": {
+      "resources/": "resources/",
       "bin/BlackmagicRawAPI.dll": ".",
       "libs/": "libs/"
     }

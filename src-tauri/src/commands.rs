@@ -2467,9 +2467,15 @@ pub struct AppInfo {
     pub ffprobe_path: String,
     pub braw_bridge_path: String,
     pub redline_path: String,
+    pub ocio_config_status: String,
+    pub ocio_config_source: String,
+    pub ocio_processor_status: String,
+    pub libraw_bridge_status: String,
     pub macos_version: String,
     pub arch: String,
     pub braw_bridge_active: bool,
+    pub ocio_processor_active: bool,
+    pub libraw_bridge_active: bool,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
@@ -2644,11 +2650,18 @@ pub async fn export_director_pack(
 }
 
 #[tauri::command]
-pub async fn get_app_info() -> Result<AppInfo, String> {
+pub async fn get_app_info(app: AppHandle) -> Result<AppInfo, String> {
     let ffmpeg_path = crate::tools::find_executable("ffmpeg");
     let ffprobe_path = crate::tools::find_executable("ffprobe");
     let braw_bridge_path = crate::tools::find_executable("braw_bridge");
     let redline_path = crate::tools::find_executable("REDline");
+    let resource_dir = app.path().resource_dir().ok();
+    let ocio_status = crate::production_ocio::build_ocio_config_status_from_environment_and_resources(
+        "SONY_SLOG3_SGAMUT3_CINE",
+        "ACEScct",
+        resource_dir.as_deref(),
+    );
+    let libraw_status = crate::production_libraw::inspect_libraw_adapter("/diagnostics/A001.nef");
     Ok(AppInfo {
         version: env!("CARGO_PKG_VERSION").to_string(),
         build_date: option_env!("BUILD_DATE").unwrap_or("unknown").to_string(),
@@ -2660,10 +2673,16 @@ pub async fn get_app_info() -> Result<AppInfo, String> {
         ffprobe_path,
         braw_bridge_path,
         redline_path,
+        ocio_config_status: ocio_status.config_status,
+        ocio_config_source: ocio_status.config_source,
+        ocio_processor_status: ocio_status.processor_status,
+        libraw_bridge_status: libraw_status.decode_status,
         macos_version: command_first_line("sw_vers", &["-productVersion"])
             .unwrap_or_else(|| "Unknown".to_string()),
         arch: std::env::consts::ARCH.to_string(),
         braw_bridge_active: command_exists("braw_bridge") || command_exists("braw-decode"),
+        ocio_processor_active: ocio_status.processor_available,
+        libraw_bridge_active: libraw_status.frame_decode_available,
     })
 }
 
@@ -2671,9 +2690,10 @@ pub async fn get_app_info() -> Result<AppInfo, String> {
 pub async fn export_feedback_bundle(
     output_root: String,
     last_verification_job_id: Option<String>,
+    app: AppHandle,
     state: State<'_, Arc<AppState>>,
 ) -> Result<String, String> {
-    let app_info = get_app_info().await?;
+    let app_info = get_app_info(app).await?;
     let jobs = state.job_manager.list_jobs();
     let output_path = format!(
         "{}/WrapPreview_Feedback_{}.zip",

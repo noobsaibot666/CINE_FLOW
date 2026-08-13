@@ -12,6 +12,7 @@ interface SettingsPanelProps {
 
 export function SettingsPanel({ open, info, onClose }: SettingsPanelProps) {
   const [cacheDir, setCacheDir] = useState<string>("");
+  const formatStatus = (s?: string | null) => (s || "Unavailable").replace(/_/g, " ");
 
   useEffect(() => {
     if (open) {
@@ -35,6 +36,9 @@ export function SettingsPanel({ open, info, onClose }: SettingsPanelProps) {
           <div><strong>Version</strong><p>{info?.version ?? "—"}</p></div>
           <div><strong>Platform</strong><p>{info?.arch ?? "—"}</p></div>
           <div><strong>BRAW Bridge</strong><p>{info?.braw_bridge_active ? "Active" : "Not Detected"}</p></div>
+          <div><strong>LibRaw Bridge</strong><p>{info?.libraw_bridge_active ? "Frame Decode" : formatStatus(info?.libraw_bridge_status)}</p></div>
+          <div><strong>OCIO Config</strong><p>{formatStatus(info?.ocio_config_status)} · {formatStatus(info?.ocio_config_source)}</p></div>
+          <div><strong>OCIO Processor</strong><p>{info?.ocio_processor_active ? "Active" : formatStatus(info?.ocio_processor_status)}</p></div>
         </div>
 
         <div style={{ marginTop: 20 }}>
