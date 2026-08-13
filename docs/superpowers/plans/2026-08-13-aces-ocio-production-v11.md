@@ -93,17 +93,17 @@ git commit -m "Add production media capability classification"
 - Modify: `src-tauri/src/ffprobe.rs`
 - Test: existing ffprobe unit tests or new parser-only tests
 
-- [ ] **Step 1: Add parser tests for bit depth and color metadata**
+- [x] **Step 1: Add parser tests for bit depth and color metadata**
 
 Use JSON fixtures for streams with `pix_fmt`, `bits_per_raw_sample`, `color_range`, `color_space`, `color_transfer`, and `color_primaries`.
 
-- [ ] **Step 2: Run the parser tests**
+- [x] **Step 2: Run the parser tests**
 
 Run: `cd src-tauri && cargo test ffprobe`
 
 Expected: fail on missing fields.
 
-- [ ] **Step 3: Extend `ClipMetadata`**
+- [x] **Step 3: Extend `ClipMetadata`**
 
 Add optional fields:
 
@@ -114,13 +114,13 @@ pub color_range: Option<String>,
 pub codec_tag: Option<String>,
 ```
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `cd src-tauri && cargo test ffprobe`
 
 Expected: parser tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src-tauri/src/ffprobe.rs

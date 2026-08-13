@@ -17,6 +17,10 @@ pub struct ClipMetadata {
     pub video_codec: String,
     pub video_bitrate: u64,
     pub format_name: String,
+    pub pixel_format: Option<String>,
+    pub bit_depth: Option<u32>,
+    pub color_range: Option<String>,
+    pub codec_tag: Option<String>,
     pub audio_codec: String,
     pub audio_channels: u32,
     pub audio_sample_rate: u32,
@@ -51,6 +55,9 @@ struct FfprobeStream {
     channels: Option<u32>,
     sample_rate: Option<String>,
     bit_rate: Option<String>,
+    pix_fmt: Option<String>,
+    bits_per_raw_sample: Option<String>,
+    color_range: Option<String>,
     color_space: Option<String>,
     color_transfer: Option<String>,
     color_primaries: Option<String>,
@@ -90,9 +97,12 @@ pub fn probe_file(file_path: &str) -> Result<ClipMetadata, String> {
     }
 
     let json_str = String::from_utf8_lossy(&output.stdout);
-    let probe: FfprobeOutput = serde_json::from_str(&json_str)
-        .map_err(|e| format!("Failed to parse ffprobe JSON: {}", e))?;
+    parse_ffprobe_json(file_path, &json_str)
+}
 
+fn parse_ffprobe_json(file_path: &str, json_str: &str) -> Result<ClipMetadata, String> {
+    let probe: FfprobeOutput = serde_json::from_str(json_str)
+        .map_err(|e| format!("Failed to parse ffprobe JSON: {}", e))?;
     let format = probe.format.ok_or("No format info from ffprobe")?;
     let streams = probe.streams.unwrap_or_default();
 
@@ -169,7 +179,7 @@ pub fn probe_file(file_path: &str) -> Result<ClipMetadata, String> {
     // Resolution & Rotation
     let mut width = video_stream.and_then(|s| s.width).unwrap_or(0);
     let mut height = video_stream.and_then(|s| s.height).unwrap_or(0);
-    
+
     let rotation = video_stream
         .and_then(|s| s.tags.as_ref())
         .and_then(|tags| get_tag_value_ci(tags, &["rotate", "com.apple.quicktime.rotation"]))
@@ -221,6 +231,17 @@ pub fn probe_file(file_path: &str) -> Result<ClipMetadata, String> {
         .and_then(|s| s.parse::<u64>().ok())
         .or_else(|| format.bit_rate.as_ref().and_then(|s| s.parse::<u64>().ok()))
         .unwrap_or(0);
+    let pixel_format = video_stream.and_then(|s| s.pix_fmt.clone());
+    let bit_depth = video_stream
+        .and_then(|s| s.bits_per_raw_sample.as_ref())
+        .and_then(|value| value.parse::<u32>().ok())
+        .or_else(|| {
+            pixel_format
+                .as_deref()
+                .and_then(infer_bit_depth_from_pixel_format)
+        });
+    let color_range = video_stream.and_then(|s| s.color_range.clone());
+    let codec_tag = video_stream.and_then(|s| s.codec_tag_string.clone());
     let format_name = if extension.as_deref() == Some("braw") {
         "braw".to_string()
     } else {
@@ -385,6 +406,10 @@ pub fn probe_file(file_path: &str) -> Result<ClipMetadata, String> {
         video_codec,
         video_bitrate,
         format_name,
+        pixel_format,
+        bit_depth,
+        color_range,
+        codec_tag,
         audio_codec,
         audio_channels,
         audio_sample_rate,
@@ -399,6 +424,16 @@ pub fn probe_file(file_path: &str) -> Result<ClipMetadata, String> {
         color_transfer: video_stream.and_then(|s| s.color_transfer.clone()),
         color_primaries: video_stream.and_then(|s| s.color_primaries.clone()),
     })
+}
+
+fn infer_bit_depth_from_pixel_format(pixel_format: &str) -> Option<u32> {
+    for depth in [16, 14, 12, 10, 8] {
+        if pixel_format.contains(&depth.to_string()) {
+            return Some(depth);
+        }
+    }
+
+    None
 }
 
 fn parse_frame_rate(rate: &str) -> f64 {
@@ -458,5 +493,94 @@ fn extract_numeric_like(raw: &str) -> Option<String> {
         Some(digits)
     } else {
         Some(trimmed.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_ffprobe_json;
+
+    #[test]
+    fn parses_production_color_and_codec_metadata() {
+        let json = r#"
+        {
+          "streams": [
+            {
+              "codec_type": "video",
+              "codec_name": "hevc",
+              "codec_tag_string": "hvc1",
+              "width": 3840,
+              "height": 2160,
+              "r_frame_rate": "24000/1001",
+              "avg_frame_rate": "24000/1001",
+              "bit_rate": "80000000",
+              "pix_fmt": "yuv422p10le",
+              "bits_per_raw_sample": "10",
+              "color_range": "tv",
+              "color_space": "bt2020nc",
+              "color_transfer": "smpte2084",
+              "color_primaries": "bt2020"
+            },
+            {
+              "codec_type": "audio",
+              "codec_name": "pcm_s24le",
+              "channels": 2,
+              "sample_rate": "48000"
+            }
+          ],
+          "format": {
+            "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+            "duration": "12.5",
+            "size": "125000000",
+            "bit_rate": "81000000",
+            "tags": {
+              "creation_time": "2026-08-13T18:00:00Z"
+            }
+          }
+        }
+        "#;
+
+        let metadata = parse_ffprobe_json("/clips/A001.mov", json).expect("metadata should parse");
+
+        assert_eq!(metadata.pixel_format.as_deref(), Some("yuv422p10le"));
+        assert_eq!(metadata.bit_depth, Some(10));
+        assert_eq!(metadata.color_range.as_deref(), Some("tv"));
+        assert_eq!(metadata.color_space.as_deref(), Some("bt2020nc"));
+        assert_eq!(metadata.color_transfer.as_deref(), Some("smpte2084"));
+        assert_eq!(metadata.color_primaries.as_deref(), Some("bt2020"));
+        assert_eq!(metadata.codec_tag.as_deref(), Some("hvc1"));
+    }
+
+    #[test]
+    fn infers_bit_depth_from_pixel_format_when_raw_sample_depth_is_missing() {
+        let json = r#"
+        {
+          "streams": [
+            {
+              "codec_type": "video",
+              "codec_name": "prores",
+              "codec_tag_string": "ap4x",
+              "width": 4096,
+              "height": 2160,
+              "r_frame_rate": "24/1",
+              "avg_frame_rate": "24/1",
+              "pix_fmt": "yuv444p12le",
+              "color_range": "pc"
+            }
+          ],
+          "format": {
+            "format_name": "mov",
+            "duration": "1.0",
+            "size": "1000"
+          }
+        }
+        "#;
+
+        let metadata = parse_ffprobe_json("/clips/A001.mov", json).expect("metadata should parse");
+
+        assert_eq!(metadata.pixel_format.as_deref(), Some("yuv444p12le"));
+        assert_eq!(metadata.bit_depth, Some(12));
+        assert_eq!(metadata.color_range.as_deref(), Some("pc"));
+        assert_eq!(metadata.codec_tag.as_deref(), Some("ap4x"));
     }
 }
