@@ -17,6 +17,7 @@ mod lut;
 mod perf;
 mod production;
 mod production_calibration;
+pub mod production_color_pipeline;
 mod production_match_lab;
 pub mod production_media_capabilities;
 mod review_core;

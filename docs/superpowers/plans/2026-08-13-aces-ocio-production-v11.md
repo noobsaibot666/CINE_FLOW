@@ -178,11 +178,11 @@ git commit -m "Add production source color profiles"
 - Modify: `src-tauri/src/lib.rs`
 - Test: Rust unit tests in the new module
 
-- [ ] **Step 1: Add transform registry tests**
+- [x] **Step 1: Add transform registry tests**
 
 Verify each supported profile returns an ACES target and a status.
 
-- [ ] **Step 2: Implement transform metadata**
+- [x] **Step 2: Implement transform metadata**
 
 Include:
 
@@ -196,13 +196,13 @@ pub struct ProductionColorTransformReport {
 }
 ```
 
-- [ ] **Step 3: Run tests**
+- [x] **Step 3: Run tests**
 
 Run: `cd src-tauri && cargo test production_color_pipeline`
 
 Expected: registry tests pass.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src-tauri/src/production_color_pipeline.rs src-tauri/src/lib.rs
