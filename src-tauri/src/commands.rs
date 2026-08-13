@@ -22,7 +22,7 @@ use crate::mac_bookmarks;
 use crate::production::{self, CameraProfile, LookPreset};
 use crate::production_match_lab::{
     aggregate_frames, analysis_timeout, analyze_frame, build_cache_dir, build_frame_timestamps,
-    build_measurement_bundle,
+    build_measurement_bundle, build_proxy_validation_report,
     build_proxy_decode_path, build_proxy_paths, choose_source_path_for_analysis,
     classify_source_format, clip_name_from_path, create_braw_proxy_via_file, create_braw_proxy_via_stdout,
     hash_source_signature, is_braw_path, is_decoder_backed_raw_path,
@@ -5434,10 +5434,31 @@ async fn camera_match_analyze_clip_internal(
             choose_source_path_for_analysis(clip_path)?
         };
         let metadata = ffprobe::probe_file(&source_path)?;
+        let original_source_metadata = if source_path != clip_path {
+            ffprobe::probe_file(clip_path).ok()
+        } else {
+            None
+        };
+        let proxy_validation = if source_path != clip_path || analysis_source_override_path.is_some() {
+            Some(build_proxy_validation_report(
+                clip_path,
+                &source_path,
+                original_source_metadata.as_ref(),
+                &metadata,
+                source_profile_id,
+                analysis_color_space,
+                analysis_source_override_path.is_some(),
+            ))
+        } else {
+            None
+        };
         let timestamps = build_frame_timestamps(metadata.duration_ms, frame_count);
         let total_steps = timestamps.len().max(1) as f32;
         let mut per_frame = Vec::with_capacity(timestamps.len());
         let mut analysis_warnings: Vec<String> = Vec::new();
+        if let Some(report) = &proxy_validation {
+            analysis_warnings.extend(report.warnings.clone());
+        }
 
         for (index, timestamp_ms) in timestamps.iter().enumerate() {
             if crate::jobs::JobManager::is_cancelled(&cancel_flag) {
@@ -5573,6 +5594,7 @@ async fn camera_match_analyze_clip_internal(
             per_frame,
             aggregate,
             proxy_info,
+            proxy_validation,
             warnings: analysis_warnings,
             source_profile_id: source_profile_id.map(str::to_string),
             analysis_color_space: analysis_color_space.map(str::to_string).or_else(|| {

@@ -151,10 +151,10 @@ git commit -m "Carry Match Lab color transform intent"
 - Modify: `src-tauri/src/commands.rs`
 - Modify: `src/components/Production/CameraMatchLabApp.tsx`
 
-- [ ] Keep BRAW auto-proxy generation.
-- [ ] Add proxy validation for open RAW and vendor RAW: duration/frame count where available, resolution, codec, source pairing, and color pipeline note.
-- [ ] Add UI warnings when proxy metadata is weak or mismatched.
-- [ ] Commit with `git commit -m "Validate RAW analysis proxies"`.
+- [x] Keep BRAW auto-proxy generation.
+- [x] Add proxy validation for proxy-backed RAW analysis: duration/frame count where available, resolution, codec, source pairing, and color pipeline note.
+- [x] Add UI warnings when proxy metadata is weak or mismatched.
+- [x] Commit with `git commit -m "Validate RAW analysis proxies"`.
 
 ## Phase 8: Match & Normalize Trust Rules
 

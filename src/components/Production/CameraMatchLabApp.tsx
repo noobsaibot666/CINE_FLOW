@@ -1808,6 +1808,17 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                             { label: "Resolution", value: rawAnalysis.measurement_bundle.resolution ?? `${rawAnalysis.per_frame[0]?.width ?? "—"}×${rawAnalysis.per_frame[0]?.height ?? "—"}` },
                           ]}
                         />
+                        {rawAnalysis.proxy_validation ? (
+                          <MetricInfoRow
+                            compact
+                            items={[
+                              { label: "Proxy", value: formatProxyValidationStatus(rawAnalysis.proxy_validation.validation_status) },
+                              { label: "Pairing", value: formatProxyPairing(rawAnalysis.proxy_validation.source_pairing) },
+                              { label: "Codec", value: rawAnalysis.proxy_validation.proxy_codec ?? "Unknown" },
+                              { label: "Proxy res", value: rawAnalysis.proxy_validation.proxy_resolution ?? "Unknown" },
+                            ]}
+                          />
+                        ) : null}
                         {rawAnalysis.proxy_info ? (
                           <details style={noteStripStyle}>
                             <summary style={noteStripSummaryStyle}>
@@ -1818,6 +1829,12 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                               <span style={noteStripValueStyle}>{rawAnalysis.proxy_info}</span>
                             </div>
                           </details>
+                        ) : null}
+                        {rawAnalysis.proxy_validation?.color_pipeline_note ? (
+                          <div style={inlineInfoStyle}>{rawAnalysis.proxy_validation.color_pipeline_note}</div>
+                        ) : null}
+                        {rawAnalysis.proxy_validation?.warnings?.[0] ? (
+                          <div style={inlineWarningStyle}>{rawAnalysis.proxy_validation.warnings[0]}</div>
                         ) : null}
                         {analysis.suggestions?.warning ? <div style={inlineWarningStyle}>{analysis.suggestions.warning}</div> : null}
                         {decisionSummary ? (
@@ -3392,6 +3409,21 @@ function formatAnalysisSourceLabel(analysis: CameraMatchAnalysisResult) {
   return "Original";
 }
 
+function formatProxyValidationStatus(status?: string | null) {
+  if (status === "validated") return "Validated";
+  if (status === "warnings") return "Needs review";
+  if (!status) return "Not checked";
+  return status.replace(/_/g, " ");
+}
+
+function formatProxyPairing(pairing?: string | null) {
+  if (pairing === "generated_from_source") return "Generated";
+  if (pairing === "operator_filename_match") return "Filename match";
+  if (pairing === "operator_unverified") return "Verify manually";
+  if (!pairing) return "Unknown";
+  return pairing.replace(/_/g, " ");
+}
+
 function formatCapabilitySourceLabel(report?: ProductionMediaCapabilityReport) {
   if (!report) return "Checking...";
   if (report.decode_path_kind === "direct_original") return "Original";
@@ -3850,6 +3882,7 @@ const cropViewportBoxStyle: React.CSSProperties = { position: "absolute", inset:
 const editableCalibrationOverlaySvgStyle: React.CSSProperties = { position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" };
 const editableCornerHandleStyle: React.CSSProperties = { position: "absolute", width: 16, height: 16, borderRadius: 999, border: "2px solid rgba(255,255,255,0.95)", background: "rgba(251,191,36,0.92)", boxShadow: "0 0 0 4px rgba(251,191,36,0.18)", transform: "translate(-50%, -50%)", cursor: "move" };
 const inlineWarningStyle: React.CSSProperties = { marginBottom: 10, color: "rgba(220,184,124,0.94)", fontSize: "0.76rem", lineHeight: 1.4 };
+const inlineInfoStyle: React.CSSProperties = { marginBottom: 10, color: "rgba(186,230,253,0.9)", fontSize: "0.74rem", lineHeight: 1.4 };
 const metricsWrapStyle: React.CSSProperties = { display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 8, marginBottom: 10 };
 const signalActionPanelStyle: React.CSSProperties = { display: "grid", gap: 10, marginBottom: 12, padding: "12px 12px 10px", borderRadius: 16, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.02)" };
 const signalActionPanelHeaderStyle: React.CSSProperties = { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" };

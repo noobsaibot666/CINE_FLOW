@@ -600,6 +600,7 @@ export interface CameraMatchAnalysisResult {
     per_frame: CameraMatchFrameMetrics[];
     aggregate: CameraMatchAggregateMetrics;
     proxy_info?: string | null;
+    proxy_validation?: ProductionProxyValidationReport | null;
     warnings?: string[];
     measurement_bundle: ProductionMeasurementBundle;
     source_profile_id?: string | null;
@@ -610,6 +611,22 @@ export interface CameraMatchAnalysisResult {
     ocio_config_source?: string | null;
     ocio_config_path?: string | null;
     metrics_trusted?: boolean | null;
+}
+
+export interface ProductionProxyValidationReport {
+    source_path: string;
+    proxy_path: string;
+    validation_status: string;
+    source_duration_ms?: number | null;
+    proxy_duration_ms?: number | null;
+    source_frame_count_estimate?: number | null;
+    proxy_frame_count_estimate?: number | null;
+    source_resolution?: string | null;
+    proxy_resolution?: string | null;
+    proxy_codec?: string | null;
+    source_pairing: string;
+    color_pipeline_note: string;
+    warnings: string[];
 }
 
 export interface CalibrationPatchSample {

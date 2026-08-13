@@ -150,6 +150,8 @@ pub struct CameraMatchAnalysisResult {
     #[serde(default)]
     pub proxy_info: Option<String>,
     #[serde(default)]
+    pub proxy_validation: Option<ProductionProxyValidationReport>,
+    #[serde(default)]
     pub warnings: Vec<String>,
     #[serde(default)]
     pub measurement_bundle: ProductionMeasurementBundle,
@@ -177,6 +179,23 @@ pub struct ProductionMatchLabProxyResult {
     pub reused_proxy: bool,
     pub decoder_path: Option<String>,
     pub strategy: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ProductionProxyValidationReport {
+    pub source_path: String,
+    pub proxy_path: String,
+    pub validation_status: String,
+    pub source_duration_ms: Option<u64>,
+    pub proxy_duration_ms: Option<u64>,
+    pub source_frame_count_estimate: Option<u64>,
+    pub proxy_frame_count_estimate: Option<u64>,
+    pub source_resolution: Option<String>,
+    pub proxy_resolution: Option<String>,
+    pub proxy_codec: Option<String>,
+    pub source_pairing: String,
+    pub color_pipeline_note: String,
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1033,6 +1052,153 @@ pub fn validate_proxy_output_path(input_path: &str, output_path: &Path) -> Resul
     Ok(())
 }
 
+pub fn build_proxy_validation_report(
+    source_path: &str,
+    proxy_path: &str,
+    source_metadata: Option<&crate::ffprobe::ClipMetadata>,
+    proxy_metadata: &crate::ffprobe::ClipMetadata,
+    source_profile_id: Option<&str>,
+    analysis_color_space: Option<&str>,
+    operator_selected: bool,
+) -> ProductionProxyValidationReport {
+    let mut warnings = Vec::new();
+    let source_duration_ms = source_metadata.map(|metadata| metadata.duration_ms);
+    let proxy_duration_ms = (proxy_metadata.duration_ms > 0).then_some(proxy_metadata.duration_ms);
+    let source_frame_count_estimate = source_metadata.and_then(estimate_proxy_frame_count);
+    let proxy_frame_count_estimate = estimate_proxy_frame_count(proxy_metadata);
+    let source_resolution = source_metadata.and_then(format_proxy_resolution);
+    let proxy_resolution = format_proxy_resolution(proxy_metadata);
+
+    if let (Some(source_duration), Some(proxy_duration)) = (source_duration_ms, proxy_duration_ms) {
+        let delta = source_duration.abs_diff(proxy_duration);
+        let tolerance = ((source_duration as f64) * 0.05).max(1_000.0) as u64;
+        if delta > tolerance {
+            warnings.push(format!(
+                "Proxy duration differs from source by {}ms. Verify the proxy was exported from the same clip.",
+                delta
+            ));
+        }
+    } else {
+        warnings.push(
+            "Source or proxy duration is unavailable, so frame-count pairing is weak.".to_string(),
+        );
+    }
+
+    if let (Some(source_frames), Some(proxy_frames)) =
+        (source_frame_count_estimate, proxy_frame_count_estimate)
+    {
+        let delta = source_frames.abs_diff(proxy_frames);
+        let tolerance = ((source_frames as f64) * 0.05).max(2.0) as u64;
+        if delta > tolerance {
+            warnings.push(format!(
+                "Proxy frame-count estimate differs from source by {} frames.",
+                delta
+            ));
+        }
+    }
+
+    if proxy_metadata.width == 0 || proxy_metadata.height == 0 {
+        warnings.push("Proxy resolution is unavailable.".to_string());
+    } else if proxy_metadata.width < 1280 || proxy_metadata.height < 720 {
+        warnings.push(format!(
+            "Proxy resolution is low ({}x{}). Export at least 720p for analysis.",
+            proxy_metadata.width, proxy_metadata.height
+        ));
+    }
+
+    if !is_analysis_proxy_codec(&proxy_metadata.video_codec) {
+        warnings.push(format!(
+            "Proxy codec '{}' is readable but not a preferred analysis codec. Use H.264, H.265/HEVC, ProRes, or DNxHR when possible.",
+            proxy_metadata.video_codec
+        ));
+    }
+
+    let source_pairing = if operator_selected {
+        let paired = proxy_stem_pairs_with_source(source_path, proxy_path);
+        if !paired {
+            warnings.push(
+                "Proxy filename does not appear to match the RAW source name. Confirm source pairing before trusting match results."
+                    .to_string(),
+            );
+        }
+        if paired {
+            "operator_filename_match"
+        } else {
+            "operator_unverified"
+        }
+    } else {
+        "generated_from_source"
+    }
+    .to_string();
+
+    let color_pipeline_note = format!(
+        "Proxy should preserve source profile {} into {} analysis.",
+        source_profile_id.unwrap_or("unconfirmed"),
+        analysis_color_space.unwrap_or("ACEScct")
+    );
+
+    let validation_status = if warnings.is_empty() {
+        "validated"
+    } else {
+        "warnings"
+    }
+    .to_string();
+
+    ProductionProxyValidationReport {
+        source_path: source_path.to_string(),
+        proxy_path: proxy_path.to_string(),
+        validation_status,
+        source_duration_ms,
+        proxy_duration_ms,
+        source_frame_count_estimate,
+        proxy_frame_count_estimate,
+        source_resolution,
+        proxy_resolution,
+        proxy_codec: Some(proxy_metadata.video_codec.clone()),
+        source_pairing,
+        color_pipeline_note,
+        warnings,
+    }
+}
+
+fn estimate_proxy_frame_count(metadata: &crate::ffprobe::ClipMetadata) -> Option<u64> {
+    if metadata.duration_ms == 0 || metadata.fps <= 0.0 {
+        return None;
+    }
+    Some(((metadata.duration_ms as f64 / 1000.0) * metadata.fps).round() as u64)
+}
+
+fn format_proxy_resolution(metadata: &crate::ffprobe::ClipMetadata) -> Option<String> {
+    if metadata.width == 0 || metadata.height == 0 {
+        return None;
+    }
+    Some(format!("{}x{}", metadata.width, metadata.height))
+}
+
+fn is_analysis_proxy_codec(codec: &str) -> bool {
+    matches!(
+        codec.to_ascii_lowercase().as_str(),
+        "h264" | "h.264" | "avc1" | "hevc" | "h265" | "h.265" | "prores" | "dnxhd" | "dnxhr"
+    )
+}
+
+fn proxy_stem_pairs_with_source(source_path: &str, proxy_path: &str) -> bool {
+    let source = normalized_file_stem(source_path);
+    let proxy = normalized_file_stem(proxy_path);
+    !source.is_empty() && !proxy.is_empty() && (source.contains(&proxy) || proxy.contains(&source))
+}
+
+fn normalized_file_stem(path: &str) -> String {
+    Path::new(path)
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .chars()
+        .filter(|value| value.is_ascii_alphanumeric())
+        .flat_map(|value| value.to_lowercase())
+        .collect()
+}
+
 pub fn probe_braw_decoder(resource_dir: Option<&Path>) -> BrawDecoderCaps {
     let Some((executable_path, working_dir)) = locate_braw_decoder(resource_dir) else {
         return BrawDecoderCaps {
@@ -1477,6 +1643,7 @@ mod tests {
             per_frame: Vec::new(),
             aggregate: CameraMatchAggregateMetrics::default(),
             proxy_info: None,
+            proxy_validation: None,
             warnings: Vec::new(),
             measurement_bundle: ProductionMeasurementBundle::default(),
             source_profile_id: None,
@@ -1488,6 +1655,113 @@ mod tests {
             ocio_config_path: None,
             metrics_trusted: None,
         }
+    }
+
+    fn sample_clip_metadata(path: &str, duration_ms: u64, fps: f64) -> crate::ffprobe::ClipMetadata {
+        crate::ffprobe::ClipMetadata {
+            filename: super::clip_name_from_path(path),
+            file_path: path.to_string(),
+            size_bytes: 2_000_000,
+            created_at: String::new(),
+            duration_ms,
+            fps,
+            avg_frame_rate: Some("24/1".to_string()),
+            r_frame_rate: Some("24/1".to_string()),
+            is_vfr: false,
+            width: 1920,
+            height: 1080,
+            video_codec: "h264".to_string(),
+            video_bitrate: 8_000_000,
+            format_name: "mov".to_string(),
+            pixel_format: Some("yuv420p".to_string()),
+            bit_depth: Some(8),
+            color_range: None,
+            codec_tag: None,
+            audio_codec: "none".to_string(),
+            audio_channels: 0,
+            audio_sample_rate: 0,
+            camera_iso: None,
+            camera_lens: None,
+            camera_white_balance: None,
+            camera_aperture: None,
+            camera_angle: None,
+            audio_summary: "No audio".to_string(),
+            timecode: None,
+            color_space: None,
+            color_transfer: None,
+            color_primaries: None,
+        }
+    }
+
+    #[test]
+    fn proxy_validation_accepts_matching_h264_proxy() {
+        let source = sample_clip_metadata("/camera/A001.braw", 10_000, 24.0);
+        let proxy = sample_clip_metadata("/proxy/A001_proxy.mp4", 10_020, 24.0);
+
+        let report = super::build_proxy_validation_report(
+            "/camera/A001.braw",
+            "/proxy/A001_proxy.mp4",
+            Some(&source),
+            &proxy,
+            Some("BMD_FILM_GEN5_WIDE_GAMUT"),
+            Some("ACEScct"),
+            true,
+        );
+
+        assert_eq!(report.validation_status, "validated");
+        assert_eq!(report.source_pairing, "operator_filename_match");
+        assert_eq!(report.proxy_codec.as_deref(), Some("h264"));
+        assert_eq!(report.source_frame_count_estimate, Some(240));
+        assert_eq!(report.proxy_frame_count_estimate, Some(240));
+    }
+
+    #[test]
+    fn proxy_validation_warns_for_mismatched_operator_proxy() {
+        let source = sample_clip_metadata("/camera/A001.braw", 10_000, 24.0);
+        let proxy = sample_clip_metadata("/proxy/B999.mp4", 18_000, 24.0);
+
+        let report = super::build_proxy_validation_report(
+            "/camera/A001.braw",
+            "/proxy/B999.mp4",
+            Some(&source),
+            &proxy,
+            Some("BMD_FILM_GEN5_WIDE_GAMUT"),
+            Some("ACEScct"),
+            true,
+        );
+
+        assert_eq!(report.validation_status, "warnings");
+        assert_eq!(report.source_pairing, "operator_unverified");
+        assert!(report
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("duration differs")));
+        assert!(report
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("does not appear to match")));
+    }
+
+    #[test]
+    fn proxy_validation_warns_for_non_preferred_codec() {
+        let mut proxy = sample_clip_metadata("/proxy/A001.mp4", 10_000, 24.0);
+        proxy.video_codec = "mpeg4".to_string();
+
+        let report = super::build_proxy_validation_report(
+            "/camera/A001.r3d",
+            "/proxy/A001.mp4",
+            None,
+            &proxy,
+            Some("RED_LOG3G10_RED_WIDE_GAMUT"),
+            Some("ACEScct"),
+            true,
+        );
+
+        assert_eq!(report.validation_status, "warnings");
+        assert!(report
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("not a preferred analysis codec")));
     }
 
     #[test]
