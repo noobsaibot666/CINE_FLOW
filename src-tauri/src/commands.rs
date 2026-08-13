@@ -26,9 +26,10 @@ use crate::production_match_lab::{
     build_proxy_decode_path, build_proxy_paths, choose_source_path_for_analysis,
     classify_source_format, clip_name_from_path, create_braw_proxy_via_file, create_braw_proxy_via_stdout,
     hash_source_signature, is_braw_path, is_decoder_backed_raw_path,
-    probe_braw_decoder, BrawDecoderCaps,
+    probe_braw_decoder, compute_production_match_confidence, BrawDecoderCaps,
     validate_proxy_output_path,
     CameraMatchAnalysisResult, MatchLabAnalysisTracker, MatchLabProxyAttempt, MatchLabProxyTracker,
+    ProductionMatchConfidenceInput,
     ProductionMatchLabProxyResult, ProductionMatchLabRun, ProductionMatchLabRunResult,
     ProductionMatchLabRunResultInput, ProductionMatchLabRunSummary,
 };
@@ -7285,8 +7286,21 @@ pub async fn production_matchlab_save_run(
         let source_hash = hash_source_signature(&item.analysis.clip_path);
         let capability_report =
             crate::production_media_capabilities::classify_media_source(&item.analysis.clip_path);
-        let confidence_score =
-            production_matchlab_confidence_score(&capability_report, item.analysis.source_kind.as_deref());
+        let confidence_score = compute_production_match_confidence(&ProductionMatchConfidenceInput {
+            decode_path_kind: Some(capability_report.decode_path_kind.as_str()),
+            source_profile_id: None,
+            chart_detected: item.calibration.as_ref().map(|calibration| calibration.chart_detected),
+            calibration_quality_score: item
+                .calibration
+                .as_ref()
+                .map(|calibration| calibration.calibration_quality_score as f64 / 100.0),
+            clipped_patch_count: item
+                .calibration
+                .as_ref()
+                .map(|calibration| calibration.clipped_patch_count)
+                .unwrap_or(0),
+            frame_count: item.analysis.frame_paths.len(),
+        }) as f64;
         let capability_json = serde_json::to_string(&capability_report)
             .map_err(|e| format!("Failed to serialize capability report: {}", e))?;
         let source_record = ProductionMatchLabSource {
@@ -7333,21 +7347,6 @@ pub async fn production_matchlab_save_run(
         .map_err(|e| format!("Failed to save match lab run: {}", e))?;
 
     Ok(run_id)
-}
-
-fn production_matchlab_confidence_score(
-    capability: &crate::production_media_capabilities::ProductionMediaCapabilityReport,
-    source_kind: Option<&str>,
-) -> f64 {
-    if capability.direct_analysis_supported && capability.warnings.is_empty() {
-        0.9
-    } else if capability.vendor_decoder_required && source_kind == Some("proxy") {
-        0.72
-    } else if capability.proxy_required {
-        0.45
-    } else {
-        0.6
-    }
 }
 
 #[tauri::command]

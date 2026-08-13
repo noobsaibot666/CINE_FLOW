@@ -209,6 +209,58 @@ pub struct ProductionMatchLabRun {
     pub results: Vec<ProductionMatchLabRunResult>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct ProductionMatchConfidenceInput<'a> {
+    pub decode_path_kind: Option<&'a str>,
+    pub source_profile_id: Option<&'a str>,
+    pub chart_detected: Option<bool>,
+    pub calibration_quality_score: Option<f64>,
+    pub clipped_patch_count: u32,
+    pub frame_count: usize,
+}
+
+pub fn compute_production_match_confidence(input: &ProductionMatchConfidenceInput<'_>) -> u8 {
+    let mut score: i32 = 96;
+
+    match input.decode_path_kind {
+        Some("direct_original") | Some("vendor_decoded") => {}
+        Some("operator_proxy") => score -= 22,
+        Some("unsupported_original") => score -= 52,
+        Some(_) => score -= 18,
+        None => score -= 12,
+    }
+
+    if input.source_profile_id.is_none() {
+        score -= 14;
+    }
+
+    match input.chart_detected {
+        Some(true) => {}
+        Some(false) => score -= 28,
+        None => score -= 16,
+    }
+
+    if let Some(quality) = input.calibration_quality_score {
+        if quality < 0.4 {
+            score -= 24;
+        } else if quality < 0.65 {
+            score -= 14;
+        } else if quality < 0.85 {
+            score -= 6;
+        }
+    }
+
+    score -= (input.clipped_patch_count.min(6) as i32) * 4;
+
+    if input.frame_count <= 1 {
+        score -= 18;
+    } else if input.frame_count < 5 {
+        score -= 8;
+    }
+
+    score.clamp(0, 100) as u8
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct BrawDecoderCaps {
     pub found: bool,
@@ -1377,4 +1429,55 @@ fn proxy_ffmpeg_args(output_path: &Path) -> Vec<String> {
         "160k".to_string(),
         output_path.to_string_lossy().to_string(),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{compute_production_match_confidence, ProductionMatchConfidenceInput};
+
+    fn baseline_input() -> ProductionMatchConfidenceInput<'static> {
+        ProductionMatchConfidenceInput {
+            decode_path_kind: Some("direct_original"),
+            source_profile_id: Some("SONY_SLOG3_SGAMUT3_CINE"),
+            chart_detected: Some(true),
+            calibration_quality_score: Some(0.92),
+            clipped_patch_count: 0,
+            frame_count: 5,
+        }
+    }
+
+    #[test]
+    fn confidence_is_high_for_complete_direct_analysis() {
+        assert_eq!(compute_production_match_confidence(&baseline_input()), 96);
+    }
+
+    #[test]
+    fn confidence_decreases_for_decode_and_profile_risks() {
+        let mut operator_proxy = baseline_input();
+        operator_proxy.decode_path_kind = Some("operator_proxy");
+        assert!(compute_production_match_confidence(&operator_proxy) < 80);
+
+        let mut unsupported = baseline_input();
+        unsupported.decode_path_kind = Some("unsupported_original");
+        assert!(compute_production_match_confidence(&unsupported) < 50);
+
+        let mut missing_profile = baseline_input();
+        missing_profile.source_profile_id = None;
+        assert!(compute_production_match_confidence(&missing_profile) < 85);
+    }
+
+    #[test]
+    fn confidence_decreases_for_chart_and_sampling_risks() {
+        let mut failed_chart = baseline_input();
+        failed_chart.chart_detected = Some(false);
+        assert!(compute_production_match_confidence(&failed_chart) < 70);
+
+        let mut clipped_patches = baseline_input();
+        clipped_patches.clipped_patch_count = 4;
+        assert!(compute_production_match_confidence(&clipped_patches) < 85);
+
+        let mut low_frame_count = baseline_input();
+        low_frame_count.frame_count = 1;
+        assert!(compute_production_match_confidence(&low_frame_count) < 85);
+    }
 }

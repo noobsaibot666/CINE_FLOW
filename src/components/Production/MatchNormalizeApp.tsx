@@ -11,7 +11,7 @@ import {
 } from "../../types";
 import { exportProductionPdf } from "../../utils/ProductionExport";
 import { invokeGuarded } from "../../utils/tauri";
-import { buildMatchPresetPayload, parseLookOutputs } from "./productionLogic";
+import { buildMatchPresetPayload, formatConfidenceLabel, parseLookOutputs } from "./productionLogic";
 
 interface MatchNormalizeAppProps {
   project: ProductionProject;
@@ -215,7 +215,10 @@ export function MatchNormalizeApp({ project }: MatchNormalizeAppProps) {
           {payload.steps.map((step) => (
             <div key={step.slot} style={stepCardStyle}>
               <div style={sectionEyebrowStyle}>{step.slot} Camera</div>
-              <h3 style={{ margin: "4px 0 10px" }}>{step.camera_label}</h3>
+              <div style={stepTitleRowStyle}>
+                <h3 style={{ margin: "4px 0 10px" }}>{step.camera_label}</h3>
+                {step.confidence_score != null ? <span style={confidenceBadgeStyle}>{formatConfidenceLabel(step.confidence_score)}</span> : null}
+              </div>
               <ul style={bulletListStyle}>
                 {step.checklist.map((item) => <li key={item}>{item}</li>)}
               </ul>
@@ -270,6 +273,8 @@ const heroSummaryStyle: React.CSSProperties = { color: "var(--text-secondary)", 
 const sectionEyebrowStyle: React.CSSProperties = { fontSize: "0.7rem", textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--text-muted)", fontWeight: 800, marginBottom: 8 };
 const stepGridStyle: React.CSSProperties = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 14, alignItems: "stretch" };
 const stepCardStyle: React.CSSProperties = { padding: 14, borderRadius: 14, background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" };
+const stepTitleRowStyle: React.CSSProperties = { display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10, minWidth: 0 };
+const confidenceBadgeStyle: React.CSSProperties = { marginTop: 4, flexShrink: 0, padding: "4px 7px", borderRadius: 999, border: "1px solid rgba(255,255,255,0.08)", color: "var(--text-secondary)", fontSize: "0.68rem", fontWeight: 800 };
 const bulletListStyle: React.CSSProperties = { margin: 0, paddingLeft: 18, color: "var(--text-secondary)", display: "grid", gap: 6 };
 const evidenceListStyle: React.CSSProperties = { marginTop: 12, display: "grid", gap: 6 };
 const evidenceItemStyle: React.CSSProperties = { color: "var(--text-muted)", fontSize: "0.74rem", lineHeight: 1.35, padding: "7px 9px", borderRadius: 10, border: "1px solid rgba(255,255,255,0.05)", background: "rgba(255,255,255,0.018)" };

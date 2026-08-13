@@ -975,7 +975,7 @@ function buildMatchNormalizeEvidence(result?: ProductionMatchLabRunResult): stri
     `Midtone ${Math.round(bundle.midtone_percentage * 100)}%, highlights ${Math.round(bundle.highlight_percentage * 100)}%`,
   ];
   if (result.confidence_score != null) {
-    evidence.push(`Confidence ${Math.round(result.confidence_score * 100)}%`);
+    evidence.push(`Confidence ${formatConfidenceLabel(result.confidence_score)}`);
   }
   if (result.capability_json) {
     try {
@@ -994,6 +994,15 @@ function formatDecodePathKind(kind: string) {
   if (kind === "operator_proxy") return "Operator proxy";
   if (kind === "unsupported_original") return "Unsupported original";
   return kind.replace(/_/g, " ");
+}
+
+export function formatConfidenceLabel(score: number | null | undefined) {
+  if (score == null) return "Not scored";
+  const normalizedScore = score <= 1 ? Math.round(score * 100) : Math.round(score);
+  if (normalizedScore >= 85) return `${normalizedScore}% high`;
+  if (normalizedScore >= 65) return `${normalizedScore}% usable`;
+  if (normalizedScore >= 40) return `${normalizedScore}% caution`;
+  return `${normalizedScore}% low trust`;
 }
 
 function formatDeltaEChange(before?: number | null, after?: number | null) {

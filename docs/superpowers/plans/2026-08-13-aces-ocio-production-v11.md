@@ -331,11 +331,11 @@ git commit -m "Use Match Lab runs in Match and Normalize"
 - Modify: `src/components/Production/productionLogic.ts`
 - Modify: `src-tauri/src/production_match_lab.rs`
 
-- [ ] **Step 1: Add confidence tests**
+- [x] **Step 1: Add confidence tests**
 
 Verify confidence decreases for operator proxies, unsupported originals, missing profiles, failed chart detection, clipped patches, and low frame count.
 
-- [ ] **Step 2: Implement confidence model**
+- [x] **Step 2: Implement confidence model**
 
 Use a 0-100 score with labels:
 
@@ -346,17 +346,17 @@ Use a 0-100 score with labels:
 0-39 low trust
 ```
 
-- [ ] **Step 3: Display labels in UI and exports**
+- [x] **Step 3: Display labels in UI and exports**
 
 Show confidence beside recommendations and include it in exported reports.
 
-- [ ] **Step 4: Verify**
+- [x] **Step 4: Verify**
 
 Run: `npm run lint && cd src-tauri && cargo test production_match_lab`
 
 Expected: frontend and backend checks pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/components/Production/productionLogic.ts src-tauri/src/production_match_lab.rs
