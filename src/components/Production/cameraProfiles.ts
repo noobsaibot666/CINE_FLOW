@@ -1,3 +1,5 @@
+import { deriveSourceProfileId, type ProductionSourceProfileId } from "./sourceProfiles";
+
 export type CameraBrand = "ARRI" | "Blackmagic" | "Canon" | "Nikon" | "Panasonic" | "RED" | "Sony";
 export type SignalProfile =
   | "BMD_FILM_GEN5"
@@ -41,6 +43,7 @@ export interface ModeProfile {
     codecOptions?: string[];
     quickLabel: string;
     signalProfile?: SignalProfile | null;
+    sourceProfileId?: ProductionSourceProfileId | null;
   };
   baseISO: number[];
   texture: {
@@ -78,6 +81,7 @@ function buildMode(
       codecOptions,
       quickLabel,
       signalProfile,
+      sourceProfileId: deriveSourceProfileId(signalProfile, extras?.logName),
     },
     baseISO,
     texture: {

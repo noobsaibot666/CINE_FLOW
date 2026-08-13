@@ -136,7 +136,7 @@ git commit -m "Expand production media metadata probing"
 - Modify: `src/components/Production/cameraProfiles.ts`
 - Test: `npm run lint`
 
-- [ ] **Step 1: Create source profile registry**
+- [x] **Step 1: Create source profile registry**
 
 Define profile ids such as:
 
@@ -154,17 +154,17 @@ export type ProductionSourceProfileId =
   | "REC709";
 ```
 
-- [ ] **Step 2: Connect camera modes to source profiles**
+- [x] **Step 2: Connect camera modes to source profiles**
 
 Replace loose `signalProfile` use where needed with a source profile id while keeping existing UI labels stable.
 
-- [ ] **Step 3: Run TypeScript**
+- [x] **Step 3: Run TypeScript**
 
 Run: `npm run lint`
 
 Expected: no TypeScript errors.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/components/Production/sourceProfiles.ts src/components/Production/cameraProfiles.ts
