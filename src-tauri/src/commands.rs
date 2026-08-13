@@ -7251,6 +7251,17 @@ pub async fn production_get_raw_ingest_report(
 }
 
 #[tauri::command]
+pub async fn production_get_ocio_config_status(
+    source_profile_id: String,
+    analysis_color_space: String,
+) -> Result<crate::production_ocio::ProductionOcioConfigStatus, String> {
+    Ok(crate::production_ocio::build_ocio_config_status_from_environment(
+        &source_profile_id,
+        &analysis_color_space,
+    ))
+}
+
+#[tauri::command]
 pub async fn production_matchlab_ensure_proxy(
     project_id: String,
     slot: String,

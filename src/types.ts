@@ -788,6 +788,20 @@ export interface ProductionMediaCapabilityReport {
     warnings: string[];
 }
 
+export interface ProductionOcioConfigStatus {
+    source_profile_id: string;
+    analysis_color_space: string;
+    transform_engine: string;
+    config_source: string;
+    config_path?: string | null;
+    config_status: string;
+    transform_status: string;
+    configured: boolean;
+    loadable: boolean;
+    compatible: boolean;
+    warnings: string[];
+}
+
 export interface RawMetadataReport {
     decoder_family?: string | null;
     decoder_version?: string | null;

@@ -11,6 +11,7 @@ import {
   CameraMatchMetrics,
   CameraMatchSuggestionSet,
   ProductionMediaCapabilityReport,
+  ProductionOcioConfigStatus,
   ProductionMatchLabRun,
   ProductionMatchLabRunSummary,
   ProductionProject,
@@ -132,6 +133,7 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
   const [analysisBySlot, setAnalysisBySlot] = useState<Record<string, CameraMatchAnalysisResult>>({});
   const [capabilityBySlot, setCapabilityBySlot] = useState<Record<string, ProductionMediaCapabilityReport>>({});
   const [sourceProfileBySlot, setSourceProfileBySlot] = useState<Record<string, ProductionSourceProfileId>>({});
+  const [ocioStatusBySlot, setOcioStatusBySlot] = useState<Record<string, ProductionOcioConfigStatus>>({});
   const [frameDataUrls, setFrameDataUrls] = useState<Record<string, string>>({});
   const [frameWarnings, setFrameWarnings] = useState<Record<string, string>>({});
   const [slotErrors, setSlotErrors] = useState<Record<string, string>>({});
@@ -317,6 +319,51 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
 
   useEffect(() => {
     let cancelled = false;
+    const loadOcioStatusReports = async () => {
+      const slots = SLOT_ORDER.filter((slot) => Boolean(clipsBySlot[slot]));
+      if (slots.length === 0) {
+        setOcioStatusBySlot({});
+        return;
+      }
+
+      const nextReports: Record<string, ProductionOcioConfigStatus> = {};
+      await Promise.all(slots.map(async (slot) => {
+        const sourceProfileId = sourceProfileBySlot[slot] ?? DEFAULT_SOURCE_PROFILE_ID;
+        try {
+          nextReports[slot] = await invokeGuarded<ProductionOcioConfigStatus>(
+            "production_get_ocio_config_status",
+            { sourceProfileId, analysisColorSpace: ANALYSIS_COLOR_SPACE },
+          );
+        } catch {
+          nextReports[slot] = {
+            source_profile_id: sourceProfileId,
+            analysis_color_space: ANALYSIS_COLOR_SPACE,
+            transform_engine: "OpenColorIO/ACES",
+            config_source: "unavailable",
+            config_path: null,
+            config_status: "metadata_only",
+            transform_status: "status_unavailable",
+            configured: false,
+            loadable: false,
+            compatible: true,
+            warnings: ["OCIO readiness check failed. Analysis remains metadata-only until the config is verified."],
+          };
+        }
+      }));
+
+      if (!cancelled) {
+        startTransition(() => setOcioStatusBySlot(nextReports));
+      }
+    };
+
+    void loadOcioStatusReports();
+    return () => {
+      cancelled = true;
+    };
+  }, [clipsBySlot, sourceProfileBySlot]);
+
+  useEffect(() => {
+    let cancelled = false;
     const loadRunsAndSources = async () => {
       try {
         const [runs, savedSources] = await Promise.all([
@@ -394,6 +441,7 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
           setCalibrationBySlot(nextCalibrations);
           setPreviewModeBySlot(nextPreviewModes);
           setSourceProfileBySlot(nextSourceProfiles);
+          setOcioStatusBySlot({});
         });
       } catch {
         if (!cancelled) {
@@ -738,6 +786,11 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
       return next;
     });
     setSourceProfileBySlot((prev) => {
+      const next = { ...prev };
+      delete next[slot];
+      return next;
+    });
+    setOcioStatusBySlot((prev) => {
       const next = { ...prev };
       delete next[slot];
       return next;
@@ -1286,6 +1339,7 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
               const signalOnly = Boolean(rawAnalysis) && !calibration?.chart_detected;
               const selectedSourceProfileId = sourceProfileBySlot[slot] ?? rawAnalysis?.source_profile_id ?? DEFAULT_SOURCE_PROFILE_ID;
               const selectedSourceProfile = PRODUCTION_SOURCE_PROFILES[selectedSourceProfileId];
+              const ocioStatus = ocioStatusBySlot[slot];
               const sourceWorkflow = clipPath
                 ? describeSourceWorkflow(clipPath, capability, rawAnalysis, Boolean(analysisOverrideBySlot[slot]))
                 : null;
@@ -1381,7 +1435,7 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                       <div style={transformIntentPanelStyle}>
                         <div style={transformIntentHeaderStyle}>
                           <span style={capabilityLabelStyle}>Color pipeline</span>
-                          <span style={transformIntentStatusStyle}>{rawAnalysis?.color_transform_status ? formatTransformStatus(rawAnalysis.color_transform_status) : "Metadata intent"}</span>
+                          <span style={{ ...transformIntentStatusStyle, ...ocioStatusToneStyle(ocioStatus?.config_status) }}>{formatOcioConfigStatus(ocioStatus)}</span>
                         </div>
                         <label style={sourceProfileSelectWrapStyle}>
                           <span style={sourceProfileSelectLabelStyle}>Source profile</span>
@@ -1404,6 +1458,9 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                           <span>{selectedSourceProfile.transferCurve} / {selectedSourceProfile.colorGamut}</span>
                           <span>{rawAnalysis?.analysis_color_space ?? ANALYSIS_COLOR_SPACE}</span>
                         </div>
+                        {ocioStatus?.warnings[0] ? (
+                          <div style={transformIntentWarningStyle}>{ocioStatus.warnings[0]}</div>
+                        ) : null}
                       </div>
                     ) : null}
                     {clipPath ? (
@@ -3161,6 +3218,22 @@ function formatTransformStatus(status?: string | null) {
   return status.replace(/_/g, " ");
 }
 
+function formatOcioConfigStatus(status?: ProductionOcioConfigStatus) {
+  if (!status) return "Checking OCIO";
+  if (status.config_status === "ocio_ready") return "OCIO ready";
+  if (status.config_status === "metadata_only") return "Metadata only";
+  if (status.config_status === "config_missing") return "Config missing";
+  if (status.config_status === "unsupported_transform") return "Unsupported transform";
+  return status.config_status.replace(/_/g, " ");
+}
+
+function ocioStatusToneStyle(status?: string): React.CSSProperties {
+  if (status === "ocio_ready") return { color: "rgba(134,239,172,0.96)" };
+  if (status === "config_missing" || status === "unsupported_transform") return { color: "rgba(248,113,113,0.96)" };
+  if (status === "metadata_only") return { color: "rgba(253,224,71,0.96)" };
+  return { color: "rgba(186,230,253,0.94)" };
+}
+
 function isBrawClip(path: string) {
   return hasExtension(path, DECODER_BACKED_RAW_EXTENSIONS);
 }
@@ -3701,6 +3774,7 @@ const sourceProfileSelectWrapStyle: React.CSSProperties = { display: "grid", gap
 const sourceProfileSelectLabelStyle: React.CSSProperties = { color: "var(--text-muted)", fontSize: "0.62rem", fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase" };
 const sourceProfileSelectStyle: React.CSSProperties = { width: "100%", minWidth: 0, minHeight: 34, borderRadius: 10, border: "1px solid rgba(255,255,255,0.12)", background: "rgba(6,8,12,0.92)", color: "var(--text-primary)", padding: "0 10px", fontSize: "0.76rem", fontWeight: 700, outline: "none" };
 const transformIntentMetaStyle: React.CSSProperties = { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, color: "var(--text-secondary)", fontSize: "0.68rem", lineHeight: 1.3, minWidth: 0 };
+const transformIntentWarningStyle: React.CSSProperties = { color: "rgba(253,224,71,0.9)", fontSize: "0.68rem", lineHeight: 1.35 };
 const capabilityPanelStyle: React.CSSProperties = { marginTop: 12, padding: "10px 11px", borderRadius: 12, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.02)", display: "grid", gap: 7 };
 const capabilityRowStyle: React.CSSProperties = { display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12, minWidth: 0 };
 const capabilityLabelStyle: React.CSSProperties = { color: "var(--text-muted)", fontSize: "0.62rem", fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", whiteSpace: "nowrap" };

@@ -18,6 +18,7 @@ mod perf;
 mod production;
 mod production_calibration;
 pub mod production_color_pipeline;
+pub mod production_ocio;
 mod production_match_lab;
 pub mod production_media_capabilities;
 pub mod production_raw_ingest;
@@ -220,6 +221,7 @@ pub fn run() {
                     "production_get_preset",
                     "production_get_media_capability_report",
                     "production_get_raw_ingest_report",
+                    "production_get_ocio_config_status",
                     "production_matchlab_ensure_proxy",
                     "camera_match_analyze_clip",
                     "production_matchlab_save_run",
@@ -386,6 +388,7 @@ pub fn run() {
             commands::production_get_preset,
             commands::production_get_media_capability_report,
             commands::production_get_raw_ingest_report,
+            commands::production_get_ocio_config_status,
             commands::production_matchlab_ensure_proxy,
             commands::production_matchlab_save_run,
             commands::production_matchlab_save_sources,

@@ -107,10 +107,10 @@ git commit -m "Carry Match Lab color transform intent"
 - Modify: `src/types.ts`
 - Modify: `src/components/Production/CameraMatchLabApp.tsx`
 
-- [ ] Add a backend command that reports whether an OCIO config path is bundled, configured, loadable, and compatible with the selected source profile.
-- [ ] Add UI states: `OCIO ready`, `Metadata only`, `Config missing`, `Unsupported transform`.
-- [ ] Keep analysis allowed in metadata-only mode but lower confidence.
-- [ ] Commit with `git commit -m "Add OCIO config readiness reporting"`.
+- [x] Add a backend command that reports whether an OCIO config path is bundled, configured, loadable, and compatible with the selected source profile.
+- [x] Add UI states: `OCIO ready`, `Metadata only`, `Config missing`, `Unsupported transform`.
+- [x] Keep analysis allowed in metadata-only mode but lower confidence.
+- [x] Commit with `git commit -m "Add OCIO config readiness reporting"`.
 
 ## Phase 5: LibRaw Native Candidate Decode
 
