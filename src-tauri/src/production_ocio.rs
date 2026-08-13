@@ -13,6 +13,10 @@ pub struct ProductionOcioConfigStatus {
     pub configured: bool,
     pub loadable: bool,
     pub compatible: bool,
+    #[serde(default)]
+    pub processor_status: String,
+    #[serde(default)]
+    pub processor_available: bool,
     pub warnings: Vec<String>,
 }
 
@@ -71,6 +75,8 @@ fn build_ocio_config_status_with_source(
             configured: configured_path.is_some(),
             loadable: false,
             compatible: false,
+            processor_status: "processor_not_available".to_string(),
+            processor_available: false,
             warnings: transform_report.warnings,
         };
     }
@@ -87,6 +93,8 @@ fn build_ocio_config_status_with_source(
             configured: false,
             loadable: false,
             compatible: true,
+            processor_status: "processor_not_available".to_string(),
+            processor_available: false,
             warnings: vec![
                 "OCIO config is not configured. CineFlow is using source-profile metadata only; pixel transforms are not executed yet."
                     .to_string(),
@@ -106,6 +114,8 @@ fn build_ocio_config_status_with_source(
             configured: true,
             loadable: false,
             compatible: false,
+            processor_status: "processor_not_available".to_string(),
+            processor_available: false,
             warnings: vec![format!(
                 "OCIO config path does not exist or is not a file: {path}"
             )],
@@ -123,6 +133,8 @@ fn build_ocio_config_status_with_source(
         configured: true,
         loadable: true,
         compatible: true,
+        processor_status: "processor_not_available".to_string(),
+        processor_available: false,
         warnings: Vec::new(),
     }
 }
@@ -168,12 +180,17 @@ pub fn build_ocio_config_status_from_discovery(
     resource_dir: Option<&Path>,
 ) -> ProductionOcioConfigStatus {
     let discovery = discover_ocio_config_path(environment_path, resource_dir);
-    build_ocio_config_status_with_source(
+    let mut status = build_ocio_config_status_with_source(
         source_profile_id,
         analysis_color_space,
         &discovery.config_source,
         discovery.config_path.as_deref(),
-    )
+    );
+    let processor_status = crate::production_ocio_processor::probe_ocio_processor(resource_dir);
+    status.processor_status = processor_status.processor_status;
+    status.processor_available = processor_status.can_execute;
+    status.warnings.extend(processor_status.warnings);
+    status
 }
 
 pub fn build_ocio_config_status_from_environment(
@@ -408,6 +425,14 @@ mod tests {
             Some(bundled_config.to_string_lossy().as_ref())
         );
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn config_status_reports_processor_readiness_separately() {
+        let report = build_ocio_config_status("SONY_SLOG3_SGAMUT3_CINE", "ACEScct", None);
+
+        assert_eq!(report.processor_status, "processor_not_available");
+        assert!(!report.processor_available);
     }
 
     #[test]

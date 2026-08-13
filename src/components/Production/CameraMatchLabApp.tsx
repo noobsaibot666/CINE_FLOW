@@ -346,6 +346,8 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
             configured: false,
             loadable: false,
             compatible: true,
+            processor_status: "processor_not_available",
+            processor_available: false,
             warnings: ["OCIO readiness check failed. Analysis remains metadata-only until the config is verified."],
           };
         }
@@ -657,7 +659,7 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
       multiple: false,
       title: `Select camera ${slot} test clip`,
       filters: [{
-        name: "Camera Source",
+        name: "Camera source · video and RAW",
         extensions: [...PRODUCTION_CAMERA_SOURCE_EXTENSIONS],
       }],
     });
@@ -1441,6 +1443,14 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                           <span style={capabilityLabelStyle}>Color pipeline</span>
                           <span style={{ ...transformIntentStatusStyle, ...ocioStatusToneStyle(ocioStatus?.config_status) }}>{formatOcioConfigStatus(ocioStatus)}</span>
                         </div>
+                        <div style={capabilityRowStyle}>
+                          <span style={capabilityLabelStyle}>OCIO config</span>
+                          <span style={{ ...capabilityValueStyle, ...ocioStatusToneStyle(ocioStatus?.config_status) }}>{formatOcioConfigStatus(ocioStatus)}</span>
+                        </div>
+                        <div style={capabilityRowStyle}>
+                          <span style={capabilityLabelStyle}>OCIO processor</span>
+                          <span style={{ ...capabilityValueStyle, ...ocioProcessorToneStyle(ocioStatus) }}>{formatOcioProcessorStatus(ocioStatus)}</span>
+                        </div>
                         <label style={sourceProfileSelectWrapStyle}>
                           <span style={sourceProfileSelectLabelStyle}>Source profile</span>
                           <select
@@ -1471,7 +1481,11 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                       <div style={capabilityPanelStyle}>
                         <div style={capabilityRowStyle}>
                           <span style={capabilityLabelStyle}>Analysis source</span>
-                          <span style={capabilityValueStyle}>{formatCapabilitySourceLabel(capability)}</span>
+                          <span style={capabilityValueStyle}>{formatCapabilitySourceLabel(capability, rawAnalysis)}</span>
+                        </div>
+                        <div style={capabilityRowStyle}>
+                          <span style={capabilityLabelStyle}>Decode path</span>
+                          <span style={capabilityValueStyle}>{formatAnalysisDecodePathKind(rawAnalysis?.decode_path_kind ?? capability?.decode_path_kind)}</span>
                         </div>
                         <div style={capabilityRowStyle}>
                           <span style={capabilityLabelStyle}>Source profile</span>
@@ -1495,6 +1509,9 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                         </div>
                         {capability?.warnings[0] ? (
                           <div style={capabilityWarningStyle}>{capability.warnings[0]}</div>
+                        ) : null}
+                        {buildTrustBlocker(capability, ocioStatus, rawAnalysis) ? (
+                          <div style={capabilityBlockerStyle}>{buildTrustBlocker(capability, ocioStatus, rawAnalysis)}</div>
                         ) : null}
                       </div>
                     ) : null}
@@ -2854,14 +2871,14 @@ function SourceSupportStrip() {
         <div style={sourceSupportTextBlockStyle}>
           <div style={sourceSupportTitleStyle}>Camera source import</div>
           <div style={sourceSupportBodyStyle}>
-            Import camera clips and RAW sources here. Trusted analysis comes from original video, BRAW decoder paths, or a clean MP4/MOV proxy when the RAW codec is still behind LibRaw or a vendor tool.
+            Select video, BRAW, vendor RAW, and open camera RAW here. Trusted analysis requires a decoded frame path and OCIO processor path; otherwise the slot stays provisional with a clear blocker.
           </div>
         </div>
       </div>
       <div style={sourceSupportGroupsStyle}>
         <SourceSupportGroup label="Direct video" value="MOV, MP4, MXF, MKV, AVI" tone="good" />
         <SourceSupportGroup label="Decoder-backed" value="BRAW" tone="info" />
-        <SourceSupportGroup label="Native RAW candidate" value="DNG, ARW, CR2/CR3, NEF, RAF, RW2, ORF, IIQ" tone="warning" />
+        <SourceSupportGroup label="Open RAW" value="DNG, ARW, CR2/CR3, NEF, RAF, RW2, ORF, IIQ" tone="warning" />
         <SourceSupportGroup label="Proxy/vendor path" value="R3D, N-RAW, X-OCN, Canon RAW" tone="warning" />
       </div>
     </section>
@@ -3276,6 +3293,18 @@ function ocioStatusToneStyle(status?: string): React.CSSProperties {
   return { color: "rgba(186,230,253,0.94)" };
 }
 
+function ocioProcessorToneStyle(status?: ProductionOcioConfigStatus): React.CSSProperties {
+  if (status?.processor_available) return { color: "rgba(134,239,172,0.96)" };
+  return { color: "rgba(253,224,71,0.96)" };
+}
+
+function formatOcioProcessorStatus(status?: ProductionOcioConfigStatus) {
+  if (!status) return "Checking";
+  if (status.processor_available) return "Processor ready";
+  if (status.processor_status === "processor_not_available") return "Processor not available";
+  return (status.processor_status || "Processor not available").replace(/_/g, " ");
+}
+
 function formatMetricTrustLabel(analysis?: CameraMatchAnalysisResult | null) {
   if (!analysis) return "Pending";
   if (analysis.metrics_trusted) return "Trusted ACES metrics";
@@ -3379,11 +3408,20 @@ function describeSourceWorkflow(
   }
 
   if (hasExtension(path, OPEN_CAMERA_RAW_EXTENSIONS)) {
+    if (report?.direct_analysis_supported) {
+      return {
+        tone: "good",
+        badge: getProxyOnlyFormatBadge(path),
+        status: "Direct RAW decode available",
+        body: "This RAW file is accepted and the LibRaw bridge reports frame decode availability. Trusted metrics still require the OCIO config and processor to complete the ACES transform.",
+      };
+    }
+
     return {
       tone: "warning",
       badge: getProxyOnlyFormatBadge(path),
       status: "Native RAW candidate",
-      body: "This RAW file is accepted for the ingest workflow, but trusted direct analysis waits for the LibRaw and OCIO path. Attach a camera-matched MP4/MOV proxy to analyze it today.",
+      body: "This RAW file is selectable and tracked for ingest, but direct analysis needs LibRaw frame decode plus OCIO processing. Attach a camera-matched MP4/MOV proxy until those diagnostics are ready.",
       action: "proxy",
     };
   }
@@ -3482,7 +3520,12 @@ function formatProxyPairing(pairing?: string | null) {
   return pairing.replace(/_/g, " ");
 }
 
-function formatCapabilitySourceLabel(report?: ProductionMediaCapabilityReport) {
+function formatCapabilitySourceLabel(
+  report?: ProductionMediaCapabilityReport,
+  analysis?: CameraMatchAnalysisResult | null,
+) {
+  if (analysis?.source_kind === "proxy" || analysis?.decode_path_kind === "operator_proxy") return "Proxy";
+  if (analysis?.decode_path_kind) return formatAnalysisDecodePathKind(analysis.decode_path_kind);
   if (!report) return "Checking...";
   if (report.decode_path_kind === "direct_original") return "Original";
   if (report.decode_path_kind === "vendor_decoded") return "Vendor decode";
@@ -3490,6 +3533,22 @@ function formatCapabilitySourceLabel(report?: ProductionMediaCapabilityReport) {
   if (report.decode_path_kind === "operator_proxy") return "Operator proxy";
   if (report.proxy_required) return "Proxy required";
   return report.decode_path_kind.replace(/_/g, " ");
+}
+
+function buildTrustBlocker(
+  report?: ProductionMediaCapabilityReport,
+  ocioStatus?: ProductionOcioConfigStatus,
+  analysis?: CameraMatchAnalysisResult | null,
+) {
+  if (analysis?.metrics_trusted) return null;
+  if (analysis?.trust_fallback_reason) return `Blocked trust: ${analysis.trust_fallback_reason.replace(/_/g, " ")}.`;
+  if (report?.decode_path_kind === "native_candidate") return "Blocked trust: LibRaw frame decode is not available for this RAW source yet.";
+  if (report?.decode_path_kind === "operator_proxy") return "Blocked trust: this RAW format needs an operator-approved proxy for analysis.";
+  if (report?.vendor_decoder_required) return "Blocked trust: vendor RAW decoding must be available or paired with a verified proxy.";
+  if (ocioStatus?.config_status !== "ocio_ready") return "Blocked trust: OCIO config is not ready for pixel transforms.";
+  if (!ocioStatus?.processor_available) return "Blocked trust: OCIO processor is not available for frame transforms.";
+  if (analysis && !analysis.metrics_trusted) return "Blocked trust: decode and transform provenance did not both pass.";
+  return null;
 }
 
 function formatCapabilityConfidence(
@@ -3894,6 +3953,7 @@ const capabilityRowStyle: React.CSSProperties = { display: "flex", alignItems: "
 const capabilityLabelStyle: React.CSSProperties = { color: "var(--text-muted)", fontSize: "0.62rem", fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", whiteSpace: "nowrap" };
 const capabilityValueStyle: React.CSSProperties = { color: "var(--text-primary)", fontSize: "0.72rem", fontWeight: 800, textAlign: "right", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
 const capabilityWarningStyle: React.CSSProperties = { marginTop: 2, color: "rgba(220,184,124,0.92)", fontSize: "0.7rem", lineHeight: 1.35 };
+const capabilityBlockerStyle: React.CSSProperties = { marginTop: 2, paddingTop: 7, borderTop: "1px solid rgba(253,186,116,0.16)", color: "rgba(253,186,116,0.98)", fontSize: "0.7rem", lineHeight: 1.35 };
 const statusMetaStyle: React.CSSProperties = { marginTop: 10, fontSize: "0.76rem", color: "rgba(216,212,223,0.86)" };
 const analysisCardStyle: React.CSSProperties = { padding: 14, borderRadius: 18, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(9,10,13,0.9)", minHeight: 1120, display: "flex", flexDirection: "column", minWidth: 0 };
 const frameWrapStyle: React.CSSProperties = { position: "relative", borderRadius: 14, overflow: "hidden", border: "1px solid rgba(255,255,255,0.08)", background: "#080a0c", aspectRatio: "16 / 9", marginBottom: 12 };

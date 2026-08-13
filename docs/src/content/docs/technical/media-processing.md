@@ -53,6 +53,8 @@ Saved Match Lab analyses now persist decode and transform provenance alongside m
 - `ocio_processor_path`: the processor executable used when a frame transform was attempted.
 - `trust_fallback_reason`: the explicit reason metrics stayed provisional.
 
+The Camera Match Lab import UI shows these states separately: source decode path, OCIO config status, OCIO processor status, ACES path, metric trust, confidence, and the first blocker preventing trusted analysis.
+
 ## LibRaw Bridge Status
 
 Open still/camera RAW formats such as DNG, ARW, CR2, CR3, NEF, RAF, RW2, ORF, SRW, RWL, and IIQ are routed through the LibRaw adapter contract.

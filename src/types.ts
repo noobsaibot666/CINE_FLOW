@@ -829,6 +829,8 @@ export interface ProductionOcioConfigStatus {
     configured: boolean;
     loadable: boolean;
     compatible: boolean;
+    processor_status?: string | null;
+    processor_available?: boolean | null;
     warnings: string[];
 }
 

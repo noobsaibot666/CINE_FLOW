@@ -252,11 +252,11 @@ git commit -m "Add OCIO processor readiness reporting"
 - Modify: relevant production components under `src/components/`
 - Test: existing frontend build/test commands.
 
-- [ ] Let the file browser select all supported RAW extensions, not only BRAW.
-- [ ] Show decode path state beside imported files: Direct RAW, Vendor RAW, Proxy, Unsupported, or Provisional.
-- [ ] Show OCIO config status and processor status separately.
-- [ ] Add concise user-facing blockers when a RAW can be imported but cannot be trusted for analysis yet.
-- [ ] Commit with `git commit -m "Improve RAW import diagnostics in production UI"`.
+- [x] Let the file browser select all supported RAW extensions, not only BRAW.
+- [x] Show decode path state beside imported files: Direct RAW, Vendor RAW, Proxy, Unsupported, or Provisional.
+- [x] Show OCIO config status and processor status separately.
+- [x] Add concise user-facing blockers when a RAW can be imported but cannot be trusted for analysis yet.
+- [x] Commit with `git commit -m "Improve RAW import diagnostics in production UI"`.
 
 ### Task 6: Packaging and Release Gate
 
