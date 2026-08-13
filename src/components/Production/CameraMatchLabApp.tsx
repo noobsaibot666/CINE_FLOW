@@ -1478,6 +1478,12 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                           <span style={capabilityValueStyle}>{rawAnalysis ? `${rawAnalysis.analysis_color_space ?? ANALYSIS_COLOR_SPACE} · ${formatTransformStatus(rawAnalysis.color_transform_status)}` : `Pending -> ${ANALYSIS_COLOR_SPACE}`}</span>
                         </div>
                         <div style={capabilityRowStyle}>
+                          <span style={capabilityLabelStyle}>Metric trust</span>
+                          <span style={{ ...capabilityValueStyle, ...metricTrustToneStyle(rawAnalysis) }}>
+                            {formatMetricTrustLabel(rawAnalysis)}
+                          </span>
+                        </div>
+                        <div style={capabilityRowStyle}>
                           <span style={capabilityLabelStyle}>Confidence</span>
                           <span style={{ ...capabilityValueStyle, ...capabilityConfidenceStyle(capability, rawAnalysis) }}>
                             {formatCapabilityConfidence(capability, rawAnalysis)}
@@ -3213,8 +3219,13 @@ function coerceSourceProfileId(value: string | null | undefined): ProductionSour
 function formatTransformStatus(status?: string | null) {
   if (!status) return "Metadata intent";
   if (status === "metadata_ready") return "OCIO metadata ready";
+  if (status === "metadata_only") return "Metadata only";
   if (status === "display_referred_fallback") return "Display fallback";
   if (status === "unsupported_source_profile") return "Unsupported profile";
+  if (status === "unsupported_transform") return "Unsupported transform";
+  if (status === "config_missing") return "Config missing";
+  if (status === "processor_not_linked") return "Processor not linked";
+  if (status === "transform_applied") return "Transform applied";
   return status.replace(/_/g, " ");
 }
 
@@ -3232,6 +3243,19 @@ function ocioStatusToneStyle(status?: string): React.CSSProperties {
   if (status === "config_missing" || status === "unsupported_transform") return { color: "rgba(248,113,113,0.96)" };
   if (status === "metadata_only") return { color: "rgba(253,224,71,0.96)" };
   return { color: "rgba(186,230,253,0.94)" };
+}
+
+function formatMetricTrustLabel(analysis?: CameraMatchAnalysisResult | null) {
+  if (!analysis) return "Pending";
+  if (analysis.metrics_trusted) return "Trusted ACES metrics";
+  const status = formatTransformStatus(analysis.color_transform_status);
+  return `Provisional · ${status}`;
+}
+
+function metricTrustToneStyle(analysis?: CameraMatchAnalysisResult | null): React.CSSProperties {
+  if (!analysis) return { color: "rgba(186,230,253,0.9)" };
+  if (analysis.metrics_trusted) return { color: "rgba(134,239,172,0.96)" };
+  return { color: "rgba(253,224,71,0.96)" };
 }
 
 function isBrawClip(path: string) {

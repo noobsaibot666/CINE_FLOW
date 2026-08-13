@@ -16,6 +16,21 @@ pub struct ProductionOcioConfigStatus {
     pub warnings: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProductionOcioTransformExecutionReport {
+    pub source_profile_id: String,
+    pub analysis_color_space: String,
+    pub transform_engine: String,
+    pub config_source: String,
+    pub config_path: Option<String>,
+    pub config_status: String,
+    pub transform_status: String,
+    pub execution_status: String,
+    pub processor_available: bool,
+    pub metrics_trusted: bool,
+    pub warnings: Vec<String>,
+}
+
 pub fn build_ocio_config_status(
     source_profile_id: &str,
     analysis_color_space: &str,
@@ -102,9 +117,61 @@ pub fn build_ocio_config_status_from_environment(
     )
 }
 
+pub fn build_ocio_transform_execution_report(
+    source_profile_id: &str,
+    analysis_color_space: &str,
+    configured_path: Option<&str>,
+) -> ProductionOcioTransformExecutionReport {
+    let config_status =
+        build_ocio_config_status(source_profile_id, analysis_color_space, configured_path);
+    let processor_available = false;
+    let mut warnings = config_status.warnings.clone();
+    let execution_status = match config_status.config_status.as_str() {
+        "unsupported_transform" => "unsupported_transform",
+        "config_missing" => "config_missing",
+        "metadata_only" => "metadata_only",
+        "ocio_ready" if processor_available => "transform_applied",
+        "ocio_ready" => {
+            warnings.push(
+                "OCIO config is available, but the native OCIO processor is not linked yet; pixel transforms are not executed."
+                    .to_string(),
+            );
+            "processor_not_linked"
+        }
+        _ => "unavailable",
+    };
+    let metrics_trusted = processor_available && execution_status == "transform_applied";
+
+    ProductionOcioTransformExecutionReport {
+        source_profile_id: config_status.source_profile_id,
+        analysis_color_space: config_status.analysis_color_space,
+        transform_engine: config_status.transform_engine,
+        config_source: config_status.config_source,
+        config_path: config_status.config_path,
+        config_status: config_status.config_status,
+        transform_status: config_status.transform_status,
+        execution_status: execution_status.to_string(),
+        processor_available,
+        metrics_trusted,
+        warnings,
+    }
+}
+
+pub fn build_ocio_transform_execution_report_from_environment(
+    source_profile_id: &str,
+    analysis_color_space: &str,
+) -> ProductionOcioTransformExecutionReport {
+    let configured_path = std::env::var("OCIO").ok();
+    build_ocio_transform_execution_report(
+        source_profile_id,
+        analysis_color_space,
+        configured_path.as_deref(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use super::build_ocio_config_status;
+    use super::{build_ocio_config_status, build_ocio_transform_execution_report};
 
     #[test]
     fn reports_metadata_only_when_no_config_is_configured() {
@@ -140,5 +207,43 @@ mod tests {
         assert_eq!(report.config_status, "unsupported_transform");
         assert_eq!(report.transform_status, "unsupported_source_profile");
         assert!(!report.compatible);
+    }
+
+    #[test]
+    fn reports_metadata_only_execution_without_processor() {
+        let report =
+            build_ocio_transform_execution_report("SONY_SLOG3_SGAMUT3_CINE", "ACEScct", None);
+
+        assert_eq!(report.config_status, "metadata_only");
+        assert_eq!(report.execution_status, "metadata_only");
+        assert!(!report.processor_available);
+        assert!(!report.metrics_trusted);
+        assert!(report
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("not executed")));
+    }
+
+    #[test]
+    fn missing_config_never_marks_metrics_trusted() {
+        let report = build_ocio_transform_execution_report(
+            "SONY_SLOG3_SGAMUT3_CINE",
+            "ACEScct",
+            Some("/definitely/missing/config.ocio"),
+        );
+
+        assert_eq!(report.config_status, "config_missing");
+        assert_eq!(report.execution_status, "config_missing");
+        assert!(!report.metrics_trusted);
+    }
+
+    #[test]
+    fn unsupported_profile_never_marks_metrics_trusted() {
+        let report =
+            build_ocio_transform_execution_report("UNKNOWN_CAMERA_PROFILE", "ACEScct", None);
+
+        assert_eq!(report.config_status, "unsupported_transform");
+        assert_eq!(report.execution_status, "unsupported_transform");
+        assert!(!report.metrics_trusted);
     }
 }

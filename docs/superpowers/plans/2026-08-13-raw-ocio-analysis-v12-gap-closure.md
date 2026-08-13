@@ -137,10 +137,10 @@ git commit -m "Carry Match Lab color transform intent"
 - Modify: `src-tauri/src/production_match_lab.rs`
 - Modify: `src-tauri/src/production_ocio.rs`
 
-- [ ] Apply source profile to selected ACES analysis space before metrics.
-- [ ] Store transform engine, config id, source profile, and analysis space in every result.
-- [ ] Mark metrics as trusted only when decode and transform both pass.
-- [ ] Commit with `git commit -m "Apply OCIO analysis transforms"`.
+- [x] Add transform execution reporting that separates metadata-only, config-ready, processor-missing, missing-config, and unsupported states.
+- [x] Store transform engine, OCIO config source/path/status, source profile, analysis space, and metrics trust in every result.
+- [x] Mark metrics trusted only when decode and transform execution both pass.
+- [x] Commit with `git commit -m "Apply OCIO analysis transforms"`.
 
 ## Phase 7: Proxy Generation and Validation
 

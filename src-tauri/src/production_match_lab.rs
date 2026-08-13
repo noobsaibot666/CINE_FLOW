@@ -159,6 +159,16 @@ pub struct CameraMatchAnalysisResult {
     pub analysis_color_space: Option<String>,
     #[serde(default)]
     pub color_transform_status: Option<String>,
+    #[serde(default)]
+    pub color_transform_engine: Option<String>,
+    #[serde(default)]
+    pub ocio_config_status: Option<String>,
+    #[serde(default)]
+    pub ocio_config_source: Option<String>,
+    #[serde(default)]
+    pub ocio_config_path: Option<String>,
+    #[serde(default)]
+    pub metrics_trusted: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1472,6 +1482,11 @@ mod tests {
             source_profile_id: None,
             analysis_color_space: None,
             color_transform_status: None,
+            color_transform_engine: None,
+            ocio_config_status: None,
+            ocio_config_source: None,
+            ocio_config_path: None,
+            metrics_trusted: None,
         }
     }
 
@@ -1480,7 +1495,12 @@ mod tests {
         let mut result = sample_analysis_result();
         result.source_profile_id = Some("SONY_SLOG3_SGAMUT3_CINE".to_string());
         result.analysis_color_space = Some("ACEScct".to_string());
-        result.color_transform_status = Some("metadata_ready".to_string());
+        result.color_transform_status = Some("metadata_only".to_string());
+        result.color_transform_engine = Some("OpenColorIO/ACES".to_string());
+        result.ocio_config_status = Some("metadata_only".to_string());
+        result.ocio_config_source = Some("metadata".to_string());
+        result.ocio_config_path = None;
+        result.metrics_trusted = Some(false);
 
         let json = serde_json::to_string(&result).expect("serialize analysis result");
         let decoded: CameraMatchAnalysisResult =
@@ -1493,8 +1513,16 @@ mod tests {
         assert_eq!(decoded.analysis_color_space.as_deref(), Some("ACEScct"));
         assert_eq!(
             decoded.color_transform_status.as_deref(),
-            Some("metadata_ready")
+            Some("metadata_only")
         );
+        assert_eq!(
+            decoded.color_transform_engine.as_deref(),
+            Some("OpenColorIO/ACES")
+        );
+        assert_eq!(decoded.ocio_config_status.as_deref(), Some("metadata_only"));
+        assert_eq!(decoded.ocio_config_source.as_deref(), Some("metadata"));
+        assert_eq!(decoded.ocio_config_path.as_deref(), None);
+        assert_eq!(decoded.metrics_trusted, Some(false));
     }
 
     #[test]

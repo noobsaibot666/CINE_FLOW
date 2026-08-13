@@ -5517,8 +5517,35 @@ async fn camera_match_analyze_clip_internal(
         let representative_index = per_frame.len() / 2;
         let representative_frame_path = per_frame[representative_index].frame_path.clone();
         let frame_paths = per_frame.iter().map(|item| item.frame_path.clone()).collect();
-        let color_transform_report =
-            source_profile_id.map(crate::production_color_pipeline::build_color_transform_report);
+        let requested_analysis_color_space = analysis_color_space.unwrap_or("ACEScct");
+        let ocio_execution_report = source_profile_id.map(|profile_id| {
+            crate::production_ocio::build_ocio_transform_execution_report_from_environment(
+                profile_id,
+                requested_analysis_color_space,
+            )
+        });
+        if let Some(report) = &ocio_execution_report {
+            analysis_warnings.extend(report.warnings.clone());
+        }
+        let transform_engine = ocio_execution_report
+            .as_ref()
+            .map(|report| report.transform_engine.clone());
+        let ocio_config_status = ocio_execution_report
+            .as_ref()
+            .map(|report| report.config_status.clone());
+        let ocio_config_source = ocio_execution_report
+            .as_ref()
+            .map(|report| report.config_source.clone());
+        let ocio_config_path = ocio_execution_report
+            .as_ref()
+            .and_then(|report| report.config_path.clone());
+        let metrics_trusted = ocio_execution_report
+            .as_ref()
+            .map(|report| {
+                report.metrics_trusted
+                    && !(analysis_source_override_path.is_some() || is_braw_path(clip_path))
+            })
+            .or(Some(false));
 
         Ok(CameraMatchAnalysisResult {
             measurement_bundle: build_measurement_bundle(
@@ -5549,11 +5576,18 @@ async fn camera_match_analyze_clip_internal(
             warnings: analysis_warnings,
             source_profile_id: source_profile_id.map(str::to_string),
             analysis_color_space: analysis_color_space.map(str::to_string).or_else(|| {
-                color_transform_report
+                ocio_execution_report
                     .as_ref()
-                    .map(|report| report.analysis_space.clone())
+                    .map(|report| report.analysis_color_space.clone())
             }),
-            color_transform_status: color_transform_report.map(|report| report.transform_status),
+            color_transform_status: ocio_execution_report
+                .as_ref()
+                .map(|report| report.execution_status.clone()),
+            color_transform_engine: transform_engine,
+            ocio_config_status,
+            ocio_config_source,
+            ocio_config_path,
+            metrics_trusted,
         })
     }
     .await;

@@ -605,6 +605,11 @@ export interface CameraMatchAnalysisResult {
     source_profile_id?: string | null;
     analysis_color_space?: string | null;
     color_transform_status?: string | null;
+    color_transform_engine?: string | null;
+    ocio_config_status?: string | null;
+    ocio_config_source?: string | null;
+    ocio_config_path?: string | null;
+    metrics_trusted?: boolean | null;
 }
 
 export interface CalibrationPatchSample {
