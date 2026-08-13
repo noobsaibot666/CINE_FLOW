@@ -7283,6 +7283,12 @@ pub async fn production_matchlab_save_run(
     let mut result_records = Vec::with_capacity(results.len());
     for item in results {
         let source_hash = hash_source_signature(&item.analysis.clip_path);
+        let capability_report =
+            crate::production_media_capabilities::classify_media_source(&item.analysis.clip_path);
+        let confidence_score =
+            production_matchlab_confidence_score(&capability_report, item.analysis.source_kind.as_deref());
+        let capability_json = serde_json::to_string(&capability_report)
+            .map_err(|e| format!("Failed to serialize capability report: {}", e))?;
         let source_record = ProductionMatchLabSource {
             id: format!("{}:{}", project_id, item.slot),
             project_id: project_id.clone(),
@@ -7312,6 +7318,11 @@ pub async fn production_matchlab_save_run(
                 .map(|calibration| serde_json::to_string(&calibration))
                 .transpose()
                 .map_err(|e| format!("Failed to serialize calibration payload: {}", e))?,
+            capability_json: Some(capability_json),
+            source_profile_id: None,
+            analysis_color_space: None,
+            decode_path_kind: Some(capability_report.decode_path_kind),
+            confidence_score: Some(confidence_score),
             created_at: now.clone(),
         });
     }
@@ -7322,6 +7333,21 @@ pub async fn production_matchlab_save_run(
         .map_err(|e| format!("Failed to save match lab run: {}", e))?;
 
     Ok(run_id)
+}
+
+fn production_matchlab_confidence_score(
+    capability: &crate::production_media_capabilities::ProductionMediaCapabilityReport,
+    source_kind: Option<&str>,
+) -> f64 {
+    if capability.direct_analysis_supported && capability.warnings.is_empty() {
+        0.9
+    } else if capability.vendor_decoder_required && source_kind == Some("proxy") {
+        0.72
+    } else if capability.proxy_required {
+        0.45
+    } else {
+        0.6
+    }
 }
 
 #[tauri::command]
@@ -7378,6 +7404,11 @@ pub async fn production_matchlab_get_run(
             frame_paths,
             analysis,
             calibration,
+            capability_json: result.capability_json,
+            source_profile_id: result.source_profile_id,
+            analysis_color_space: result.analysis_color_space,
+            decode_path_kind: result.decode_path_kind,
+            confidence_score: result.confidence_score,
             created_at: result.created_at,
         });
     }
@@ -7571,6 +7602,11 @@ pub async fn production_matchlab_export_calibration_package(
             frame_paths,
             analysis,
             calibration,
+            capability_json: result.capability_json,
+            source_profile_id: result.source_profile_id,
+            analysis_color_space: result.analysis_color_space,
+            decode_path_kind: result.decode_path_kind,
+            confidence_score: result.confidence_score,
             created_at: result.created_at,
         });
     }

@@ -187,6 +187,16 @@ pub struct ProductionMatchLabRunResult {
     pub frame_paths: Vec<String>,
     pub analysis: CameraMatchAnalysisResult,
     pub calibration: Option<CalibrationChartDetection>,
+    #[serde(default)]
+    pub capability_json: Option<String>,
+    #[serde(default)]
+    pub source_profile_id: Option<String>,
+    #[serde(default)]
+    pub analysis_color_space: Option<String>,
+    #[serde(default)]
+    pub decode_path_kind: Option<String>,
+    #[serde(default)]
+    pub confidence_score: Option<f64>,
     pub created_at: String,
 }
 

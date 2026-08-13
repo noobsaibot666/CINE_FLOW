@@ -694,6 +694,11 @@ export interface ProductionMatchLabRunResult {
     frame_paths: string[];
     analysis: CameraMatchAnalysisResult;
     calibration?: CalibrationChartDetection | null;
+    capability_json?: string | null;
+    source_profile_id?: string | null;
+    analysis_color_space?: string | null;
+    decode_path_kind?: string | null;
+    confidence_score?: number | null;
     created_at: string;
 }
 

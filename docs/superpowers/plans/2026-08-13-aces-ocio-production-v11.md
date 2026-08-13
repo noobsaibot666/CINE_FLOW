@@ -258,11 +258,11 @@ git commit -m "Show media capability reports in Camera Match Lab"
 - Modify: `src-tauri/src/commands.rs`
 - Modify: `src/types.ts`
 
-- [ ] **Step 1: Add migration tests or schema assertions**
+- [x] **Step 1: Add migration tests or schema assertions**
 
 Verify older `production_matchlab_results` rows remain readable when new fields are null.
 
-- [ ] **Step 2: Add nullable columns**
+- [x] **Step 2: Add nullable columns**
 
 Add columns for:
 
@@ -274,17 +274,17 @@ decode_path_kind
 confidence_score
 ```
 
-- [ ] **Step 3: Save provenance with every run**
+- [x] **Step 3: Save provenance with every run**
 
 When saving Match Lab runs, persist capability report and transform metadata beside metrics.
 
-- [ ] **Step 4: Verify**
+- [x] **Step 4: Verify**
 
 Run: `cd src-tauri && cargo test production_matchlab`
 
 Expected: existing and new persistence tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src-tauri/src/db.rs src-tauri/src/production_match_lab.rs src-tauri/src/commands.rs src/types.ts

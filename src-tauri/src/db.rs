@@ -440,6 +440,11 @@ pub struct ProductionMatchLabResultRecord {
     pub frames_json: String,
     pub metrics_json: String,
     pub calibration_json: Option<String>,
+    pub capability_json: Option<String>,
+    pub source_profile_id: Option<String>,
+    pub analysis_color_space: Option<String>,
+    pub decode_path_kind: Option<String>,
+    pub confidence_score: Option<f64>,
     pub created_at: String,
 }
 
@@ -564,6 +569,17 @@ impl Database {
                     "ALTER TABLE production_matchlab_results ADD COLUMN calibration_json TEXT",
                     [],
                 )?;
+            }
+            for (column, definition) in [
+                ("capability_json", "ALTER TABLE production_matchlab_results ADD COLUMN capability_json TEXT"),
+                ("source_profile_id", "ALTER TABLE production_matchlab_results ADD COLUMN source_profile_id TEXT"),
+                ("analysis_color_space", "ALTER TABLE production_matchlab_results ADD COLUMN analysis_color_space TEXT"),
+                ("decode_path_kind", "ALTER TABLE production_matchlab_results ADD COLUMN decode_path_kind TEXT"),
+                ("confidence_score", "ALTER TABLE production_matchlab_results ADD COLUMN confidence_score REAL"),
+            ] {
+                if !matchlab_columns.is_empty() && !matchlab_columns.contains(&column.to_string()) {
+                    conn.execute(definition, [])?;
+                }
             }
 
             conn.execute_batch(
@@ -1702,6 +1718,11 @@ impl Database {
                 frames_json TEXT NOT NULL,
                 metrics_json TEXT NOT NULL,
                 calibration_json TEXT,
+                capability_json TEXT,
+                source_profile_id TEXT,
+                analysis_color_space TEXT,
+                decode_path_kind TEXT,
+                confidence_score REAL,
                 created_at TEXT NOT NULL,
                 FOREIGN KEY(run_id) REFERENCES production_matchlab_runs(id)
             );
@@ -2126,7 +2147,7 @@ impl Database {
         )?;
         for result in results {
             tx.execute(
-                "INSERT INTO production_matchlab_results (id, run_id, slot, proxy_path, representative_frame_path, frames_json, metrics_json, calibration_json, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                "INSERT INTO production_matchlab_results (id, run_id, slot, proxy_path, representative_frame_path, frames_json, metrics_json, calibration_json, capability_json, source_profile_id, analysis_color_space, decode_path_kind, confidence_score, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
                 params![
                     result.id,
                     result.run_id,
@@ -2136,6 +2157,11 @@ impl Database {
                     result.frames_json,
                     result.metrics_json,
                     result.calibration_json,
+                    result.capability_json,
+                    result.source_profile_id,
+                    result.analysis_color_space,
+                    result.decode_path_kind,
+                    result.confidence_score,
                     result.created_at
                 ],
             )?;
@@ -2194,7 +2220,7 @@ impl Database {
         };
 
         let mut result_stmt = conn.prepare(
-            "SELECT id, run_id, slot, proxy_path, representative_frame_path, frames_json, metrics_json, calibration_json, created_at
+            "SELECT id, run_id, slot, proxy_path, representative_frame_path, frames_json, metrics_json, calibration_json, capability_json, source_profile_id, analysis_color_space, decode_path_kind, confidence_score, created_at
              FROM production_matchlab_results
              WHERE run_id = ?1
              ORDER BY slot ASC",
@@ -2209,7 +2235,12 @@ impl Database {
                 frames_json: row.get(5)?,
                 metrics_json: row.get(6)?,
                 calibration_json: row.get(7)?,
-                created_at: row.get(8)?,
+                capability_json: row.get(8)?,
+                source_profile_id: row.get(9)?,
+                analysis_color_space: row.get(10)?,
+                decode_path_kind: row.get(11)?,
+                confidence_score: row.get(12)?,
+                created_at: row.get(13)?,
             })
         })?;
         let mut results = Vec::new();
@@ -2225,7 +2256,7 @@ impl Database {
     ) -> SqlResult<Vec<ProductionMatchLabResultRecord>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, run_id, slot, proxy_path, representative_frame_path, frames_json, metrics_json, calibration_json, created_at
+            "SELECT id, run_id, slot, proxy_path, representative_frame_path, frames_json, metrics_json, calibration_json, capability_json, source_profile_id, analysis_color_space, decode_path_kind, confidence_score, created_at
              FROM production_matchlab_results
              WHERE run_id != ?1",
         )?;
@@ -2239,7 +2270,12 @@ impl Database {
                 frames_json: row.get(5)?,
                 metrics_json: row.get(6)?,
                 calibration_json: row.get(7)?,
-                created_at: row.get(8)?,
+                capability_json: row.get(8)?,
+                source_profile_id: row.get(9)?,
+                analysis_color_space: row.get(10)?,
+                decode_path_kind: row.get(11)?,
+                confidence_score: row.get(12)?,
+                created_at: row.get(13)?,
             })
         })?;
         let mut results = Vec::new();
@@ -5016,5 +5052,60 @@ fn remove_sqlite_file(path: &str) -> Result<(), String> {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_legacy_matchlab_results_with_null_provenance() {
+        let db = Database::new(":memory:").expect("in-memory database should initialize");
+        let now = "2026-08-13T18:00:00Z";
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute(
+                "INSERT INTO production_projects (id, name, client_name, created_at, last_opened_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params!["project", "Project", "", now, now],
+            )
+            .expect("project insert should succeed");
+            conn.execute(
+                "INSERT INTO production_matchlab_runs (id, project_id, hero_slot, created_at)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params!["run", "project", "A", now],
+            )
+            .expect("run insert should succeed");
+            conn.execute(
+                "INSERT INTO production_matchlab_results
+                 (id, run_id, slot, proxy_path, representative_frame_path, frames_json, metrics_json, calibration_json, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    "result",
+                    "run",
+                    "A",
+                    Option::<String>::None,
+                    "/tmp/frame.jpg",
+                    "[]",
+                    "{}",
+                    Option::<String>::None,
+                    now
+                ],
+            )
+            .expect("legacy result insert should succeed");
+        }
+
+        let (_run, results) = db
+            .get_production_matchlab_run("run")
+            .expect("run read should succeed")
+            .expect("run should exist");
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].capability_json.is_none());
+        assert!(results[0].source_profile_id.is_none());
+        assert!(results[0].analysis_color_space.is_none());
+        assert!(results[0].decode_path_kind.is_none());
+        assert!(results[0].confidence_score.is_none());
     }
 }
