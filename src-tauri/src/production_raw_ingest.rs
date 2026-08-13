@@ -47,7 +47,7 @@ pub struct RawIngestReport {
 }
 
 pub fn build_raw_ingest_report(source_path: &str) -> RawIngestReport {
-    let capability = classify_media_source(source_path);
+    let mut capability = classify_media_source(source_path);
     let extension = extension_lowercase(source_path);
     let mut raw_metadata = RawMetadataReport {
         raw_format_family: Some(capability.format_family.clone()),
@@ -74,6 +74,13 @@ pub fn build_raw_ingest_report(source_path: &str) -> RawIngestReport {
                 "Open camera RAW detected. LibRaw integration is required before direct ACES analysis is trusted."
                     .to_string(),
             );
+            capability.format_family = format_family.clone();
+            capability.decode_path_kind = decode_path_kind.clone();
+            capability.direct_analysis_supported = false;
+            capability.vendor_decoder_required = false;
+            capability.proxy_required = proxy_required;
+            capability.recommended_proxy_tool = Some("LibRaw integration".to_string());
+            capability.warnings = warnings.clone();
             ("libraw_still", "native_candidate", false)
         }
         Some("braw") => ("braw_bridge", "vendor", false),
@@ -151,6 +158,15 @@ mod tests {
         assert_eq!(report.format_family, "OPEN_CAMERA_RAW");
         assert_eq!(report.decode_path_kind, "native_candidate");
         assert!(report.proxy_required);
+        assert_eq!(report.capability.format_family, "OPEN_CAMERA_RAW");
+        assert_eq!(report.capability.decode_path_kind, "native_candidate");
+        assert!(!report.capability.direct_analysis_supported);
+        assert!(!report.capability.vendor_decoder_required);
+        assert!(report.capability.proxy_required);
+        assert_eq!(
+            report.capability.recommended_proxy_tool.as_deref(),
+            Some("LibRaw integration")
+        );
     }
 
     #[test]
