@@ -179,9 +179,9 @@ git commit -m "Carry Match Lab color transform intent"
 - Modify: `docs/src/content/docs/user-guide/production.md`
 - Modify: `docs/src/content/docs/product/roadmap.md`
 
-- [ ] Add docs only after each phase is verified and approved.
-- [ ] Separate implemented behavior from planned roadmap.
-- [ ] Commit with `git commit -m "Document approved RAW OCIO workflow"`.
+- [x] Add docs only after each phase is verified and approved.
+- [x] Separate implemented behavior from planned roadmap.
+- [x] Commit with `git commit -m "Document approved RAW OCIO workflow"`.
 
 ## Self-Review
 

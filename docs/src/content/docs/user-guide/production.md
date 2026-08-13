@@ -21,6 +21,10 @@ Imports test clips from multiple cameras, inspects representative frames, compar
 
 Each selected camera shows its analysis path, source profile state, ACES path status, confidence, and warnings. Analysis paths distinguish original media, vendor-decoded sources, operator proxies, and sources that require a proxy.
 
+The color pipeline panel lets the operator choose the source profile used for the ACES analysis intent. OCIO status is shown as ready, metadata only, config missing, unsupported transform, or processor not linked. If the app cannot confirm an executed OCIO transform, the metrics remain provisional.
+
+RAW sources that require a proxy can use generated BRAW proxies or operator-selected MP4/MOV proxies. When a proxy is used, Camera Match Lab records validation details such as source/proxy pairing, duration and frame-count estimates when available, proxy codec, proxy resolution, and color pipeline note.
+
 Saved runs keep provenance with the analysis, including capability metadata, decode path, and confidence. This makes later normalization and exports traceable to the media that was actually measured.
 
 ## On-Set Coach
@@ -31,7 +35,16 @@ Carries the saved look setup into quick on-set checks. Warning toggles can track
 
 Designates a hero camera and saves repeatable alignment presets for the rest of the camera package. Use it after Camera Match Lab has established the normalization target.
 
-When a saved Camera Match Lab run is selected, Match & Normalize builds steps from measured exposure, WB/tint drift, chart quality, decode path, and confidence. Exported PDFs include the same evidence so a preset can be traced back to the saved analysis run.
+When a saved Camera Match Lab run is selected, Match & Normalize builds steps from measured exposure, WB/tint drift, chart quality, decode path, transform provenance, proxy validation, and confidence.
+
+Each camera receives a trust label:
+
+- `Trusted`: decode, transform, proxy, and chart provenance are acceptable.
+- `Provisional`: analysis is useful, but at least one provenance requirement needs review.
+- `Proxy-only`: the preset depends on a proxy-backed analysis path.
+- `Setup only`: no Match Lab run is selected, so the preset is based on setup guidance.
+
+Exported PDFs include the same trust reasons and evidence so a preset can be traced back to the saved analysis run.
 
 ## Frame Preview
 

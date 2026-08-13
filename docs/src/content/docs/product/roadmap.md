@@ -16,12 +16,15 @@ CineFlow Suite 1.x focuses on local-first production workflows across macOS and 
 ## Recent Production Workflow Improvements
 
 - Camera Match Lab labels original, vendor-decoded, operator-proxy, and proxy-required analysis paths.
-- Camera Match Lab saves provenance with analysis runs, including decode path, capability report data, and confidence.
-- Match & Normalize can use saved Match Lab runs to build measured normalization steps and exports with confidence and evidence.
+- Camera Match Lab records source profile, ACES analysis intent, OCIO config status, transform status, proxy validation, metric trust, decode path, capability report data, and confidence.
+- Camera Match Lab validates proxy-backed RAW analysis using duration/frame-count estimates when available, resolution, codec, source pairing, and color pipeline notes.
+- Match & Normalize can use saved Match Lab runs to build measured normalization steps and exports with confidence, trust labels, provenance reasons, and evidence.
 
 ## Near-Term Priorities
 
-- Harden media import and fallback handling across MP4, MOV, BRAW, and vendor/proxy RAW workflows
+- Link and package native OCIO processing so configured transforms can move from metadata/provenance reporting to executed pixel transforms.
+- Continue the LibRaw adapter work for supported open camera RAW formats while keeping proprietary vendor RAW behind legal vendor SDK/tool boundaries.
+- Harden media import and fallback handling across MP4, MOV, BRAW, and vendor/proxy RAW workflows.
 - Keep export branding consistent across PDF, image, CSV, and review handoff outputs
 - Improve Windows packaging and Microsoft Store submission readiness
 - Continue tightening App Store compliance, privacy documentation, and sandbox behavior
