@@ -86,7 +86,17 @@ pub fn build_raw_ingest_report(source_path: &str) -> RawIngestReport {
         Some("braw") => ("braw_bridge", "vendor", false),
         Some("r3d") | Some("nev") => ("redline", "vendor", false),
         Some("xocn") | Some("crm") | Some("rmf") => ("operator_proxy", "proxy", false),
-        Some("mov") | Some("mp4") | Some("mxf") => ("ffmpeg_video", "native", true),
+        Some("mov") | Some("mp4") | Some("mxf") => {
+            decode_path_kind = "probe_required".to_string();
+            warnings.push(
+                "Container source requires codec and source-profile probing before RAW/OCIO analysis readiness is trusted."
+                    .to_string(),
+            );
+            capability.decode_path_kind = decode_path_kind.clone();
+            capability.direct_analysis_supported = false;
+            capability.warnings = warnings.clone();
+            ("ffmpeg_video", "native", false)
+        }
         _ => ("unsupported", "unsupported", false),
     };
 
@@ -215,15 +225,21 @@ mod tests {
     }
 
     #[test]
-    fn preserves_existing_direct_video_analysis_path() {
+    fn marks_container_video_sources_as_probe_required() {
         for source in ["/camera/A001.mov", "/camera/A001.mp4", "/camera/A001.mxf"] {
             let report = build_raw_ingest_report(source);
 
             assert_eq!(report.adapter_id, "ffmpeg_video");
             assert_eq!(report.support_tier, "native");
-            assert_eq!(report.decode_path_kind, "direct_original");
-            assert!(report.analysis_ready);
+            assert_eq!(report.decode_path_kind, "probe_required");
+            assert!(!report.analysis_ready);
             assert!(!report.proxy_required);
+            assert_eq!(report.capability.decode_path_kind, "probe_required");
+            assert!(!report.capability.direct_analysis_supported);
+            assert!(report
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("codec and source-profile probing")));
         }
     }
 
