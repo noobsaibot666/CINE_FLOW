@@ -54,12 +54,18 @@ pub fn build_raw_ingest_report(source_path: &str) -> RawIngestReport {
         ..RawMetadataReport::default()
     };
     let mut warnings = capability.warnings.clone();
+    let mut format_family = capability.format_family.clone();
+    let mut decode_path_kind = capability.decode_path_kind.clone();
+    let mut proxy_required = capability.proxy_required;
 
     let (adapter_id, support_tier, analysis_ready) = match extension.as_deref() {
         Some("dng") | Some("arw") | Some("cr2") | Some("cr3") | Some("nef") | Some("raf")
         | Some("rw2") | Some("orf") => {
             raw_metadata.decoder_family = Some("LibRaw".to_string());
             raw_metadata.raw_format_family = Some("OPEN_CAMERA_RAW".to_string());
+            format_family = "OPEN_CAMERA_RAW".to_string();
+            decode_path_kind = "native_candidate".to_string();
+            proxy_required = true;
             raw_metadata.warnings.push(
                 "LibRaw metadata extraction is planned for this native candidate; current builds do not decode it yet."
                     .to_string(),
@@ -81,11 +87,11 @@ pub fn build_raw_ingest_report(source_path: &str) -> RawIngestReport {
         source_path: source_path.to_string(),
         adapter_id: adapter_id.to_string(),
         support_tier: support_tier.to_string(),
-        format_family: capability.format_family.clone(),
-        decode_path_kind: capability.decode_path_kind.clone(),
+        format_family,
+        decode_path_kind,
         analysis_ready,
         vendor_decoder_required: capability.vendor_decoder_required,
-        proxy_required: capability.proxy_required,
+        proxy_required,
         recommended_proxy_tool: capability.recommended_proxy_tool.clone(),
         raw_metadata,
         capability,
@@ -121,6 +127,9 @@ mod tests {
             assert_eq!(report.source_path, source);
             assert_eq!(report.adapter_id, "libraw_still");
             assert_eq!(report.support_tier, "native_candidate");
+            assert_eq!(report.format_family, "OPEN_CAMERA_RAW");
+            assert_eq!(report.decode_path_kind, "native_candidate");
+            assert!(report.proxy_required);
             assert_eq!(
                 report.raw_metadata.raw_format_family.as_deref(),
                 Some("OPEN_CAMERA_RAW")
@@ -131,6 +140,17 @@ mod tests {
                 .iter()
                 .any(|warning| warning.contains("LibRaw")));
         }
+    }
+
+    #[test]
+    fn selects_libraw_adapter_case_insensitively() {
+        let report = build_raw_ingest_report("/camera/A001.ARW");
+
+        assert_eq!(report.adapter_id, "libraw_still");
+        assert_eq!(report.support_tier, "native_candidate");
+        assert_eq!(report.format_family, "OPEN_CAMERA_RAW");
+        assert_eq!(report.decode_path_kind, "native_candidate");
+        assert!(report.proxy_required);
     }
 
     #[test]
