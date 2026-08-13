@@ -3,9 +3,11 @@ use walkdir::WalkDir;
 
 /// Supported media file extensions (video + image)
 const MEDIA_EXTENSIONS: &[&str] = &[
-    "mp4", "mov", "mxf", "avi", "mkv", "prores", "r3d", "braw", "nev", "mts", "m4v", "webm", "wmv", "flv",
-    "ts", "m2ts", "mpg", "mpeg", "3gp", "3gp2", "ogv", "vob", "divx", "xvid", "mqv",
-    "jpg", "jpeg", "png", "webp", "tiff", "tif", "bmp", "heic", "heif", "nef", "nrw", "cr2", "cr3", "arw", "orf", "raf", "dng",
+    "mp4", "mov", "mxf", "avi", "mkv", "prores", "r3d", "braw", "nev", "mts", "m4v", "webm", "wmv",
+    "flv", "ts", "m2ts", "mpg", "mpeg", "3gp", "3gp2", "ogv", "vob", "divx", "xvid", "mqv", "jpg",
+    "jpeg", "png", "webp", "tiff", "tif", "bmp", "heic", "heif", "dng", "arw", "cr2", "cr3", "nef",
+    "nrw", "raf", "rw2", "orf", "srf", "sr2", "pef", "srw", "raw", "rwl", "iiq", "xocn", "crm",
+    "rmf",
 ];
 
 /// Scan a directory recursively and return all supported media file paths
@@ -45,5 +47,38 @@ fn is_supported_media_file(path: &Path) -> bool {
         MEDIA_EXTENSIONS.contains(&ext_lower.as_str())
     } else {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_supported_media_file;
+    use std::path::Path;
+
+    #[test]
+    fn accepts_open_camera_raw_extensions() {
+        for extension in [
+            "dng", "arw", "cr2", "cr3", "nef", "nrw", "raf", "rw2", "orf", "srf", "sr2", "pef",
+            "srw", "raw", "rwl", "iiq",
+        ] {
+            let path = format!("/clip/A001.{extension}");
+
+            assert!(
+                is_supported_media_file(Path::new(&path)),
+                "expected {extension} to be scanned as media"
+            );
+        }
+    }
+
+    #[test]
+    fn accepts_proxy_guided_cinema_raw_extensions() {
+        for extension in ["xocn", "crm", "rmf"] {
+            let path = format!("/clip/A001.{extension}");
+
+            assert!(
+                is_supported_media_file(Path::new(&path)),
+                "expected {extension} to be scanned as media"
+            );
+        }
     }
 }

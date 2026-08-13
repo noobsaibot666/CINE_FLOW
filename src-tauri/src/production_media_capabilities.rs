@@ -27,6 +27,16 @@ pub fn classify_media_source(source_path: &str) -> ProductionMediaCapabilityRepo
         ),
         Some("r3d") => vendor_decoded(source_path, "RED_R3D", "REDline / RED R3D SDK"),
         Some("nev") => vendor_decoded(source_path, "NIKON_NRAW", "REDline / RED R3D SDK"),
+        Some("dng") | Some("arw") | Some("cr2") | Some("cr3") | Some("nef") | Some("nrw")
+        | Some("raf") | Some("rw2") | Some("orf") | Some("srf") | Some("sr2")
+        | Some("pef") | Some("srw") | Some("raw") | Some("rwl") | Some("iiq") => {
+            native_candidate(
+                source_path,
+                "OPEN_CAMERA_RAW",
+                "LibRaw integration",
+                "Open camera RAW source detected. LibRaw integration is required before direct ACES analysis is trusted.",
+            )
+        }
         Some("crm") | Some("rmf") => operator_proxy(
             source_path,
             "CANON_CINEMA_RAW",
@@ -102,6 +112,24 @@ fn vendor_decoded(
     }
 }
 
+fn native_candidate(
+    source_path: &str,
+    format_family: &str,
+    recommended_proxy_tool: &str,
+    warning: &str,
+) -> ProductionMediaCapabilityReport {
+    ProductionMediaCapabilityReport {
+        source_path: source_path.to_string(),
+        format_family: format_family.to_string(),
+        decode_path_kind: "native_candidate".to_string(),
+        direct_analysis_supported: false,
+        vendor_decoder_required: false,
+        proxy_required: true,
+        recommended_proxy_tool: Some(recommended_proxy_tool.to_string()),
+        warnings: vec![warning.to_string()],
+    }
+}
+
 fn operator_proxy(
     source_path: &str,
     format_family: &str,
@@ -146,10 +174,7 @@ mod tests {
             classify_media_source("/clip/A001.rmf").format_family,
             "CANON_CINEMA_RAW"
         );
-        assert_eq!(
-            classify_media_source("/clip/A001.mxf").format_family,
-            "MXF"
-        );
+        assert_eq!(classify_media_source("/clip/A001.mxf").format_family, "MXF");
         assert_eq!(
             classify_media_source("/clip/A001.mov").format_family,
             "QUICKTIME"
@@ -189,6 +214,36 @@ mod tests {
             r3d.recommended_proxy_tool.as_deref(),
             Some("REDline / RED R3D SDK")
         );
+    }
+
+    #[test]
+    fn marks_open_camera_raw_sources_as_native_candidates() {
+        for source in [
+            "/clip/A001.dng",
+            "/clip/A001.arw",
+            "/clip/A001.cr2",
+            "/clip/A001.cr3",
+            "/clip/A001.nef",
+            "/clip/A001.raf",
+            "/clip/A001.rw2",
+            "/clip/A001.orf",
+        ] {
+            let report = classify_media_source(source);
+
+            assert_eq!(report.format_family, "OPEN_CAMERA_RAW");
+            assert_eq!(report.decode_path_kind, "native_candidate");
+            assert!(!report.direct_analysis_supported);
+            assert!(!report.vendor_decoder_required);
+            assert!(report.proxy_required);
+            assert_eq!(
+                report.recommended_proxy_tool.as_deref(),
+                Some("LibRaw integration")
+            );
+            assert!(report
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("LibRaw")));
+        }
     }
 
     #[test]

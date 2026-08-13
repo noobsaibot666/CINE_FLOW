@@ -17,6 +17,15 @@ import {
 } from "../../types";
 import { exportProductionMatchSheetImage, exportProductionMatchSheetPdf } from "../../utils/ProductionExport";
 import { invokeGuarded } from "../../utils/tauri";
+import {
+  DECODER_BACKED_RAW_EXTENSIONS,
+  OPEN_CAMERA_RAW_EXTENSIONS,
+  PRODUCTION_CAMERA_SOURCE_EXTENSIONS,
+  PROXY_GUIDED_RAW_EXTENSIONS,
+  VENDOR_RAW_EXTENSIONS,
+  getLowercaseExtension,
+  hasExtension,
+} from "./mediaSourceExtensions";
 
 interface CameraMatchLabAppProps {
   project: ProductionProject;
@@ -580,8 +589,8 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
       multiple: false,
       title: `Select camera ${slot} test clip`,
       filters: [{
-        name: "Video",
-        extensions: ["mov", "mp4", "mxf", "mkv", "avi", "braw"],
+        name: "Camera Source",
+        extensions: [...PRODUCTION_CAMERA_SOURCE_EXTENSIONS],
       }],
     });
     if (typeof selected !== "string") return;
@@ -3015,11 +3024,15 @@ function getFileName(path: string) {
 }
 
 function isBrawClip(path: string) {
-  return path.toLowerCase().endsWith(".braw");
+  return hasExtension(path, DECODER_BACKED_RAW_EXTENSIONS);
 }
 
-function isProxyOnlyRawClip(_path: string) {
-  return false;
+function isProxyOnlyRawClip(path: string) {
+  return hasExtension(path, [
+    ...OPEN_CAMERA_RAW_EXTENSIONS,
+    ...VENDOR_RAW_EXTENSIONS,
+    ...PROXY_GUIDED_RAW_EXTENSIONS,
+  ]);
 }
 
 function isDecoderBackedRawClip(path: string) {
@@ -3028,7 +3041,12 @@ function isDecoderBackedRawClip(path: string) {
 
 function getProxyOnlyFormatBadge(path: string) {
   if (isBrawClip(path)) return "BRAW";
-  return "RAW";
+  const extension = getClipExtension(path);
+  if (extension === "r3d") return "R3D";
+  if (extension === "nev") return "N-RAW";
+  if (extension === "xocn") return "X-OCN";
+  if (extension === "crm" || extension === "rmf") return "CANON RAW";
+  return extension ? extension.toUpperCase() : "RAW";
 }
 
 function isProResCodec(codecName?: string | null) {
@@ -3037,8 +3055,7 @@ function isProResCodec(codecName?: string | null) {
 }
 
 function getClipExtension(path: string) {
-  const match = path.toLowerCase().match(/\.([a-z0-9]+)$/);
-  return match?.[1] ?? "";
+  return getLowercaseExtension(path);
 }
 
 function getClipFormatBadge(path: string, analysis?: CameraMatchAnalysisResult | null) {

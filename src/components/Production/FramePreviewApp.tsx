@@ -22,6 +22,7 @@ import { open, save } from '@tauri-apps/plugin-dialog';
 import { useFramePreview } from './framePreviewLogic';
 import { RatioType, FramePreviewMedia, RATIO_VALUES, INITIAL_TRANSFORM } from '../../types/framePreview';
 import { ProductionProject } from '../../types';
+import { FRAME_PREVIEW_SOURCE_EXTENSIONS } from './mediaSourceExtensions';
 import {
   buildFrameExportFilename,
   exportFrameToPath,
@@ -755,7 +756,7 @@ export const FramePreviewApp: React.FC<FramePreviewAppProps> = ({ project, onBac
       title: 'Select media for Frame Preview',
       filters: [{
         name: 'Media',
-        extensions: ['mov', 'mp4', 'mxf', 'mkv', 'jpg', 'jpeg', 'png', 'webp', 'tif', 'tiff', 'heic', 'heif', 'dng', 'cr2', 'cr3', 'nef', 'nrw', 'arw', 'srf', 'sr2', 'raf', 'rw2', 'orf', 'pef', 'srw', 'raw', 'rwl', 'iiq']
+        extensions: [...FRAME_PREVIEW_SOURCE_EXTENSIONS]
       }]
     });
 
