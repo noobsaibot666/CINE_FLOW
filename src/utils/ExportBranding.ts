@@ -1,5 +1,5 @@
 import type { jsPDF } from "jspdf";
-import iconPngUrl from "../assets/Icon_C.png";
+import iconPngUrl from "../assets/cineflow-app-icon.png";
 
 type WarningHandler = (message: string) => void;
 

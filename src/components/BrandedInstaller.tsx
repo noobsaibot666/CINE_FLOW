@@ -2,7 +2,7 @@ import React from 'react';
 import { motion } from 'framer-motion';
 import { Download, ArrowRight, Folder, Apple } from 'lucide-react';
 import dmgBackground from '../assets/dgm_bg.png';
-import appIcon from '../assets/Icon_C.png';
+import appIcon from '../assets/cineflow-app-icon.png';
 
 interface BrandedInstallerProps {
   onEnterSuite?: () => void;

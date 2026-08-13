@@ -60,7 +60,7 @@ const ShotList = lazy(() => import("./components/PreProduction/ShotList"));
 const BrandedInstaller = lazy(() => import("./components/BrandedInstaller").then(m => ({ default: m.BrandedInstaller })));
 import { TourGuide, TourStep } from "./components/TourGuide";
 import { exportPdf, exportImage, exportMosaicImage, exportMosaicPdf } from "./utils/ExportUtils";
-import appLogo from "./assets/Icon_C.png";
+import appLogo from "./assets/cineflow-app-icon.png";
 import { AppInfo, Clip, ClipWithThumbnails, JobInfo, ScanResult, RecentProject, ProductionProject, Phase, PhaseData } from "./types";
 import {
   LookbookSortMode,
