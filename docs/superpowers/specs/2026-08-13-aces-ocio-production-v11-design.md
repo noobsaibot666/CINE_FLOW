@@ -163,7 +163,7 @@ The UI must make trust visible:
 
 ## Documentation
 
-Add public Astro documentation for the V1.1 ACES/OCIO roadmap. Keep the implementation plan in `docs/superpowers/plans` and update it phase by phase during development.
+Keep active implementation planning in `docs/superpowers/plans`. Astro documentation is public product documentation and should only be updated after a phase creates an approved production feature.
 
 ## External References
 
@@ -177,4 +177,3 @@ Add public Astro documentation for the V1.1 ACES/OCIO roadmap. Keep the implemen
 - RED R3D SDK: https://www.reddigitalcinema.com/download/r3d-sdk
 - Canon Cinema RAW Development: https://app.ssw.imaging-saas.canon/app/en/crd.html
 - Sony Catalyst supported formats: https://helpguide.sony.net/di-app/cb/v1/en/Content/Supported_video_formats.htm
-

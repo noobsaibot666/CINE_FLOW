@@ -24,7 +24,7 @@
 - Modify: `src/components/Production/CameraMatchLabApp.tsx` to show decode path, source profile, ACES transform, and confidence.
 - Modify: `src/components/Production/MatchNormalizeApp.tsx` to consume saved Match Lab runs and emit source-backed recommendations.
 - Modify: `src/types.ts` for shared frontend/backend types.
-- Create: `docs/src/content/docs/product/v1-1-aces-ocio-roadmap.md` as the public Astro roadmap.
+- Modify: Astro docs only after a phase creates an approved production feature.
 - Keep updated: `docs/superpowers/specs/2026-08-13-aces-ocio-production-v11-design.md`.
 
 ## Phase 1: Capability Detection Foundation
@@ -365,22 +365,19 @@ git commit -m "Add production match confidence scoring"
 
 ## Phase 5: Documentation and Release Tracking
 
-### Task 9: Keep Astro Roadmap Updated
+### Task 9: Publish Approved Feature Documentation
 
 **Files:**
-- Modify: `docs/src/content/docs/product/v1-1-aces-ocio-roadmap.md`
-- Modify: `docs/src/content/docs/product/roadmap.md`
+- Modify: `docs/src/content/docs/product/roadmap.md` only after a phase is production-approved
+- Modify: the relevant user-guide or technical Astro page for the approved feature
 
-- [ ] **Step 1: Update phase status after each implementation phase**
+- [ ] **Step 1: Confirm production approval**
 
-Use these statuses only:
+Do not publish active development status in Astro. Publish only finalized user-facing behavior, such as:
 
 ```text
-Planned
-In progress
-Ready for test
-Complete
-Blocked
+Camera Match Lab now labels original, vendor-decoded, and proxy-based analysis paths.
+Match & Normalize now includes confidence and provenance in exported reports.
 ```
 
 - [ ] **Step 2: Verify docs**
@@ -392,13 +389,12 @@ Expected: Astro builds successfully.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add docs/src/content/docs/product/v1-1-aces-ocio-roadmap.md docs/src/content/docs/product/roadmap.md
-git commit -m "Update V1.1 ACES roadmap status"
+git add docs/src/content/docs/product/roadmap.md docs/src/content/docs/technical/media-processing.md docs/src/content/docs/user-guide/production.md
+git commit -m "Document approved production color workflow"
 ```
 
 ## Plan Self-Review
 
-- Spec coverage: capability detection, source profiles, ACES transform metadata, Match Lab provenance, Match & Normalize trust output, and Astro docs are represented.
+- Spec coverage: capability detection, source profiles, ACES transform metadata, Match Lab provenance, Match & Normalize trust output, and final approved Astro docs are represented.
 - Placeholder scan: no task depends on unspecified files or unnamed functionality.
 - Type consistency: source profile, capability report, transform report, and confidence fields are named consistently across tasks.
-
