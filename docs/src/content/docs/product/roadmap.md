@@ -16,6 +16,7 @@ CineFlow Suite 1.x focuses on local-first production workflows across macOS and 
 ## Near-Term Priorities
 
 - Harden media import and fallback handling across MP4, MOV, and BRAW workflows
+- Build the [V1.1 ACES/OCIO Production pipeline](./v1-1-aces-ocio-roadmap/) for Look Setup, Camera Match Lab, and Match & Normalize
 - Keep export branding consistent across PDF, image, CSV, and review handoff outputs
 - Improve Windows packaging and Microsoft Store submission readiness
 - Continue tightening App Store compliance, privacy documentation, and sandbox behavior
@@ -26,4 +27,3 @@ CineFlow Suite 1.x focuses on local-first production workflows across macOS and 
 - Richer match reports for DIT and color workflows
 - More structured editorial handoff formats
 - Better project templates for commercial, documentary, BTS, and social-first productions
-
