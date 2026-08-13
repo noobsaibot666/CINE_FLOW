@@ -20,6 +20,7 @@ mod production_calibration;
 pub mod production_color_pipeline;
 mod production_match_lab;
 pub mod production_media_capabilities;
+pub mod production_raw_ingest;
 mod review_core;
 mod scanner;
 mod thumbnail;
