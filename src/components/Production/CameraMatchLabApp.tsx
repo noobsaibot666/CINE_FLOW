@@ -1,5 +1,5 @@
 import React, { startTransition, useEffect, useMemo, useRef, useState } from "react";
-import { BarChart3, ChevronDown, HelpCircle, Download, FolderOpen, Gauge, ImageIcon, Maximize2, Palette, Pipette, RefreshCw, Trash2, Waves } from "lucide-react";
+import { AlertTriangle, BarChart3, ChevronDown, HelpCircle, Download, FolderOpen, Gauge, ImageIcon, Info, Maximize2, Palette, Pipette, RefreshCw, Trash2, Waves } from "lucide-react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import {
   CalibrationChartDetection,
@@ -109,6 +109,16 @@ type DecisionAction =
   | { kind: "lut"; label: string }
   | { kind: "signal"; label: string }
   | { kind: "export"; label: string };
+
+type SourceWorkflowTone = "good" | "info" | "warning";
+
+type SourceWorkflowDescriptor = {
+  tone: SourceWorkflowTone;
+  badge: string;
+  status: string;
+  body: string;
+  action?: "proxy";
+};
 
 export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
   const [clipsBySlot, setClipsBySlot] = useState<Record<string, string>>({});
@@ -641,8 +651,9 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
       delete next[slot];
       return next;
     });
-    if (isDecoderBackedRawClip(selected)) {
-      setSlotStatuses((prev) => ({ ...prev, [slot]: `${getProxyOnlyFormatBadge(selected)} detected · Proxy workflow ready` }));
+    if (isAnyRawCameraSource(selected)) {
+      const workflow = describeSourceWorkflow(selected);
+      setSlotStatuses((prev) => ({ ...prev, [slot]: `${workflow.badge} selected · ${workflow.status}` }));
     }
   };
 
@@ -1223,6 +1234,8 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
             </div>
           </div>
 
+          <SourceSupportStrip />
+
           <section className="matchLabGrid" style={gridStyle}>
             {SLOT_ORDER.map((slot) => {
               const clipPath = clipsBySlot[slot];
@@ -1253,6 +1266,9 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
               const signalPreview = signalPreviewPath ? signalPreviewByFramePath[signalPreviewPath] : undefined;
               const previewToneStyle = clipFormatBadgeStyle(clipPath || "", rawAnalysis);
               const signalOnly = Boolean(rawAnalysis) && !calibration?.chart_detected;
+              const sourceWorkflow = clipPath
+                ? describeSourceWorkflow(clipPath, capability, rawAnalysis, Boolean(analysisOverrideBySlot[slot]))
+                : null;
               const decisionSummary = analysis && rawAnalysis
                 ? buildDecisionSummary({
                   slot,
@@ -1332,11 +1348,14 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                       ) : null}
                     </div>
                     <div className="matchLabPathPrimary" style={fileMetaStyle} title={clipPath ? getFileName(clipPath) : "No clip selected"}>{clipPath ? getFileName(clipPath) : "No clip selected"}</div>
-                    <div className="matchLabPathSecondary" style={helperMetaStyle} title={clipPath || "One short test clip per camera."}>{clipPath || "One short test clip per camera."}</div>
+                    <div className="matchLabPathSecondary" style={helperMetaStyle} title={clipPath || "Import MOV, MP4, MXF, BRAW, R3D, X-OCN, Canon RAW, N-RAW, or still RAW."}>{clipPath || "Import MOV, MP4, MXF, BRAW, R3D, X-OCN, Canon RAW, N-RAW, or still RAW."}</div>
                     {analysisOverrideBySlot[slot] ? (
                       <div style={sourceMetaInlineStyle} title={analysisOverrideBySlot[slot]}>
                         Using proxy · {getFileName(analysisOverrideBySlot[slot])}
                       </div>
+                    ) : null}
+                    {sourceWorkflow ? (
+                      <SourceWorkflowNotice workflow={sourceWorkflow} onPickProxy={() => void pickExistingProxy(slot)} />
                     ) : null}
                     {clipPath ? (
                       <div style={capabilityPanelStyle}>
@@ -2694,6 +2713,61 @@ function MatchMethodBanner({
   );
 }
 
+function SourceSupportStrip() {
+  return (
+    <section className="production-source-support" style={sourceSupportStripStyle} aria-label="Supported camera sources">
+      <div style={sourceSupportIntroStyle}>
+        <Info size={15} style={{ flexShrink: 0 }} />
+        <div style={sourceSupportTextBlockStyle}>
+          <div style={sourceSupportTitleStyle}>Camera source import</div>
+          <div style={sourceSupportBodyStyle}>
+            Import camera clips and RAW sources here. Trusted analysis comes from original video, BRAW decoder paths, or a clean MP4/MOV proxy when the RAW codec is still behind LibRaw or a vendor tool.
+          </div>
+        </div>
+      </div>
+      <div style={sourceSupportGroupsStyle}>
+        <SourceSupportGroup label="Direct video" value="MOV, MP4, MXF, MKV, AVI" tone="good" />
+        <SourceSupportGroup label="Decoder-backed" value="BRAW" tone="info" />
+        <SourceSupportGroup label="Native RAW candidate" value="DNG, ARW, CR2/CR3, NEF, RAF, RW2, ORF, IIQ" tone="warning" />
+        <SourceSupportGroup label="Proxy/vendor path" value="R3D, N-RAW, X-OCN, Canon RAW" tone="warning" />
+      </div>
+    </section>
+  );
+}
+
+function SourceSupportGroup({ label, value, tone }: { label: string; value: string; tone: SourceWorkflowTone }) {
+  return (
+    <div style={{ ...sourceSupportGroupStyle, ...sourceWorkflowToneStyle(tone) }}>
+      <div style={sourceSupportGroupLabelStyle}>{label}</div>
+      <div style={sourceSupportGroupValueStyle}>{value}</div>
+    </div>
+  );
+}
+
+function SourceWorkflowNotice({
+  workflow,
+  onPickProxy,
+}: {
+  workflow: SourceWorkflowDescriptor;
+  onPickProxy: () => void;
+}) {
+  const Icon = workflow.tone === "warning" ? AlertTriangle : Info;
+  return (
+    <div style={{ ...sourceWorkflowNoticeStyle, ...sourceWorkflowToneStyle(workflow.tone) }}>
+      <div style={sourceWorkflowHeaderStyle}>
+        <span style={sourceWorkflowBadgeStyle}><Icon size={12} /> {workflow.badge}</span>
+        <span style={sourceWorkflowStatusStyle}>{workflow.status}</span>
+      </div>
+      <div style={sourceWorkflowBodyStyle}>{workflow.body}</div>
+      {workflow.action === "proxy" ? (
+        <button type="button" className="btn btn-ghost btn-sm" style={sourceWorkflowActionStyle} onClick={onPickProxy}>
+          <FolderOpen size={14} /> Attach MP4/MOV proxy
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
 function EditableCalibrationOverlay({
   cropState,
   corners,
@@ -3027,6 +3101,10 @@ function isBrawClip(path: string) {
   return hasExtension(path, DECODER_BACKED_RAW_EXTENSIONS);
 }
 
+function isAnyRawCameraSource(path: string) {
+  return isBrawClip(path) || isProxyOnlyRawClip(path);
+}
+
 function isProxyOnlyRawClip(path: string) {
   return hasExtension(path, [
     ...OPEN_CAMERA_RAW_EXTENSIONS,
@@ -3047,6 +3125,69 @@ function getProxyOnlyFormatBadge(path: string) {
   if (extension === "xocn") return "X-OCN";
   if (extension === "crm" || extension === "rmf") return "CANON RAW";
   return extension ? extension.toUpperCase() : "RAW";
+}
+
+function describeSourceWorkflow(
+  path: string,
+  report?: ProductionMediaCapabilityReport,
+  analysis?: CameraMatchAnalysisResult | null,
+  proxyAttached = false,
+): SourceWorkflowDescriptor {
+  if (proxyAttached || analysis?.source_kind === "proxy") {
+    return {
+      tone: "good",
+      badge: "Proxy attached",
+      status: "Analysis can run",
+      body: "This slot is using the selected proxy for frame extraction, scopes, chart detection, and match calculations. Keep the proxy generated from the same camera source and color pipeline.",
+    };
+  }
+
+  if (isBrawClip(path)) {
+    return {
+      tone: report?.direct_analysis_supported ? "good" : "info",
+      badge: "BRAW",
+      status: report?.direct_analysis_supported ? "Decoder path available" : "Decoder workflow ready",
+      body: "Blackmagic RAW is accepted as a camera source. If direct frame extraction is unavailable on this machine, attach a clean MP4/MOV proxy from the same clip.",
+      action: report?.direct_analysis_supported ? undefined : "proxy",
+    };
+  }
+
+  if (hasExtension(path, OPEN_CAMERA_RAW_EXTENSIONS)) {
+    return {
+      tone: "warning",
+      badge: getProxyOnlyFormatBadge(path),
+      status: "Native RAW candidate",
+      body: "This RAW file is accepted for the ingest workflow, but trusted direct analysis waits for the LibRaw and OCIO path. Attach a camera-matched MP4/MOV proxy to analyze it today.",
+      action: "proxy",
+    };
+  }
+
+  if (hasExtension(path, VENDOR_RAW_EXTENSIONS)) {
+    return {
+      tone: "warning",
+      badge: getProxyOnlyFormatBadge(path),
+      status: "Vendor decoder required",
+      body: "This cinema RAW source is recognized, but reliable frame data depends on a vendor SDK/toolchain. Use an operator-approved MP4/MOV proxy until that adapter is available.",
+      action: "proxy",
+    };
+  }
+
+  if (hasExtension(path, PROXY_GUIDED_RAW_EXTENSIONS)) {
+    return {
+      tone: "warning",
+      badge: getProxyOnlyFormatBadge(path),
+      status: "Proxy-guided analysis",
+      body: "This proprietary RAW format is trackable in the project, but the app should analyze a proxy exported from the same source, with the intended log or ACES transform preserved.",
+      action: "proxy",
+    };
+  }
+
+  return {
+    tone: report?.warnings.length ? "info" : "good",
+    badge: getClipFormatBadge(path, analysis),
+    status: report?.direct_analysis_supported ? "Direct analysis" : "Ready to analyze",
+    body: "This source can be used directly for frame extraction, scopes, chart detection, match sheet generation, and normalize decisions.",
+  };
 }
 
 function isProResCodec(codecName?: string | null) {
@@ -3094,6 +3235,7 @@ function formatCapabilitySourceLabel(report?: ProductionMediaCapabilityReport) {
   if (!report) return "Checking...";
   if (report.decode_path_kind === "direct_original") return "Original";
   if (report.decode_path_kind === "vendor_decoded") return "Vendor decode";
+  if (report.decode_path_kind === "native_candidate") return "Native candidate";
   if (report.decode_path_kind === "operator_proxy") return "Operator proxy";
   if (report.proxy_required) return "Proxy required";
   return report.decode_path_kind.replace(/_/g, " ");
@@ -3382,6 +3524,12 @@ function matchMethodToneStyle(tone: "critical" | "warning" | "info" | "good"): R
   return { color: "#d6ccff", background: "rgba(165,146,255,0.12)", border: "1px solid rgba(165,146,255,0.22)" };
 }
 
+function sourceWorkflowToneStyle(tone: SourceWorkflowTone): React.CSSProperties {
+  if (tone === "good") return { color: "rgba(134,239,172,0.96)", background: "rgba(34,197,94,0.07)", border: "1px solid rgba(34,197,94,0.18)" };
+  if (tone === "warning") return { color: "rgba(253,224,71,0.96)", background: "rgba(245,158,11,0.075)", border: "1px solid rgba(245,158,11,0.2)" };
+  return { color: "rgba(186,230,253,0.96)", background: "rgba(56,189,248,0.065)", border: "1px solid rgba(56,189,248,0.18)" };
+}
+
 function matchActionSeverityTone(tone: MatchActionCard["tone"]): React.CSSProperties {
   if (tone === "critical") return { color: "rgba(248,113,113,0.96)", borderColor: "rgba(239,68,68,0.28)" };
   if (tone === "warning") return { color: "rgba(251,191,36,0.96)", borderColor: "rgba(245,158,11,0.24)" };
@@ -3439,6 +3587,15 @@ const modalBodyStyle: React.CSSProperties = { color: "var(--text-secondary)", li
 const modalMetaStyle: React.CSSProperties = { marginTop: 10, color: "var(--text-muted)", fontSize: "0.82rem" };
 const modalActionsStyle: React.CSSProperties = { display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 18 };
 const subtleStyle: React.CSSProperties = { margin: 0, color: "var(--text-muted)", maxWidth: 760, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", textAlign: "left" };
+const sourceSupportStripStyle: React.CSSProperties = { display: "grid", gridTemplateColumns: "minmax(240px, 1.1fr) minmax(0, 1.9fr)", gap: 12, marginBottom: 14, padding: 14, borderRadius: 16, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.025)", minWidth: 0 };
+const sourceSupportIntroStyle: React.CSSProperties = { display: "flex", alignItems: "flex-start", gap: 10, minWidth: 0, color: "rgba(216,212,223,0.92)" };
+const sourceSupportTextBlockStyle: React.CSSProperties = { display: "grid", gap: 4, minWidth: 0 };
+const sourceSupportTitleStyle: React.CSSProperties = { color: "var(--text-primary)", fontSize: "0.82rem", fontWeight: 800, lineHeight: 1.2 };
+const sourceSupportBodyStyle: React.CSSProperties = { color: "var(--text-secondary)", fontSize: "0.74rem", lineHeight: 1.45 };
+const sourceSupportGroupsStyle: React.CSSProperties = { display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 8, minWidth: 0 };
+const sourceSupportGroupStyle: React.CSSProperties = { display: "grid", alignContent: "start", gap: 4, minWidth: 0, padding: "9px 10px", borderRadius: 12, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.02)" };
+const sourceSupportGroupLabelStyle: React.CSSProperties = { color: "var(--text-muted)", fontSize: "0.58rem", fontWeight: 800, letterSpacing: "0.08em", lineHeight: 1.15, textTransform: "uppercase" };
+const sourceSupportGroupValueStyle: React.CSSProperties = { color: "var(--text-primary)", fontSize: "0.72rem", fontWeight: 800, lineHeight: 1.3, whiteSpace: "normal", wordBreak: "break-word" };
 const errorCardStyle: React.CSSProperties = { marginBottom: 16, padding: "12px 14px", borderRadius: 14, border: "1px solid rgba(239,68,68,0.28)", background: "rgba(239,68,68,0.08)", color: "#fecaca" };
 const errorSupportTextStyle: React.CSSProperties = { marginTop: 6, color: "rgba(254,202,202,0.88)", fontSize: "0.78rem" };
 const errorActionsStyle: React.CSSProperties = { marginTop: 10 };
@@ -3467,6 +3624,12 @@ const sourceMetaRowStyle: React.CSSProperties = { marginTop: 4, display: "flex",
 const sourceBadgeStyle: React.CSSProperties = { display: "inline-flex", alignItems: "center", padding: "4px 8px", borderRadius: 999, background: "rgba(165,146,255,0.12)", color: "rgba(214,204,255,0.96)", fontSize: "0.68rem", fontWeight: 800, letterSpacing: "0.08em", border: "1px solid rgba(165,146,255,0.18)" };
 const sourceMetaTextStyle: React.CSSProperties = { color: "var(--text-secondary)", fontSize: "0.74rem", fontWeight: 700 };
 const sourceMetaInlineStyle: React.CSSProperties = { marginTop: 10, color: "var(--text-secondary)", fontSize: "0.74rem", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" };
+const sourceWorkflowNoticeStyle: React.CSSProperties = { display: "grid", gap: 7, marginTop: 12, padding: "10px 11px", borderRadius: 12, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.02)", minWidth: 0 };
+const sourceWorkflowHeaderStyle: React.CSSProperties = { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, minWidth: 0 };
+const sourceWorkflowBadgeStyle: React.CSSProperties = { display: "inline-flex", alignItems: "center", gap: 5, padding: "4px 7px", borderRadius: 999, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.04)", color: "var(--text-primary)", fontSize: "0.64rem", fontWeight: 900, letterSpacing: "0.06em", whiteSpace: "nowrap" };
+const sourceWorkflowStatusStyle: React.CSSProperties = { color: "var(--text-primary)", fontSize: "0.72rem", fontWeight: 800, textAlign: "right", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
+const sourceWorkflowBodyStyle: React.CSSProperties = { color: "var(--text-secondary)", fontSize: "0.72rem", lineHeight: 1.42 };
+const sourceWorkflowActionStyle: React.CSSProperties = { justifySelf: "start", marginTop: 1, border: "1px solid rgba(255,255,255,0.1)", background: "rgba(255,255,255,0.035)" };
 const capabilityPanelStyle: React.CSSProperties = { marginTop: 12, padding: "10px 11px", borderRadius: 12, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.02)", display: "grid", gap: 7 };
 const capabilityRowStyle: React.CSSProperties = { display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12, minWidth: 0 };
 const capabilityLabelStyle: React.CSSProperties = { color: "var(--text-muted)", fontSize: "0.62rem", fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", whiteSpace: "nowrap" };
