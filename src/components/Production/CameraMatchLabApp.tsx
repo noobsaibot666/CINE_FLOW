@@ -3252,11 +3252,19 @@ function formatTransformStatus(status?: string | null) {
 
 function formatOcioConfigStatus(status?: ProductionOcioConfigStatus) {
   if (!status) return "Checking OCIO";
-  if (status.config_status === "ocio_ready") return "OCIO ready";
+  if (status.config_status === "ocio_ready") return `OCIO ready · ${formatOcioConfigSource(status.config_source)}`;
   if (status.config_status === "metadata_only") return "Metadata only";
   if (status.config_status === "config_missing") return "Config missing";
   if (status.config_status === "unsupported_transform") return "Unsupported transform";
   return status.config_status.replace(/_/g, " ");
+}
+
+function formatOcioConfigSource(source?: string | null) {
+  if (source === "environment") return "Environment";
+  if (source === "bundled") return "Bundled";
+  if (source === "metadata") return "Metadata";
+  if (!source) return "Unknown";
+  return source.replace(/_/g, " ");
 }
 
 function ocioStatusToneStyle(status?: string): React.CSSProperties {

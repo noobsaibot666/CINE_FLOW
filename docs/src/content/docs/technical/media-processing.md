@@ -31,6 +31,8 @@ Saved results can also include source profile, analysis color space, transform s
 
 Camera Match Lab records the intended ACES analysis path for each source profile. The current implementation reports OCIO readiness and transform provenance, but it does not claim native OCIO pixel processing unless a transform execution report marks the transform as applied.
 
+OCIO config discovery uses the explicit `OCIO` environment path first. If `OCIO` is not set, CineFlow checks bundled app resources in this order: `ocio/config.ocio`, `aces/config.ocio`, then `config.ocio`. A broken explicit `OCIO` path is reported as `config_missing`; it does not silently fall back to a bundled config.
+
 Current transform states include:
 
 - `transform_applied`: OCIO pixel transform was executed and metrics can be trusted.

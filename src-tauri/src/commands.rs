@@ -5539,10 +5539,12 @@ async fn camera_match_analyze_clip_internal(
         let representative_frame_path = per_frame[representative_index].frame_path.clone();
         let frame_paths = per_frame.iter().map(|item| item.frame_path.clone()).collect();
         let requested_analysis_color_space = analysis_color_space.unwrap_or("ACEScct");
+        let ocio_resource_dir = app.path().resource_dir().ok();
         let ocio_execution_report = source_profile_id.map(|profile_id| {
-            crate::production_ocio::build_ocio_transform_execution_report_from_environment(
+            crate::production_ocio::build_ocio_transform_execution_report_from_environment_and_resources(
                 profile_id,
                 requested_analysis_color_space,
+                ocio_resource_dir.as_deref(),
             )
         });
         if let Some(report) = &ocio_execution_report {
@@ -7310,10 +7312,13 @@ pub async fn production_get_raw_ingest_report(
 pub async fn production_get_ocio_config_status(
     source_profile_id: String,
     analysis_color_space: String,
+    app: AppHandle,
 ) -> Result<crate::production_ocio::ProductionOcioConfigStatus, String> {
-    Ok(crate::production_ocio::build_ocio_config_status_from_environment(
+    let resource_dir = app.path().resource_dir().ok();
+    Ok(crate::production_ocio::build_ocio_config_status_from_environment_and_resources(
         &source_profile_id,
         &analysis_color_space,
+        resource_dir.as_deref(),
     ))
 }
 

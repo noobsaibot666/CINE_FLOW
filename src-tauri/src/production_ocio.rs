@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProductionOcioConfigStatus {
@@ -31,9 +31,29 @@ pub struct ProductionOcioTransformExecutionReport {
     pub warnings: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProductionOcioConfigDiscovery {
+    config_source: String,
+    config_path: Option<String>,
+}
+
 pub fn build_ocio_config_status(
     source_profile_id: &str,
     analysis_color_space: &str,
+    configured_path: Option<&str>,
+) -> ProductionOcioConfigStatus {
+    build_ocio_config_status_with_source(
+        source_profile_id,
+        analysis_color_space,
+        "environment",
+        configured_path,
+    )
+}
+
+fn build_ocio_config_status_with_source(
+    source_profile_id: &str,
+    analysis_color_space: &str,
+    config_source: &str,
     configured_path: Option<&str>,
 ) -> ProductionOcioConfigStatus {
     let transform_report =
@@ -79,7 +99,7 @@ pub fn build_ocio_config_status(
             source_profile_id: source_profile_id.to_string(),
             analysis_color_space: analysis_color_space.to_string(),
             transform_engine: "OpenColorIO/ACES".to_string(),
-            config_source: "environment".to_string(),
+            config_source: config_source.to_string(),
             config_path: Some(path.to_string()),
             config_status: "config_missing".to_string(),
             transform_status: "config_missing".to_string(),
@@ -94,7 +114,7 @@ pub fn build_ocio_config_status(
         source_profile_id: source_profile_id.to_string(),
         analysis_color_space: analysis_color_space.to_string(),
         transform_engine: "OpenColorIO/ACES".to_string(),
-        config_source: "environment".to_string(),
+        config_source: config_source.to_string(),
         config_path: Some(path.to_string()),
         config_status: "ocio_ready".to_string(),
         transform_status: transform_report.transform_status,
@@ -103,6 +123,55 @@ pub fn build_ocio_config_status(
         compatible: true,
         warnings: Vec::new(),
     }
+}
+
+fn discover_ocio_config_path(
+    environment_path: Option<&str>,
+    resource_dir: Option<&Path>,
+) -> ProductionOcioConfigDiscovery {
+    if let Some(path) = environment_path.filter(|value| !value.trim().is_empty()) {
+        return ProductionOcioConfigDiscovery {
+            config_source: "environment".to_string(),
+            config_path: Some(path.to_string()),
+        };
+    }
+
+    if let Some(path) = resource_dir.and_then(find_bundled_ocio_config) {
+        return ProductionOcioConfigDiscovery {
+            config_source: "bundled".to_string(),
+            config_path: Some(path.to_string_lossy().to_string()),
+        };
+    }
+
+    ProductionOcioConfigDiscovery {
+        config_source: "metadata".to_string(),
+        config_path: None,
+    }
+}
+
+fn find_bundled_ocio_config(resource_dir: &Path) -> Option<PathBuf> {
+    [
+        resource_dir.join("ocio").join("config.ocio"),
+        resource_dir.join("aces").join("config.ocio"),
+        resource_dir.join("config.ocio"),
+    ]
+    .into_iter()
+    .find(|path| path.is_file())
+}
+
+pub fn build_ocio_config_status_from_discovery(
+    source_profile_id: &str,
+    analysis_color_space: &str,
+    environment_path: Option<&str>,
+    resource_dir: Option<&Path>,
+) -> ProductionOcioConfigStatus {
+    let discovery = discover_ocio_config_path(environment_path, resource_dir);
+    build_ocio_config_status_with_source(
+        source_profile_id,
+        analysis_color_space,
+        &discovery.config_source,
+        discovery.config_path.as_deref(),
+    )
 }
 
 pub fn build_ocio_config_status_from_environment(
@@ -117,6 +186,20 @@ pub fn build_ocio_config_status_from_environment(
     )
 }
 
+pub fn build_ocio_config_status_from_environment_and_resources(
+    source_profile_id: &str,
+    analysis_color_space: &str,
+    resource_dir: Option<&Path>,
+) -> ProductionOcioConfigStatus {
+    let configured_path = std::env::var("OCIO").ok();
+    build_ocio_config_status_from_discovery(
+        source_profile_id,
+        analysis_color_space,
+        configured_path.as_deref(),
+        resource_dir,
+    )
+}
+
 pub fn build_ocio_transform_execution_report(
     source_profile_id: &str,
     analysis_color_space: &str,
@@ -124,6 +207,27 @@ pub fn build_ocio_transform_execution_report(
 ) -> ProductionOcioTransformExecutionReport {
     let config_status =
         build_ocio_config_status(source_profile_id, analysis_color_space, configured_path);
+    build_ocio_transform_execution_report_from_config_status(config_status)
+}
+
+pub fn build_ocio_transform_execution_report_from_discovery(
+    source_profile_id: &str,
+    analysis_color_space: &str,
+    environment_path: Option<&str>,
+    resource_dir: Option<&Path>,
+) -> ProductionOcioTransformExecutionReport {
+    let config_status = build_ocio_config_status_from_discovery(
+        source_profile_id,
+        analysis_color_space,
+        environment_path,
+        resource_dir,
+    );
+    build_ocio_transform_execution_report_from_config_status(config_status)
+}
+
+fn build_ocio_transform_execution_report_from_config_status(
+    config_status: ProductionOcioConfigStatus,
+) -> ProductionOcioTransformExecutionReport {
     let processor_available = false;
     let mut warnings = config_status.warnings.clone();
     let execution_status = match config_status.config_status.as_str() {
@@ -169,9 +273,27 @@ pub fn build_ocio_transform_execution_report_from_environment(
     )
 }
 
+pub fn build_ocio_transform_execution_report_from_environment_and_resources(
+    source_profile_id: &str,
+    analysis_color_space: &str,
+    resource_dir: Option<&Path>,
+) -> ProductionOcioTransformExecutionReport {
+    let configured_path = std::env::var("OCIO").ok();
+    build_ocio_transform_execution_report_from_discovery(
+        source_profile_id,
+        analysis_color_space,
+        configured_path.as_deref(),
+        resource_dir,
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{build_ocio_config_status, build_ocio_transform_execution_report};
+    use super::{
+        build_ocio_config_status, build_ocio_config_status_from_discovery,
+        build_ocio_transform_execution_report, build_ocio_transform_execution_report_from_discovery,
+    };
+    use std::fs;
 
     #[test]
     fn reports_metadata_only_when_no_config_is_configured() {
@@ -207,6 +329,112 @@ mod tests {
         assert_eq!(report.config_status, "unsupported_transform");
         assert_eq!(report.transform_status, "unsupported_source_profile");
         assert!(!report.compatible);
+    }
+
+    #[test]
+    fn discovers_environment_ocio_config_before_bundled_config() {
+        let root = std::env::temp_dir().join(format!(
+            "cineflow_ocio_env_{}",
+            std::process::id()
+        ));
+        let bundled_dir = root.join("Resources").join("ocio");
+        fs::create_dir_all(&bundled_dir).expect("create bundled ocio dir");
+        let bundled_config = bundled_dir.join("config.ocio");
+        let env_config = root.join("env_config.ocio");
+        fs::write(&bundled_config, "ocio_profile_version: 2").expect("write bundled config");
+        fs::write(&env_config, "ocio_profile_version: 2").expect("write env config");
+
+        let report = build_ocio_config_status_from_discovery(
+            "SONY_SLOG3_SGAMUT3_CINE",
+            "ACEScct",
+            Some(env_config.to_string_lossy().as_ref()),
+            Some(&root.join("Resources")),
+        );
+
+        assert_eq!(report.config_source, "environment");
+        assert_eq!(report.config_status, "ocio_ready");
+        assert_eq!(report.config_path.as_deref(), Some(env_config.to_string_lossy().as_ref()));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn discovers_bundled_ocio_config_when_environment_is_empty() {
+        let root = std::env::temp_dir().join(format!(
+            "cineflow_ocio_bundled_{}",
+            std::process::id()
+        ));
+        let bundled_dir = root.join("Resources").join("ocio");
+        fs::create_dir_all(&bundled_dir).expect("create bundled ocio dir");
+        let bundled_config = bundled_dir.join("config.ocio");
+        fs::write(&bundled_config, "ocio_profile_version: 2").expect("write bundled config");
+
+        let report = build_ocio_config_status_from_discovery(
+            "SONY_SLOG3_SGAMUT3_CINE",
+            "ACEScct",
+            None,
+            Some(&root.join("Resources")),
+        );
+
+        assert_eq!(report.config_source, "bundled");
+        assert_eq!(report.config_status, "ocio_ready");
+        assert_eq!(
+            report.config_path.as_deref(),
+            Some(bundled_config.to_string_lossy().as_ref())
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn explicit_missing_environment_config_does_not_fall_back_to_bundled() {
+        let root = std::env::temp_dir().join(format!(
+            "cineflow_ocio_missing_env_{}",
+            std::process::id()
+        ));
+        let bundled_dir = root.join("Resources").join("ocio");
+        fs::create_dir_all(&bundled_dir).expect("create bundled ocio dir");
+        fs::write(bundled_dir.join("config.ocio"), "ocio_profile_version: 2")
+            .expect("write bundled config");
+        let missing_env_config = root.join("missing_config.ocio");
+
+        let report = build_ocio_config_status_from_discovery(
+            "SONY_SLOG3_SGAMUT3_CINE",
+            "ACEScct",
+            Some(missing_env_config.to_string_lossy().as_ref()),
+            Some(&root.join("Resources")),
+        );
+
+        assert_eq!(report.config_source, "environment");
+        assert_eq!(report.config_status, "config_missing");
+        assert_eq!(
+            report.config_path.as_deref(),
+            Some(missing_env_config.to_string_lossy().as_ref())
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn bundled_ready_config_reports_processor_not_linked_until_native_ocio_is_available() {
+        let root = std::env::temp_dir().join(format!(
+            "cineflow_ocio_transform_bundled_{}",
+            std::process::id()
+        ));
+        let bundled_dir = root.join("Resources").join("ocio");
+        fs::create_dir_all(&bundled_dir).expect("create bundled ocio dir");
+        fs::write(bundled_dir.join("config.ocio"), "ocio_profile_version: 2")
+            .expect("write bundled config");
+
+        let report = build_ocio_transform_execution_report_from_discovery(
+            "SONY_SLOG3_SGAMUT3_CINE",
+            "ACEScct",
+            None,
+            Some(&root.join("Resources")),
+        );
+
+        assert_eq!(report.config_source, "bundled");
+        assert_eq!(report.config_status, "ocio_ready");
+        assert_eq!(report.execution_status, "processor_not_linked");
+        assert!(!report.metrics_trusted);
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

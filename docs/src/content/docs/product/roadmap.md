@@ -17,6 +17,7 @@ CineFlow Suite 1.x focuses on local-first production workflows across macOS and 
 
 - Camera Match Lab labels original, vendor-decoded, operator-proxy, and proxy-required analysis paths.
 - Camera Match Lab records source profile, ACES analysis intent, OCIO config status, transform status, proxy validation, metric trust, decode path, capability report data, and confidence.
+- Camera Match Lab discovers OCIO configs from the `OCIO` environment path or bundled app resources and reports the source in the UI.
 - Camera Match Lab validates proxy-backed RAW analysis using duration/frame-count estimates when available, resolution, codec, source pairing, and color pipeline notes.
 - Match & Normalize can use saved Match Lab runs to build measured normalization steps and exports with confidence, trust labels, provenance reasons, and evidence.
 

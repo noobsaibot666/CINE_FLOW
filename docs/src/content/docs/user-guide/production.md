@@ -21,7 +21,7 @@ Imports test clips from multiple cameras, inspects representative frames, compar
 
 Each selected camera shows its analysis path, source profile state, ACES path status, confidence, and warnings. Analysis paths distinguish original media, vendor-decoded sources, operator proxies, and sources that require a proxy.
 
-The color pipeline panel lets the operator choose the source profile used for the ACES analysis intent. OCIO status is shown as ready, metadata only, config missing, unsupported transform, or processor not linked. If the app cannot confirm an executed OCIO transform, the metrics remain provisional.
+The color pipeline panel lets the operator choose the source profile used for the ACES analysis intent. OCIO status is shown as ready, metadata only, config missing, unsupported transform, or processor not linked. When a config is ready, the panel shows whether it came from the `OCIO` environment path or bundled app resources. If the app cannot confirm an executed OCIO transform, the metrics remain provisional.
 
 RAW sources that require a proxy can use generated BRAW proxies or operator-selected MP4/MOV proxies. When a proxy is used, Camera Match Lab records validation details such as source/proxy pairing, duration and frame-count estimates when available, proxy codec, proxy resolution, and color pipeline note.
 

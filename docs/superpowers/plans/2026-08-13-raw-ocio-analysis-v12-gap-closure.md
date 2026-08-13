@@ -183,6 +183,24 @@ git commit -m "Carry Match Lab color transform intent"
 - [x] Separate implemented behavior from planned roadmap.
 - [x] Commit with `git commit -m "Document approved RAW OCIO workflow"`.
 
+## Phase 10: OCIO Config Discovery
+
+### Task 8: Discover Environment and Bundled OCIO Configs
+
+**Files:**
+- Modify: `src-tauri/src/production_ocio.rs`
+- Modify: `src-tauri/src/commands.rs`
+- Modify: `src/components/Production/CameraMatchLabApp.tsx`
+- Modify: `docs/src/content/docs/technical/media-processing.md`
+- Modify: `docs/src/content/docs/user-guide/production.md`
+
+- [x] Add OCIO discovery that uses the explicit `OCIO` environment path first.
+- [x] Add bundled resource discovery for `ocio/config.ocio`, `aces/config.ocio`, and `config.ocio`.
+- [x] Keep broken explicit `OCIO` paths visible as `config_missing` instead of silently falling back.
+- [x] Use discovered configs in Match Lab analysis and the OCIO readiness command.
+- [x] Show whether a ready config came from the environment or bundled resources.
+- [x] Commit with `git commit -m "Discover bundled OCIO configs"`.
+
 ## Self-Review
 
 - Spec coverage: Covers transform intent, OCIO readiness, LibRaw decode, OCIO execution, proxy validation, Match & Normalize trust, and approved Astro docs.
