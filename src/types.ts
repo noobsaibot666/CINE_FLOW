@@ -765,6 +765,17 @@ export interface CameraMatchResult {
     generated_at: string;
 }
 
+export interface ProductionMediaCapabilityReport {
+    source_path: string;
+    format_family: string;
+    decode_path_kind: string;
+    direct_analysis_supported: boolean;
+    vendor_decoder_required: boolean;
+    proxy_required: boolean;
+    recommended_proxy_tool?: string | null;
+    warnings: string[];
+}
+
 export interface CameraProfile {
     brand: string;
     model: string;

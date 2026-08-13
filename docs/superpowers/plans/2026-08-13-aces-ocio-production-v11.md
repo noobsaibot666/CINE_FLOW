@@ -218,15 +218,15 @@ git commit -m "Add ACES transform metadata registry"
 - Modify: `src/types.ts`
 - Modify: `src/components/Production/CameraMatchLabApp.tsx`
 
-- [ ] **Step 1: Add command contract**
+- [x] **Step 1: Add command contract**
 
 Create a Tauri command named `production_get_media_capability_report` that returns the backend report for a source path.
 
-- [ ] **Step 2: Add frontend type**
+- [x] **Step 2: Add frontend type**
 
 Add `ProductionMediaCapabilityReport` to `src/types.ts` with fields matching Rust serialization.
 
-- [ ] **Step 3: Show capability state per slot**
+- [x] **Step 3: Show capability state per slot**
 
 For each selected slot, show:
 
@@ -237,13 +237,13 @@ ACES path: source profile -> ACEScct
 Confidence: high / medium / low
 ```
 
-- [ ] **Step 4: Verify**
+- [x] **Step 4: Verify**
 
 Run: `npm run lint`
 
 Expected: no TypeScript errors.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src-tauri/src/commands.rs src/types.ts src/components/Production/CameraMatchLabApp.tsx

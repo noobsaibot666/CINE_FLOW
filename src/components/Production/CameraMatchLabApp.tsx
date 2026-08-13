@@ -10,6 +10,7 @@ import {
   CameraMatchDelta,
   CameraMatchMetrics,
   CameraMatchSuggestionSet,
+  ProductionMediaCapabilityReport,
   ProductionMatchLabRun,
   ProductionMatchLabRunSummary,
   ProductionProject,
@@ -104,6 +105,7 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
   const [clipsBySlot, setClipsBySlot] = useState<Record<string, string>>({});
   const [analysisOverrideBySlot, setAnalysisOverrideBySlot] = useState<Record<string, string>>({});
   const [analysisBySlot, setAnalysisBySlot] = useState<Record<string, CameraMatchAnalysisResult>>({});
+  const [capabilityBySlot, setCapabilityBySlot] = useState<Record<string, ProductionMediaCapabilityReport>>({});
   const [frameDataUrls, setFrameDataUrls] = useState<Record<string, string>>({});
   const [frameWarnings, setFrameWarnings] = useState<Record<string, string>>({});
   const [slotErrors, setSlotErrors] = useState<Record<string, string>>({});
@@ -245,6 +247,47 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
     () => SLOT_ORDER.filter((slot) => Boolean(clipsBySlot[slot])),
     [clipsBySlot],
   );
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadCapabilityReports = async () => {
+      const entries = Object.entries(clipsBySlot).filter(([, sourcePath]) => Boolean(sourcePath));
+      if (entries.length === 0) {
+        setCapabilityBySlot({});
+        return;
+      }
+
+      const nextReports: Record<string, ProductionMediaCapabilityReport> = {};
+      await Promise.all(entries.map(async ([slot, sourcePath]) => {
+        try {
+          nextReports[slot] = await invokeGuarded<ProductionMediaCapabilityReport>(
+            "production_get_media_capability_report",
+            { sourcePath },
+          );
+        } catch {
+          nextReports[slot] = {
+            source_path: sourcePath,
+            format_family: "UNKNOWN",
+            decode_path_kind: "unsupported_original",
+            direct_analysis_supported: false,
+            vendor_decoder_required: false,
+            proxy_required: true,
+            recommended_proxy_tool: null,
+            warnings: ["Capability report unavailable. Attach a supported proxy before relying on this analysis."],
+          };
+        }
+      }));
+
+      if (!cancelled) {
+        startTransition(() => setCapabilityBySlot(nextReports));
+      }
+    };
+
+    void loadCapabilityReports();
+    return () => {
+      cancelled = true;
+    };
+  }, [clipsBySlot]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1174,6 +1217,7 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
           <section className="matchLabGrid" style={gridStyle}>
             {SLOT_ORDER.map((slot) => {
               const clipPath = clipsBySlot[slot];
+              const capability = capabilityBySlot[slot];
               const analysis = matchResult.analyses.find((item) => item.slot === slot);
               const rawAnalysis = analysisBySlot[slot];
               const representativeFrameUrl = rawAnalysis ? frameDataUrls[rawAnalysis.representative_frame_path] : "";
@@ -1283,6 +1327,31 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                     {analysisOverrideBySlot[slot] ? (
                       <div style={sourceMetaInlineStyle} title={analysisOverrideBySlot[slot]}>
                         Using proxy · {getFileName(analysisOverrideBySlot[slot])}
+                      </div>
+                    ) : null}
+                    {clipPath ? (
+                      <div style={capabilityPanelStyle}>
+                        <div style={capabilityRowStyle}>
+                          <span style={capabilityLabelStyle}>Analysis source</span>
+                          <span style={capabilityValueStyle}>{formatCapabilitySourceLabel(capability)}</span>
+                        </div>
+                        <div style={capabilityRowStyle}>
+                          <span style={capabilityLabelStyle}>Source profile</span>
+                          <span style={capabilityValueStyle}>{rawAnalysis ? "Measured signal" : "Manual / pending"}</span>
+                        </div>
+                        <div style={capabilityRowStyle}>
+                          <span style={capabilityLabelStyle}>ACES path</span>
+                          <span style={capabilityValueStyle}>{rawAnalysis ? "Source profile -> ACEScct" : "Pending analysis"}</span>
+                        </div>
+                        <div style={capabilityRowStyle}>
+                          <span style={capabilityLabelStyle}>Confidence</span>
+                          <span style={{ ...capabilityValueStyle, ...capabilityConfidenceStyle(capability, rawAnalysis) }}>
+                            {formatCapabilityConfidence(capability, rawAnalysis)}
+                          </span>
+                        </div>
+                        {capability?.warnings[0] ? (
+                          <div style={capabilityWarningStyle}>{capability.warnings[0]}</div>
+                        ) : null}
                       </div>
                     ) : null}
                     {slotStatus ? <div style={statusMetaStyle}>{slotStatus}</div> : null}
@@ -3004,6 +3073,38 @@ function formatAnalysisSourceLabel(analysis: CameraMatchAnalysisResult) {
   return "Original";
 }
 
+function formatCapabilitySourceLabel(report?: ProductionMediaCapabilityReport) {
+  if (!report) return "Checking...";
+  if (report.decode_path_kind === "direct_original") return "Original";
+  if (report.decode_path_kind === "vendor_decoded") return "Vendor decode";
+  if (report.decode_path_kind === "operator_proxy") return "Operator proxy";
+  if (report.proxy_required) return "Proxy required";
+  return report.decode_path_kind.replace(/_/g, " ");
+}
+
+function formatCapabilityConfidence(
+  report: ProductionMediaCapabilityReport | undefined,
+  analysis?: CameraMatchAnalysisResult,
+) {
+  if (!report) return "Pending";
+  if (!analysis) return report.proxy_required ? "Low" : "Medium";
+  if (report.direct_analysis_supported && report.warnings.length === 0) return "High";
+  if (report.vendor_decoder_required && analysis.source_kind === "proxy") return "Medium";
+  if (report.proxy_required) return "Low";
+  return "Medium";
+}
+
+function capabilityConfidenceStyle(
+  report: ProductionMediaCapabilityReport | undefined,
+  analysis?: CameraMatchAnalysisResult,
+): React.CSSProperties {
+  const confidence = formatCapabilityConfidence(report, analysis);
+  if (confidence === "High") return { color: "rgba(134,239,172,0.96)" };
+  if (confidence === "Medium") return { color: "rgba(253,224,71,0.96)" };
+  if (confidence === "Low") return { color: "rgba(253,186,116,0.98)" };
+  return { color: "var(--text-secondary)" };
+}
+
 function formatZonePercent(value: number) {
   return `${Math.round(value * 100)}%`;
 }
@@ -3349,6 +3450,11 @@ const sourceMetaRowStyle: React.CSSProperties = { marginTop: 4, display: "flex",
 const sourceBadgeStyle: React.CSSProperties = { display: "inline-flex", alignItems: "center", padding: "4px 8px", borderRadius: 999, background: "rgba(165,146,255,0.12)", color: "rgba(214,204,255,0.96)", fontSize: "0.68rem", fontWeight: 800, letterSpacing: "0.08em", border: "1px solid rgba(165,146,255,0.18)" };
 const sourceMetaTextStyle: React.CSSProperties = { color: "var(--text-secondary)", fontSize: "0.74rem", fontWeight: 700 };
 const sourceMetaInlineStyle: React.CSSProperties = { marginTop: 10, color: "var(--text-secondary)", fontSize: "0.74rem", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" };
+const capabilityPanelStyle: React.CSSProperties = { marginTop: 12, padding: "10px 11px", borderRadius: 12, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.02)", display: "grid", gap: 7 };
+const capabilityRowStyle: React.CSSProperties = { display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12, minWidth: 0 };
+const capabilityLabelStyle: React.CSSProperties = { color: "var(--text-muted)", fontSize: "0.62rem", fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", whiteSpace: "nowrap" };
+const capabilityValueStyle: React.CSSProperties = { color: "var(--text-primary)", fontSize: "0.72rem", fontWeight: 800, textAlign: "right", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
+const capabilityWarningStyle: React.CSSProperties = { marginTop: 2, color: "rgba(220,184,124,0.92)", fontSize: "0.7rem", lineHeight: 1.35 };
 const statusMetaStyle: React.CSSProperties = { marginTop: 10, fontSize: "0.76rem", color: "rgba(216,212,223,0.86)" };
 const analysisCardStyle: React.CSSProperties = { padding: 14, borderRadius: 18, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(9,10,13,0.9)", minHeight: 1120, display: "flex", flexDirection: "column", minWidth: 0 };
 const frameWrapStyle: React.CSSProperties = { position: "relative", borderRadius: 14, overflow: "hidden", border: "1px solid rgba(255,255,255,0.08)", background: "#080a0c", aspectRatio: "16 / 9", marginBottom: 12 };

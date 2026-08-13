@@ -7225,6 +7225,13 @@ pub async fn production_get_preset(
 }
 
 #[tauri::command]
+pub async fn production_get_media_capability_report(
+    source_path: String,
+) -> Result<crate::production_media_capabilities::ProductionMediaCapabilityReport, String> {
+    Ok(crate::production_media_capabilities::classify_media_source(&source_path))
+}
+
+#[tauri::command]
 pub async fn production_matchlab_ensure_proxy(
     project_id: String,
     slot: String,
