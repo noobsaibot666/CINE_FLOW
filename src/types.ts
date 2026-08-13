@@ -809,10 +809,18 @@ export interface RawMetadataReport {
     warnings: string[];
 }
 
+export type RawSupportTier =
+    | "native"
+    | "native_candidate"
+    | "vendor"
+    | "proxy"
+    | "unsupported"
+    | (string & {});
+
 export interface RawIngestReport {
     source_path: string;
     adapter_id: string;
-    support_tier: "native" | "native_candidate" | "vendor" | "proxy" | "unsupported" | string;
+    support_tier: RawSupportTier;
     format_family: string;
     decode_path_kind: string;
     analysis_ready: boolean;
