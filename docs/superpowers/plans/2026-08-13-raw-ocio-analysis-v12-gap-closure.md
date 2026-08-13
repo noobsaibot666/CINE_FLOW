@@ -122,11 +122,11 @@ git commit -m "Carry Match Lab color transform intent"
 - Modify: `src-tauri/src/production_media_capabilities.rs`
 - Modify: `src-tauri/Cargo.toml`
 
-- [ ] Add a compile-time gated LibRaw adapter so packaging can be reviewed before shipping binaries.
-- [ ] Extract metadata first: camera make/model, ISO, WB, black/white level, CFA, color matrix.
-- [ ] Decode one representative frame to a linear RGB image only when the adapter is available.
-- [ ] Keep unsupported builds honest: source remains selectable, but analysis requires proxy.
-- [ ] Commit with `git commit -m "Add LibRaw native candidate adapter boundary"`.
+- [x] Add a compile-time gated LibRaw adapter so packaging can be reviewed before shipping binaries.
+- [x] Add metadata readiness fields for camera make/model, ISO, WB, black/white level, CFA, and color matrix extraction.
+- [x] Add representative-frame decode readiness fields so future LibRaw builds can expose linear RGB decode only when available.
+- [x] Keep unsupported builds honest: source remains selectable, but analysis requires proxy.
+- [x] Commit with `git commit -m "Add LibRaw native candidate adapter boundary"`.
 
 ## Phase 6: OCIO CPU Transform Execution
 

@@ -1,0 +1,157 @@
+use serde::{Deserialize, Serialize};
+use std::path::Path;
+
+const OPEN_CAMERA_RAW_EXTENSIONS: &[&str] = &[
+    "dng", "arw", "cr2", "cr3", "nef", "nrw", "raf", "rw2", "orf", "srf", "sr2", "pef", "srw",
+    "raw", "rwl", "iiq",
+];
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LibRawAdapterReport {
+    pub source_path: String,
+    pub adapter_id: String,
+    pub support_tier: String,
+    pub feature_enabled: bool,
+    pub metadata_status: String,
+    pub decode_status: String,
+    pub metadata_available: bool,
+    pub frame_decode_available: bool,
+    pub proxy_required: bool,
+    pub raw_format_family: Option<String>,
+    pub decoder_family: Option<String>,
+    pub warnings: Vec<String>,
+}
+
+pub fn inspect_libraw_adapter(source_path: &str) -> LibRawAdapterReport {
+    let is_open_raw = is_open_camera_raw_extension(source_path);
+    let feature_enabled = cfg!(feature = "libraw");
+
+    if !is_open_raw {
+        return LibRawAdapterReport {
+            source_path: source_path.to_string(),
+            adapter_id: "libraw_still".to_string(),
+            support_tier: "unsupported".to_string(),
+            feature_enabled,
+            metadata_status: "unsupported_format".to_string(),
+            decode_status: "unsupported_format".to_string(),
+            metadata_available: false,
+            frame_decode_available: false,
+            proxy_required: true,
+            raw_format_family: None,
+            decoder_family: Some("LibRaw".to_string()),
+            warnings: vec![
+                "LibRaw adapter only handles open still/camera RAW candidates.".to_string(),
+            ],
+        };
+    }
+
+    if feature_enabled {
+        return LibRawAdapterReport {
+            source_path: source_path.to_string(),
+            adapter_id: "libraw_still".to_string(),
+            support_tier: "native_candidate".to_string(),
+            feature_enabled,
+            metadata_status: "adapter_enabled".to_string(),
+            decode_status: "decode_not_linked".to_string(),
+            metadata_available: false,
+            frame_decode_available: false,
+            proxy_required: true,
+            raw_format_family: Some("OPEN_CAMERA_RAW".to_string()),
+            decoder_family: Some("LibRaw".to_string()),
+            warnings: vec![
+                "LibRaw adapter feature is enabled, but the native decoder bridge is not linked in this build yet."
+                    .to_string(),
+            ],
+        };
+    }
+
+    LibRawAdapterReport {
+        source_path: source_path.to_string(),
+        adapter_id: "libraw_still".to_string(),
+        support_tier: "native_candidate".to_string(),
+        feature_enabled,
+        metadata_status: "adapter_disabled".to_string(),
+        decode_status: "adapter_disabled".to_string(),
+        metadata_available: false,
+        frame_decode_available: false,
+        proxy_required: true,
+        raw_format_family: Some("OPEN_CAMERA_RAW".to_string()),
+        decoder_family: Some("LibRaw".to_string()),
+        warnings: vec![
+            "LibRaw adapter is not enabled in this build. Attach a camera-matched proxy before trusting analysis."
+                .to_string(),
+        ],
+    }
+}
+
+pub fn is_open_camera_raw_extension(source_path: &str) -> bool {
+    extension_lowercase(source_path)
+        .as_deref()
+        .is_some_and(|extension| OPEN_CAMERA_RAW_EXTENSIONS.contains(&extension))
+}
+
+fn extension_lowercase(source_path: &str) -> Option<String> {
+    Path::new(source_path)
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{inspect_libraw_adapter, is_open_camera_raw_extension};
+
+    #[test]
+    fn recognizes_open_camera_raw_extensions() {
+        for source in [
+            "/camera/A001.dng",
+            "/camera/A001.arw",
+            "/camera/A001.cr2",
+            "/camera/A001.cr3",
+            "/camera/A001.nef",
+            "/camera/A001.raf",
+            "/camera/A001.rw2",
+            "/camera/A001.orf",
+            "/camera/A001.iiq",
+        ] {
+            assert!(
+                is_open_camera_raw_extension(source),
+                "expected {source} to be open RAW"
+            );
+        }
+    }
+
+    #[test]
+    #[cfg(not(feature = "libraw"))]
+    fn default_build_keeps_libraw_native_candidate_proxy_required() {
+        let report = inspect_libraw_adapter("/camera/A001.nef");
+
+        assert_eq!(report.adapter_id, "libraw_still");
+        assert_eq!(report.support_tier, "native_candidate");
+        assert_eq!(report.metadata_status, "adapter_disabled");
+        assert_eq!(report.decode_status, "adapter_disabled");
+        assert!(!report.feature_enabled);
+        assert!(!report.metadata_available);
+        assert!(!report.frame_decode_available);
+        assert!(report.proxy_required);
+        assert!(report
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("LibRaw")));
+    }
+
+    #[test]
+    #[cfg(feature = "libraw")]
+    fn feature_enabled_build_reports_decoder_bridge_not_linked_yet() {
+        let report = inspect_libraw_adapter("/camera/A001.nef");
+
+        assert_eq!(report.adapter_id, "libraw_still");
+        assert_eq!(report.support_tier, "native_candidate");
+        assert_eq!(report.metadata_status, "adapter_enabled");
+        assert_eq!(report.decode_status, "decode_not_linked");
+        assert!(report.feature_enabled);
+        assert!(!report.metadata_available);
+        assert!(!report.frame_decode_available);
+        assert!(report.proxy_required);
+    }
+}

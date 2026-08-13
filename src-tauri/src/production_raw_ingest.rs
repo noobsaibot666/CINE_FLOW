@@ -59,29 +59,34 @@ pub fn build_raw_ingest_report(source_path: &str) -> RawIngestReport {
     let mut proxy_required = capability.proxy_required;
 
     let (adapter_id, support_tier, analysis_ready) = match extension.as_deref() {
-        Some("dng") | Some("arw") | Some("cr2") | Some("cr3") | Some("nef") | Some("raf")
-        | Some("rw2") | Some("orf") => {
-            raw_metadata.decoder_family = Some("LibRaw".to_string());
+        Some("dng") | Some("arw") | Some("cr2") | Some("cr3") | Some("nef") | Some("nrw")
+        | Some("raf") | Some("rw2") | Some("orf") | Some("srf") | Some("sr2") | Some("pef")
+        | Some("srw") | Some("raw") | Some("rwl") | Some("iiq") => {
+            let libraw = crate::production_libraw::inspect_libraw_adapter(source_path);
+            raw_metadata.decoder_family = libraw.decoder_family.clone();
+            raw_metadata.decoder_version = Some(libraw.metadata_status.clone());
             raw_metadata.raw_format_family = Some("OPEN_CAMERA_RAW".to_string());
             format_family = "OPEN_CAMERA_RAW".to_string();
             decode_path_kind = "native_candidate".to_string();
-            proxy_required = true;
-            raw_metadata.warnings.push(
-                "LibRaw metadata extraction is planned for this native candidate; current builds do not decode it yet."
-                    .to_string(),
-            );
+            proxy_required = libraw.proxy_required;
+            raw_metadata.warnings.extend(libraw.warnings.clone());
             warnings.push(
                 "Open camera RAW detected. LibRaw integration is required before direct ACES analysis is trusted."
                     .to_string(),
             );
+            warnings.extend(libraw.warnings);
             capability.format_family = format_family.clone();
             capability.decode_path_kind = decode_path_kind.clone();
-            capability.direct_analysis_supported = false;
+            capability.direct_analysis_supported = libraw.frame_decode_available;
             capability.vendor_decoder_required = false;
             capability.proxy_required = proxy_required;
             capability.recommended_proxy_tool = Some("LibRaw integration".to_string());
             capability.warnings = warnings.clone();
-            ("libraw_still", "native_candidate", false)
+            (
+                "libraw_still",
+                "native_candidate",
+                libraw.frame_decode_available,
+            )
         }
         Some("braw") => ("braw_bridge", "vendor", false),
         Some("r3d") | Some("nev") => ("redline", "vendor", false),
@@ -135,9 +140,17 @@ mod tests {
             "/camera/A001.cr2",
             "/camera/A001.cr3",
             "/camera/A001.nef",
+            "/camera/A001.nrw",
             "/camera/A001.raf",
             "/camera/A001.rw2",
             "/camera/A001.orf",
+            "/camera/A001.srf",
+            "/camera/A001.sr2",
+            "/camera/A001.pef",
+            "/camera/A001.srw",
+            "/camera/A001.raw",
+            "/camera/A001.rwl",
+            "/camera/A001.iiq",
         ] {
             let report = build_raw_ingest_report(source);
 
@@ -150,6 +163,14 @@ mod tests {
             assert_eq!(
                 report.raw_metadata.raw_format_family.as_deref(),
                 Some("OPEN_CAMERA_RAW")
+            );
+            assert_eq!(
+                report.raw_metadata.decoder_version.as_deref(),
+                Some(if cfg!(feature = "libraw") {
+                    "adapter_enabled"
+                } else {
+                    "adapter_disabled"
+                })
             );
             assert!(!report.analysis_ready);
             assert!(report

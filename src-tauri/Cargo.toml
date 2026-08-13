@@ -53,6 +53,7 @@ objc = "0.2"
 default = []
 calibration = ["dep:opencv"]
 direct-dist = []
+libraw = []
 
 [profile.release]
 panic = "unwind"

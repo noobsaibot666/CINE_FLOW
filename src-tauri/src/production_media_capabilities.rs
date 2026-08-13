@@ -30,11 +30,15 @@ pub fn classify_media_source(source_path: &str) -> ProductionMediaCapabilityRepo
         Some("dng") | Some("arw") | Some("cr2") | Some("cr3") | Some("nef") | Some("nrw")
         | Some("raf") | Some("rw2") | Some("orf") | Some("srf") | Some("sr2")
         | Some("pef") | Some("srw") | Some("raw") | Some("rwl") | Some("iiq") => {
+            let libraw = crate::production_libraw::inspect_libraw_adapter(source_path);
             native_candidate(
                 source_path,
                 "OPEN_CAMERA_RAW",
                 "LibRaw integration",
-                "Open camera RAW source detected. LibRaw integration is required before direct ACES analysis is trusted.",
+                &format!(
+                    "Open camera RAW source detected. LibRaw integration is required before direct ACES analysis is trusted. {}",
+                    libraw.warnings.first().map(String::as_str).unwrap_or("LibRaw adapter status is unavailable.")
+                ),
             )
         }
         Some("crm") | Some("rmf") => operator_proxy(
@@ -243,6 +247,10 @@ mod tests {
                 .warnings
                 .iter()
                 .any(|warning| warning.contains("LibRaw")));
+            assert!(report
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("adapter")));
         }
     }
 
