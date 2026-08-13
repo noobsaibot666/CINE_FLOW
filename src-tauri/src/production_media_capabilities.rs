@@ -14,6 +14,13 @@ pub struct ProductionMediaCapabilityReport {
 }
 
 pub fn classify_media_source(source_path: &str) -> ProductionMediaCapabilityReport {
+    classify_media_source_with_libraw(source_path, None)
+}
+
+pub fn classify_media_source_with_libraw(
+    source_path: &str,
+    libraw_override: Option<crate::production_libraw::LibRawAdapterReport>,
+) -> ProductionMediaCapabilityReport {
     let extension = Path::new(source_path)
         .extension()
         .and_then(|value| value.to_str())
@@ -30,7 +37,18 @@ pub fn classify_media_source(source_path: &str) -> ProductionMediaCapabilityRepo
         Some("dng") | Some("arw") | Some("cr2") | Some("cr3") | Some("nef") | Some("nrw")
         | Some("raf") | Some("rw2") | Some("orf") | Some("srf") | Some("sr2")
         | Some("pef") | Some("srw") | Some("raw") | Some("rwl") | Some("iiq") => {
-            let libraw = crate::production_libraw::inspect_libraw_adapter(source_path);
+            let libraw = libraw_override
+                .unwrap_or_else(|| crate::production_libraw::inspect_libraw_adapter(source_path));
+            if libraw.frame_decode_available {
+                return direct_original(
+                    source_path,
+                    "OPEN_CAMERA_RAW",
+                    vec![
+                        "Open camera RAW source detected. LibRaw bridge reports frame decode availability for direct analysis."
+                            .to_string(),
+                    ],
+                );
+            }
             native_candidate(
                 source_path,
                 "OPEN_CAMERA_RAW",
@@ -154,7 +172,8 @@ fn operator_proxy(
 
 #[cfg(test)]
 mod tests {
-    use super::classify_media_source;
+    use super::{classify_media_source, classify_media_source_with_libraw};
+    use crate::production_libraw::LibRawAdapterReport;
 
     #[test]
     fn classifies_known_camera_sources() {
@@ -252,6 +271,33 @@ mod tests {
                 .iter()
                 .any(|warning| warning.contains("adapter")));
         }
+    }
+
+    #[test]
+    fn marks_open_camera_raw_as_direct_when_libraw_frame_decode_is_available() {
+        let libraw = LibRawAdapterReport {
+            source_path: "/clip/A001.nef".to_string(),
+            adapter_id: "libraw_still".to_string(),
+            support_tier: "native_candidate".to_string(),
+            feature_enabled: false,
+            metadata_status: "metadata_available".to_string(),
+            decode_status: "frame_decode_available".to_string(),
+            metadata_available: true,
+            frame_decode_available: true,
+            proxy_required: false,
+            raw_format_family: Some("OPEN_CAMERA_RAW".to_string()),
+            decoder_family: Some("LibRaw bridge".to_string()),
+            warnings: Vec::new(),
+        };
+
+        let report = classify_media_source_with_libraw("/clip/A001.nef", Some(libraw));
+
+        assert_eq!(report.format_family, "OPEN_CAMERA_RAW");
+        assert_eq!(report.decode_path_kind, "direct_original");
+        assert!(report.direct_analysis_supported);
+        assert!(!report.vendor_decoder_required);
+        assert!(!report.proxy_required);
+        assert!(report.recommended_proxy_tool.is_none());
     }
 
     #[test]

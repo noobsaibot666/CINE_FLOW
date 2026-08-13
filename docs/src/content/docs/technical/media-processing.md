@@ -45,6 +45,19 @@ Current transform states include:
 
 Metrics are marked trusted only when decode and transform execution both pass. Metadata-only and processor-missing paths remain usable for review, but they are treated as provisional.
 
+## LibRaw Bridge Status
+
+Open still/camera RAW formats such as DNG, ARW, CR2, CR3, NEF, RAF, RW2, ORF, SRW, RWL, and IIQ are routed through the LibRaw adapter contract.
+
+The runtime bridge is discovered from `CINEFLOW_LIBRAW_BRIDGE`. Current LibRaw states include:
+
+- `adapter_disabled`: the build has no LibRaw feature and no runtime bridge is configured.
+- `bridge_missing`: `CINEFLOW_LIBRAW_BRIDGE` is configured, but the executable/file is not available.
+- `metadata_available`: the runtime bridge is available and can be used as a source of RAW metadata.
+- `frame_decode_available`: the runtime bridge is available for decoded analysis frames; open RAW can move from native candidate to direct analysis.
+
+Vendor/proprietary cinema RAW formats such as BRAW, R3D, X-OCN, CRM, and RMF remain on their vendor decoder or operator proxy paths unless a legal decoder is available.
+
 ## BRAW Handling
 
 Blackmagic RAW files require a decode path:

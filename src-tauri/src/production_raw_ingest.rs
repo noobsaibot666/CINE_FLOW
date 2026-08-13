@@ -47,6 +47,13 @@ pub struct RawIngestReport {
 }
 
 pub fn build_raw_ingest_report(source_path: &str) -> RawIngestReport {
+    build_raw_ingest_report_with_libraw(source_path, None)
+}
+
+pub fn build_raw_ingest_report_with_libraw(
+    source_path: &str,
+    libraw_override: Option<crate::production_libraw::LibRawAdapterReport>,
+) -> RawIngestReport {
     let mut capability = classify_media_source(source_path);
     let extension = extension_lowercase(source_path);
     let mut raw_metadata = RawMetadataReport {
@@ -62,25 +69,41 @@ pub fn build_raw_ingest_report(source_path: &str) -> RawIngestReport {
         Some("dng") | Some("arw") | Some("cr2") | Some("cr3") | Some("nef") | Some("nrw")
         | Some("raf") | Some("rw2") | Some("orf") | Some("srf") | Some("sr2") | Some("pef")
         | Some("srw") | Some("raw") | Some("rwl") | Some("iiq") => {
-            let libraw = crate::production_libraw::inspect_libraw_adapter(source_path);
+            let libraw = libraw_override
+                .unwrap_or_else(|| crate::production_libraw::inspect_libraw_adapter(source_path));
             raw_metadata.decoder_family = libraw.decoder_family.clone();
             raw_metadata.decoder_version = Some(libraw.metadata_status.clone());
             raw_metadata.raw_format_family = Some("OPEN_CAMERA_RAW".to_string());
             format_family = "OPEN_CAMERA_RAW".to_string();
-            decode_path_kind = "native_candidate".to_string();
+            decode_path_kind = if libraw.frame_decode_available {
+                "direct_original".to_string()
+            } else {
+                "native_candidate".to_string()
+            };
             proxy_required = libraw.proxy_required;
             raw_metadata.warnings.extend(libraw.warnings.clone());
-            warnings.push(
-                "Open camera RAW detected. LibRaw integration is required before direct ACES analysis is trusted."
-                    .to_string(),
-            );
+            if libraw.frame_decode_available {
+                warnings.push(
+                    "Open camera RAW detected. LibRaw bridge reports frame decode availability for direct analysis."
+                        .to_string(),
+                );
+            } else {
+                warnings.push(
+                    "Open camera RAW detected. LibRaw integration is required before direct ACES analysis is trusted."
+                        .to_string(),
+                );
+            }
             warnings.extend(libraw.warnings);
             capability.format_family = format_family.clone();
             capability.decode_path_kind = decode_path_kind.clone();
             capability.direct_analysis_supported = libraw.frame_decode_available;
             capability.vendor_decoder_required = false;
             capability.proxy_required = proxy_required;
-            capability.recommended_proxy_tool = Some("LibRaw integration".to_string());
+            capability.recommended_proxy_tool = if libraw.frame_decode_available {
+                None
+            } else {
+                Some("LibRaw integration".to_string())
+            };
             capability.warnings = warnings.clone();
             (
                 "libraw_still",
@@ -130,7 +153,8 @@ fn extension_lowercase(source_path: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::build_raw_ingest_report;
+    use super::{build_raw_ingest_report, build_raw_ingest_report_with_libraw};
+    use crate::production_libraw::LibRawAdapterReport;
 
     #[test]
     fn selects_libraw_adapter_for_open_camera_raw_extensions() {
@@ -178,6 +202,34 @@ mod tests {
                 .iter()
                 .any(|warning| warning.contains("LibRaw")));
         }
+    }
+
+    #[test]
+    fn open_camera_raw_is_analysis_ready_only_when_libraw_frame_decode_is_available() {
+        let libraw = LibRawAdapterReport {
+            source_path: "/camera/A001.nef".to_string(),
+            adapter_id: "libraw_still".to_string(),
+            support_tier: "native_candidate".to_string(),
+            feature_enabled: false,
+            metadata_status: "metadata_available".to_string(),
+            decode_status: "frame_decode_available".to_string(),
+            metadata_available: true,
+            frame_decode_available: true,
+            proxy_required: false,
+            raw_format_family: Some("OPEN_CAMERA_RAW".to_string()),
+            decoder_family: Some("LibRaw bridge".to_string()),
+            warnings: Vec::new(),
+        };
+
+        let report = build_raw_ingest_report_with_libraw("/camera/A001.nef", Some(libraw));
+
+        assert_eq!(report.decode_path_kind, "direct_original");
+        assert!(report.analysis_ready);
+        assert!(!report.proxy_required);
+        assert_eq!(
+            report.raw_metadata.decoder_version.as_deref(),
+            Some("metadata_available")
+        );
     }
 
     #[test]

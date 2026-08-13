@@ -23,6 +23,14 @@ pub struct LibRawAdapterReport {
 }
 
 pub fn inspect_libraw_adapter(source_path: &str) -> LibRawAdapterReport {
+    let configured_bridge = std::env::var("CINEFLOW_LIBRAW_BRIDGE").ok();
+    inspect_libraw_adapter_with_bridge_path(source_path, configured_bridge.as_deref())
+}
+
+pub fn inspect_libraw_adapter_with_bridge_path(
+    source_path: &str,
+    bridge_path: Option<&str>,
+) -> LibRawAdapterReport {
     let is_open_raw = is_open_camera_raw_extension(source_path);
     let feature_enabled = cfg!(feature = "libraw");
 
@@ -45,6 +53,42 @@ pub fn inspect_libraw_adapter(source_path: &str) -> LibRawAdapterReport {
         };
     }
 
+    if let Some(path) = bridge_path.filter(|value| !value.trim().is_empty()) {
+        if Path::new(path).is_file() {
+            return LibRawAdapterReport {
+                source_path: source_path.to_string(),
+                adapter_id: "libraw_still".to_string(),
+                support_tier: "native_candidate".to_string(),
+                feature_enabled,
+                metadata_status: "metadata_available".to_string(),
+                decode_status: "frame_decode_available".to_string(),
+                metadata_available: true,
+                frame_decode_available: true,
+                proxy_required: false,
+                raw_format_family: Some("OPEN_CAMERA_RAW".to_string()),
+                decoder_family: Some("LibRaw bridge".to_string()),
+                warnings: Vec::new(),
+            };
+        }
+
+        return LibRawAdapterReport {
+            source_path: source_path.to_string(),
+            adapter_id: "libraw_still".to_string(),
+            support_tier: "native_candidate".to_string(),
+            feature_enabled,
+            metadata_status: "bridge_missing".to_string(),
+            decode_status: "bridge_missing".to_string(),
+            metadata_available: false,
+            frame_decode_available: false,
+            proxy_required: true,
+            raw_format_family: Some("OPEN_CAMERA_RAW".to_string()),
+            decoder_family: Some("LibRaw bridge".to_string()),
+            warnings: vec![format!(
+                "Configured LibRaw bridge does not exist or is not a file: {path}"
+            )],
+        };
+    }
+
     if feature_enabled {
         return LibRawAdapterReport {
             source_path: source_path.to_string(),
@@ -59,7 +103,7 @@ pub fn inspect_libraw_adapter(source_path: &str) -> LibRawAdapterReport {
             raw_format_family: Some("OPEN_CAMERA_RAW".to_string()),
             decoder_family: Some("LibRaw".to_string()),
             warnings: vec![
-                "LibRaw adapter feature is enabled, but the native decoder bridge is not linked in this build yet."
+                "LibRaw adapter feature is enabled, but CINEFLOW_LIBRAW_BRIDGE is not configured yet."
                     .to_string(),
             ],
         };
@@ -99,7 +143,11 @@ fn extension_lowercase(source_path: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{inspect_libraw_adapter, is_open_camera_raw_extension};
+    use super::{
+        inspect_libraw_adapter, inspect_libraw_adapter_with_bridge_path,
+        is_open_camera_raw_extension,
+    };
+    use std::fs;
 
     #[test]
     fn recognizes_open_camera_raw_extensions() {
@@ -138,6 +186,43 @@ mod tests {
             .warnings
             .iter()
             .any(|warning| warning.contains("LibRaw")));
+    }
+
+    #[test]
+    fn missing_runtime_bridge_reports_bridge_missing() {
+        let report = inspect_libraw_adapter_with_bridge_path(
+            "/camera/A001.nef",
+            Some("/definitely/missing/libraw-bridge"),
+        );
+
+        assert_eq!(report.metadata_status, "bridge_missing");
+        assert_eq!(report.decode_status, "bridge_missing");
+        assert!(!report.metadata_available);
+        assert!(!report.frame_decode_available);
+        assert!(report.proxy_required);
+    }
+
+    #[test]
+    fn runtime_bridge_reports_metadata_and_frame_decode_available() {
+        let root = std::env::temp_dir().join(format!(
+            "cineflow_libraw_bridge_{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).expect("create test root");
+        let bridge = root.join("libraw-bridge");
+        fs::write(&bridge, "fake bridge").expect("write bridge");
+
+        let report = inspect_libraw_adapter_with_bridge_path(
+            "/camera/A001.nef",
+            Some(bridge.to_string_lossy().as_ref()),
+        );
+
+        assert_eq!(report.metadata_status, "metadata_available");
+        assert_eq!(report.decode_status, "frame_decode_available");
+        assert!(report.metadata_available);
+        assert!(report.frame_decode_available);
+        assert!(!report.proxy_required);
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

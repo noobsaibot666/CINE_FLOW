@@ -226,11 +226,11 @@ git commit -m "Add OCIO processor readiness reporting"
 - Modify: `src-tauri/src/production_raw_ingest.rs`
 - Test: `src-tauri/tests/production_libraw_tests.rs`
 
-- [ ] Add `CINEFLOW_LIBRAW_BRIDGE` runtime probing.
-- [ ] Distinguish `adapter_disabled`, `bridge_missing`, `metadata_available`, and `frame_decode_available`.
-- [ ] Route open RAW formats to direct analysis only when `frame_decode_available = true`.
-- [ ] Keep RED/BRAW/ARRIRAW proprietary flows on vendor/proxy paths unless a legal decoder is detected.
-- [ ] Commit with `git commit -m "Add LibRaw runtime bridge readiness"`.
+- [x] Add `CINEFLOW_LIBRAW_BRIDGE` runtime probing.
+- [x] Distinguish `adapter_disabled`, `bridge_missing`, `metadata_available`, and `frame_decode_available`.
+- [x] Route open RAW formats to direct analysis only when `frame_decode_available = true`.
+- [x] Keep RED/BRAW/ARRIRAW proprietary flows on vendor/proxy paths unless a legal decoder is detected.
+- [x] Commit with `git commit -m "Add LibRaw runtime bridge readiness"`.
 
 ### Task 4: Analysis Trust Wiring
 
