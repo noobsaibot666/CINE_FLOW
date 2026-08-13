@@ -1053,7 +1053,8 @@ function buildMatchNormalizeTrustSummary(result?: ProductionMatchLabRunResult): 
 function formatTransformStatus(status?: string | null) {
   if (status === "transform_applied") return "Transform applied";
   if (status === "metadata_only") return "Metadata only";
-  if (status === "processor_not_linked") return "Processor not linked";
+  if (status === "processor_not_available") return "Processor not available";
+  if (status === "processor_ready") return "Processor ready";
   if (status === "config_missing") return "Config missing";
   if (status === "unsupported_transform") return "Unsupported transform";
   if (status === "display_referred_fallback") return "Display fallback";

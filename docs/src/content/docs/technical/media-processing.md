@@ -37,7 +37,8 @@ Current transform states include:
 
 - `transform_applied`: OCIO pixel transform was executed and metrics can be trusted.
 - `metadata_only`: source profile and ACES intent are known, but no OCIO config is configured.
-- `processor_not_linked`: an OCIO config is available, but native OCIO processing is not linked in this build.
+- `processor_not_available`: an OCIO config is available, but no packaged or configured OCIO processor executable is available.
+- `processor_ready`: an OCIO config and processor executable are available, but the current analysis has not yet recorded a successful frame transform.
 - `config_missing`: an OCIO config path is configured but unavailable.
 - `unsupported_transform`: no registered transform metadata exists for the selected source profile.
 

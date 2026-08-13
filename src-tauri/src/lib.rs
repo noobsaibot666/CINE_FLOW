@@ -19,6 +19,7 @@ mod production;
 mod production_calibration;
 pub mod production_color_pipeline;
 pub mod production_ocio;
+pub mod production_ocio_processor;
 pub mod production_libraw;
 mod production_match_lab;
 pub mod production_media_capabilities;

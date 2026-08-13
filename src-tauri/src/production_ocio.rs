@@ -106,7 +106,9 @@ fn build_ocio_config_status_with_source(
             configured: true,
             loadable: false,
             compatible: false,
-            warnings: vec![format!("OCIO config path does not exist or is not a file: {path}")],
+            warnings: vec![format!(
+                "OCIO config path does not exist or is not a file: {path}"
+            )],
         };
     }
 
@@ -207,7 +209,8 @@ pub fn build_ocio_transform_execution_report(
 ) -> ProductionOcioTransformExecutionReport {
     let config_status =
         build_ocio_config_status(source_profile_id, analysis_color_space, configured_path);
-    build_ocio_transform_execution_report_from_config_status(config_status)
+    let processor_status = crate::production_ocio_processor::probe_ocio_processor(None);
+    build_ocio_transform_execution_report_from_config_status(config_status, processor_status)
 }
 
 pub fn build_ocio_transform_execution_report_from_discovery(
@@ -222,29 +225,48 @@ pub fn build_ocio_transform_execution_report_from_discovery(
         environment_path,
         resource_dir,
     );
-    build_ocio_transform_execution_report_from_config_status(config_status)
+    let processor_status = crate::production_ocio_processor::probe_ocio_processor(resource_dir);
+    build_ocio_transform_execution_report_from_config_status(config_status, processor_status)
+}
+
+pub fn build_ocio_transform_execution_report_from_discovery_and_processor(
+    source_profile_id: &str,
+    analysis_color_space: &str,
+    environment_path: Option<&str>,
+    resource_dir: Option<&Path>,
+    processor_status: crate::production_ocio_processor::ProductionOcioProcessorStatus,
+) -> ProductionOcioTransformExecutionReport {
+    let config_status = build_ocio_config_status_from_discovery(
+        source_profile_id,
+        analysis_color_space,
+        environment_path,
+        resource_dir,
+    );
+    build_ocio_transform_execution_report_from_config_status(config_status, processor_status)
 }
 
 fn build_ocio_transform_execution_report_from_config_status(
     config_status: ProductionOcioConfigStatus,
+    processor_status: crate::production_ocio_processor::ProductionOcioProcessorStatus,
 ) -> ProductionOcioTransformExecutionReport {
-    let processor_available = false;
+    let processor_available = processor_status.can_execute;
     let mut warnings = config_status.warnings.clone();
+    warnings.extend(processor_status.warnings);
     let execution_status = match config_status.config_status.as_str() {
         "unsupported_transform" => "unsupported_transform",
         "config_missing" => "config_missing",
         "metadata_only" => "metadata_only",
-        "ocio_ready" if processor_available => "transform_applied",
+        "ocio_ready" if processor_available => "processor_ready",
         "ocio_ready" => {
             warnings.push(
-                "OCIO config is available, but the native OCIO processor is not linked yet; pixel transforms are not executed."
+                "OCIO config is available, but an OCIO processor executable is not available yet; pixel transforms are not executed."
                     .to_string(),
             );
-            "processor_not_linked"
+            "processor_not_available"
         }
         _ => "unavailable",
     };
-    let metrics_trusted = processor_available && execution_status == "transform_applied";
+    let metrics_trusted = execution_status == "transform_applied";
 
     ProductionOcioTransformExecutionReport {
         source_profile_id: config_status.source_profile_id,
@@ -291,8 +313,11 @@ pub fn build_ocio_transform_execution_report_from_environment_and_resources(
 mod tests {
     use super::{
         build_ocio_config_status, build_ocio_config_status_from_discovery,
-        build_ocio_transform_execution_report, build_ocio_transform_execution_report_from_discovery,
+        build_ocio_transform_execution_report,
+        build_ocio_transform_execution_report_from_discovery,
+        build_ocio_transform_execution_report_from_discovery_and_processor,
     };
+    use crate::production_ocio_processor::ProductionOcioProcessorStatus;
     use std::fs;
 
     #[test]
@@ -304,7 +329,10 @@ mod tests {
         assert!(!report.configured);
         assert!(!report.loadable);
         assert!(report.compatible);
-        assert!(report.warnings.iter().any(|warning| warning.contains("metadata")));
+        assert!(report
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("metadata")));
     }
 
     #[test]
@@ -333,10 +361,7 @@ mod tests {
 
     #[test]
     fn discovers_environment_ocio_config_before_bundled_config() {
-        let root = std::env::temp_dir().join(format!(
-            "cineflow_ocio_env_{}",
-            std::process::id()
-        ));
+        let root = std::env::temp_dir().join(format!("cineflow_ocio_env_{}", std::process::id()));
         let bundled_dir = root.join("Resources").join("ocio");
         fs::create_dir_all(&bundled_dir).expect("create bundled ocio dir");
         let bundled_config = bundled_dir.join("config.ocio");
@@ -353,16 +378,17 @@ mod tests {
 
         assert_eq!(report.config_source, "environment");
         assert_eq!(report.config_status, "ocio_ready");
-        assert_eq!(report.config_path.as_deref(), Some(env_config.to_string_lossy().as_ref()));
+        assert_eq!(
+            report.config_path.as_deref(),
+            Some(env_config.to_string_lossy().as_ref())
+        );
         let _ = fs::remove_dir_all(root);
     }
 
     #[test]
     fn discovers_bundled_ocio_config_when_environment_is_empty() {
-        let root = std::env::temp_dir().join(format!(
-            "cineflow_ocio_bundled_{}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("cineflow_ocio_bundled_{}", std::process::id()));
         let bundled_dir = root.join("Resources").join("ocio");
         fs::create_dir_all(&bundled_dir).expect("create bundled ocio dir");
         let bundled_config = bundled_dir.join("config.ocio");
@@ -386,10 +412,8 @@ mod tests {
 
     #[test]
     fn explicit_missing_environment_config_does_not_fall_back_to_bundled() {
-        let root = std::env::temp_dir().join(format!(
-            "cineflow_ocio_missing_env_{}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("cineflow_ocio_missing_env_{}", std::process::id()));
         let bundled_dir = root.join("Resources").join("ocio");
         fs::create_dir_all(&bundled_dir).expect("create bundled ocio dir");
         fs::write(bundled_dir.join("config.ocio"), "ocio_profile_version: 2")
@@ -413,7 +437,7 @@ mod tests {
     }
 
     #[test]
-    fn bundled_ready_config_reports_processor_not_linked_until_native_ocio_is_available() {
+    fn bundled_ready_config_reports_processor_not_available_until_ocio_runtime_exists() {
         let root = std::env::temp_dir().join(format!(
             "cineflow_ocio_transform_bundled_{}",
             std::process::id()
@@ -432,7 +456,34 @@ mod tests {
 
         assert_eq!(report.config_source, "bundled");
         assert_eq!(report.config_status, "ocio_ready");
-        assert_eq!(report.execution_status, "processor_not_linked");
+        assert_eq!(report.execution_status, "processor_not_available");
+        assert!(!report.metrics_trusted);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn ready_config_with_processor_reports_processor_ready_not_trusted_until_frame_transform() {
+        let root = std::env::temp_dir().join(format!(
+            "cineflow_ocio_transform_processor_{}",
+            std::process::id()
+        ));
+        let bundled_dir = root.join("Resources").join("ocio");
+        fs::create_dir_all(&bundled_dir).expect("create bundled ocio dir");
+        fs::write(bundled_dir.join("config.ocio"), "ocio_profile_version: 2")
+            .expect("write bundled config");
+
+        let report = build_ocio_transform_execution_report_from_discovery_and_processor(
+            "SONY_SLOG3_SGAMUT3_CINE",
+            "ACEScct",
+            None,
+            Some(&root.join("Resources")),
+            ProductionOcioProcessorStatus::available_for_test("/usr/local/bin/ocioconvert"),
+        );
+
+        assert_eq!(report.config_source, "bundled");
+        assert_eq!(report.config_status, "ocio_ready");
+        assert_eq!(report.execution_status, "processor_ready");
+        assert!(report.processor_available);
         assert!(!report.metrics_trusted);
         let _ = fs::remove_dir_all(root);
     }
