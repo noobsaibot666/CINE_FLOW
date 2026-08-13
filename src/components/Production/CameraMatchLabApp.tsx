@@ -26,6 +26,10 @@ import {
   getLowercaseExtension,
   hasExtension,
 } from "./mediaSourceExtensions";
+import {
+  PRODUCTION_SOURCE_PROFILES,
+  ProductionSourceProfileId,
+} from "./sourceProfiles";
 
 interface CameraMatchLabAppProps {
   project: ProductionProject;
@@ -35,6 +39,8 @@ interface CameraMatchLabAppProps {
 const SLOT_ORDER = ["A", "B", "C"] as const;
 const FRAME_COUNT = 5;
 const MATCH_ENGINE_VERSION = "tuning_v2";
+const DEFAULT_SOURCE_PROFILE_ID: ProductionSourceProfileId = "REC709";
+const ANALYSIS_COLOR_SPACE = "ACEScct";
 type CameraSlot = (typeof SLOT_ORDER)[number];
 type MatchActionChip = {
   key: string;
@@ -125,6 +131,7 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
   const [analysisOverrideBySlot, setAnalysisOverrideBySlot] = useState<Record<string, string>>({});
   const [analysisBySlot, setAnalysisBySlot] = useState<Record<string, CameraMatchAnalysisResult>>({});
   const [capabilityBySlot, setCapabilityBySlot] = useState<Record<string, ProductionMediaCapabilityReport>>({});
+  const [sourceProfileBySlot, setSourceProfileBySlot] = useState<Record<string, ProductionSourceProfileId>>({});
   const [frameDataUrls, setFrameDataUrls] = useState<Record<string, string>>({});
   const [frameWarnings, setFrameWarnings] = useState<Record<string, string>>({});
   const [slotErrors, setSlotErrors] = useState<Record<string, string>>({});
@@ -363,9 +370,11 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
         const nextClips: Record<string, string> = {};
         const nextCalibrations: Record<string, CalibrationChartDetection> = {};
         const nextPreviewModes: Record<string, "original" | "corrected"> = {};
+        const nextSourceProfiles: Record<string, ProductionSourceProfileId> = {};
         run.results.forEach((result) => {
           nextAnalyses[result.slot] = result.analysis;
           nextClips[result.slot] = result.analysis.clip_path;
+          nextSourceProfiles[result.slot] = coerceSourceProfileId(result.source_profile_id ?? result.analysis.source_profile_id);
           if (result.calibration?.chart_detected) {
             nextCalibrations[result.slot] = result.calibration;
             nextPreviewModes[result.slot] = result.slot === (run.hero_slot || "A")
@@ -384,6 +393,7 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
           setSlotErrorDetails({});
           setCalibrationBySlot(nextCalibrations);
           setPreviewModeBySlot(nextPreviewModes);
+          setSourceProfileBySlot(nextSourceProfiles);
         });
       } catch {
         if (!cancelled) {
@@ -651,6 +661,7 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
       delete next[slot];
       return next;
     });
+    setSourceProfileBySlot((prev) => ({ ...prev, [slot]: prev[slot] ?? DEFAULT_SOURCE_PROFILE_ID }));
     if (isAnyRawCameraSource(selected)) {
       const workflow = describeSourceWorkflow(selected);
       setSlotStatuses((prev) => ({ ...prev, [slot]: `${workflow.badge} selected · ${workflow.status}` }));
@@ -722,6 +733,11 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
       return next;
     });
     setSignalPreviewModeBySlot((prev) => {
+      const next = { ...prev };
+      delete next[slot];
+      return next;
+    });
+    setSourceProfileBySlot((prev) => {
       const next = { ...prev };
       delete next[slot];
       return next;
@@ -830,6 +846,8 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
             clipPath,
             frameCount: FRAME_COUNT,
             analysisSourceOverridePath: analysisOverrideBySlot[slot] ?? null,
+            sourceProfileId: sourceProfileBySlot[slot] ?? DEFAULT_SOURCE_PROFILE_ID,
+            analysisColorSpace: ANALYSIS_COLOR_SPACE,
           });
           const proxyPath = result.source_path !== clipPath ? result.source_path : undefined;
           nextResults.push({
@@ -1266,6 +1284,8 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
               const signalPreview = signalPreviewPath ? signalPreviewByFramePath[signalPreviewPath] : undefined;
               const previewToneStyle = clipFormatBadgeStyle(clipPath || "", rawAnalysis);
               const signalOnly = Boolean(rawAnalysis) && !calibration?.chart_detected;
+              const selectedSourceProfileId = sourceProfileBySlot[slot] ?? rawAnalysis?.source_profile_id ?? DEFAULT_SOURCE_PROFILE_ID;
+              const selectedSourceProfile = PRODUCTION_SOURCE_PROFILES[selectedSourceProfileId];
               const sourceWorkflow = clipPath
                 ? describeSourceWorkflow(clipPath, capability, rawAnalysis, Boolean(analysisOverrideBySlot[slot]))
                 : null;
@@ -1358,6 +1378,35 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                       <SourceWorkflowNotice workflow={sourceWorkflow} onPickProxy={() => void pickExistingProxy(slot)} />
                     ) : null}
                     {clipPath ? (
+                      <div style={transformIntentPanelStyle}>
+                        <div style={transformIntentHeaderStyle}>
+                          <span style={capabilityLabelStyle}>Color pipeline</span>
+                          <span style={transformIntentStatusStyle}>{rawAnalysis?.color_transform_status ? formatTransformStatus(rawAnalysis.color_transform_status) : "Metadata intent"}</span>
+                        </div>
+                        <label style={sourceProfileSelectWrapStyle}>
+                          <span style={sourceProfileSelectLabelStyle}>Source profile</span>
+                          <select
+                            value={selectedSourceProfileId}
+                            onChange={(event) => {
+                              const nextProfile = event.target.value as ProductionSourceProfileId;
+                              setSourceProfileBySlot((prev) => ({ ...prev, [slot]: nextProfile }));
+                              setSelectedRunId(null);
+                            }}
+                            style={sourceProfileSelectStyle}
+                            disabled={analyzing}
+                          >
+                            {Object.values(PRODUCTION_SOURCE_PROFILES).map((profile) => (
+                              <option key={profile.id} value={profile.id}>{profile.label}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <div style={transformIntentMetaStyle}>
+                          <span>{selectedSourceProfile.transferCurve} / {selectedSourceProfile.colorGamut}</span>
+                          <span>{rawAnalysis?.analysis_color_space ?? ANALYSIS_COLOR_SPACE}</span>
+                        </div>
+                      </div>
+                    ) : null}
+                    {clipPath ? (
                       <div style={capabilityPanelStyle}>
                         <div style={capabilityRowStyle}>
                           <span style={capabilityLabelStyle}>Analysis source</span>
@@ -1365,11 +1414,11 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                         </div>
                         <div style={capabilityRowStyle}>
                           <span style={capabilityLabelStyle}>Source profile</span>
-                          <span style={capabilityValueStyle}>{rawAnalysis ? "Measured signal" : "Manual / pending"}</span>
+                          <span style={capabilityValueStyle}>{selectedSourceProfile.label}</span>
                         </div>
                         <div style={capabilityRowStyle}>
                           <span style={capabilityLabelStyle}>ACES path</span>
-                          <span style={capabilityValueStyle}>{rawAnalysis ? "Source profile -> ACEScct" : "Pending analysis"}</span>
+                          <span style={capabilityValueStyle}>{rawAnalysis ? `${rawAnalysis.analysis_color_space ?? ANALYSIS_COLOR_SPACE} · ${formatTransformStatus(rawAnalysis.color_transform_status)}` : `Pending -> ${ANALYSIS_COLOR_SPACE}`}</span>
                         </div>
                         <div style={capabilityRowStyle}>
                           <span style={capabilityLabelStyle}>Confidence</span>
@@ -3097,6 +3146,21 @@ function getFileName(path: string) {
   return parts[parts.length - 1] || path;
 }
 
+function coerceSourceProfileId(value: string | null | undefined): ProductionSourceProfileId {
+  if (value && value in PRODUCTION_SOURCE_PROFILES) {
+    return value as ProductionSourceProfileId;
+  }
+  return DEFAULT_SOURCE_PROFILE_ID;
+}
+
+function formatTransformStatus(status?: string | null) {
+  if (!status) return "Metadata intent";
+  if (status === "metadata_ready") return "OCIO metadata ready";
+  if (status === "display_referred_fallback") return "Display fallback";
+  if (status === "unsupported_source_profile") return "Unsupported profile";
+  return status.replace(/_/g, " ");
+}
+
 function isBrawClip(path: string) {
   return hasExtension(path, DECODER_BACKED_RAW_EXTENSIONS);
 }
@@ -3630,6 +3694,13 @@ const sourceWorkflowBadgeStyle: React.CSSProperties = { display: "inline-flex", 
 const sourceWorkflowStatusStyle: React.CSSProperties = { color: "var(--text-primary)", fontSize: "0.72rem", fontWeight: 800, textAlign: "right", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
 const sourceWorkflowBodyStyle: React.CSSProperties = { color: "var(--text-secondary)", fontSize: "0.72rem", lineHeight: 1.42 };
 const sourceWorkflowActionStyle: React.CSSProperties = { justifySelf: "start", marginTop: 1, border: "1px solid rgba(255,255,255,0.1)", background: "rgba(255,255,255,0.035)" };
+const transformIntentPanelStyle: React.CSSProperties = { display: "grid", gap: 8, marginTop: 12, padding: "10px 11px", borderRadius: 12, border: "1px solid rgba(56,189,248,0.16)", background: "rgba(56,189,248,0.045)", minWidth: 0 };
+const transformIntentHeaderStyle: React.CSSProperties = { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, minWidth: 0 };
+const transformIntentStatusStyle: React.CSSProperties = { color: "rgba(186,230,253,0.94)", fontSize: "0.7rem", fontWeight: 800, textAlign: "right", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
+const sourceProfileSelectWrapStyle: React.CSSProperties = { display: "grid", gap: 5, minWidth: 0 };
+const sourceProfileSelectLabelStyle: React.CSSProperties = { color: "var(--text-muted)", fontSize: "0.62rem", fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase" };
+const sourceProfileSelectStyle: React.CSSProperties = { width: "100%", minWidth: 0, minHeight: 34, borderRadius: 10, border: "1px solid rgba(255,255,255,0.12)", background: "rgba(6,8,12,0.92)", color: "var(--text-primary)", padding: "0 10px", fontSize: "0.76rem", fontWeight: 700, outline: "none" };
+const transformIntentMetaStyle: React.CSSProperties = { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, color: "var(--text-secondary)", fontSize: "0.68rem", lineHeight: 1.3, minWidth: 0 };
 const capabilityPanelStyle: React.CSSProperties = { marginTop: 12, padding: "10px 11px", borderRadius: 12, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.02)", display: "grid", gap: 7 };
 const capabilityRowStyle: React.CSSProperties = { display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12, minWidth: 0 };
 const capabilityLabelStyle: React.CSSProperties = { color: "var(--text-muted)", fontSize: "0.62rem", fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", whiteSpace: "nowrap" };

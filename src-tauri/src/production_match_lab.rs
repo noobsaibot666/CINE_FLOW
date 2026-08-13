@@ -153,6 +153,12 @@ pub struct CameraMatchAnalysisResult {
     pub warnings: Vec<String>,
     #[serde(default)]
     pub measurement_bundle: ProductionMeasurementBundle,
+    #[serde(default)]
+    pub source_profile_id: Option<String>,
+    #[serde(default)]
+    pub analysis_color_space: Option<String>,
+    #[serde(default)]
+    pub color_transform_status: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1433,7 +1439,10 @@ fn proxy_ffmpeg_args(output_path: &Path) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{compute_production_match_confidence, ProductionMatchConfidenceInput};
+    use super::{
+        compute_production_match_confidence, CameraMatchAggregateMetrics, CameraMatchAnalysisResult,
+        ProductionMatchConfidenceInput, ProductionMeasurementBundle,
+    };
 
     fn baseline_input() -> ProductionMatchConfidenceInput<'static> {
         ProductionMatchConfidenceInput {
@@ -1444,6 +1453,48 @@ mod tests {
             clipped_patch_count: 0,
             frame_count: 5,
         }
+    }
+
+    fn sample_analysis_result() -> CameraMatchAnalysisResult {
+        CameraMatchAnalysisResult {
+            source_path: "/clip/A001.mov".to_string(),
+            source_kind: Some("original".to_string()),
+            original_format_kind: Some("QUICKTIME".to_string()),
+            clip_path: "/clip/A001.mov".to_string(),
+            clip_name: "A001.mov".to_string(),
+            representative_frame_path: "/cache/frame_0.jpg".to_string(),
+            frame_paths: vec!["/cache/frame_0.jpg".to_string()],
+            per_frame: Vec::new(),
+            aggregate: CameraMatchAggregateMetrics::default(),
+            proxy_info: None,
+            warnings: Vec::new(),
+            measurement_bundle: ProductionMeasurementBundle::default(),
+            source_profile_id: None,
+            analysis_color_space: None,
+            color_transform_status: None,
+        }
+    }
+
+    #[test]
+    fn analysis_result_carries_transform_intent() {
+        let mut result = sample_analysis_result();
+        result.source_profile_id = Some("SONY_SLOG3_SGAMUT3_CINE".to_string());
+        result.analysis_color_space = Some("ACEScct".to_string());
+        result.color_transform_status = Some("metadata_ready".to_string());
+
+        let json = serde_json::to_string(&result).expect("serialize analysis result");
+        let decoded: CameraMatchAnalysisResult =
+            serde_json::from_str(&json).expect("deserialize analysis result");
+
+        assert_eq!(
+            decoded.source_profile_id.as_deref(),
+            Some("SONY_SLOG3_SGAMUT3_CINE")
+        );
+        assert_eq!(decoded.analysis_color_space.as_deref(), Some("ACEScct"));
+        assert_eq!(
+            decoded.color_transform_status.as_deref(),
+            Some("metadata_ready")
+        );
     }
 
     #[test]

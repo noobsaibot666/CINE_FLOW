@@ -5376,6 +5376,8 @@ async fn camera_match_analyze_clip_internal(
     clip_path: &str,
     frame_count: u32,
     analysis_source_override_path: Option<&str>,
+    source_profile_id: Option<&str>,
+    analysis_color_space: Option<&str>,
     app: &AppHandle,
     state: Arc<AppState>,
 ) -> Result<CameraMatchAnalysisResult, String> {
@@ -5515,6 +5517,8 @@ async fn camera_match_analyze_clip_internal(
         let representative_index = per_frame.len() / 2;
         let representative_frame_path = per_frame[representative_index].frame_path.clone();
         let frame_paths = per_frame.iter().map(|item| item.frame_path.clone()).collect();
+        let color_transform_report =
+            source_profile_id.map(crate::production_color_pipeline::build_color_transform_report);
 
         Ok(CameraMatchAnalysisResult {
             measurement_bundle: build_measurement_bundle(
@@ -5543,6 +5547,13 @@ async fn camera_match_analyze_clip_internal(
             aggregate,
             proxy_info,
             warnings: analysis_warnings,
+            source_profile_id: source_profile_id.map(str::to_string),
+            analysis_color_space: analysis_color_space.map(str::to_string).or_else(|| {
+                color_transform_report
+                    .as_ref()
+                    .map(|report| report.analysis_space.clone())
+            }),
+            color_transform_status: color_transform_report.map(|report| report.transform_status),
         })
     }
     .await;
@@ -7257,6 +7268,8 @@ pub async fn camera_match_analyze_clip(
     clip_path: String,
     frame_count: u32,
     analysis_source_override_path: Option<String>,
+    source_profile_id: Option<String>,
+    analysis_color_space: Option<String>,
     app: AppHandle,
     state: State<'_, Arc<AppState>>,
 ) -> Result<CameraMatchAnalysisResult, String> {
@@ -7266,6 +7279,8 @@ pub async fn camera_match_analyze_clip(
         &clip_path,
         frame_count,
         analysis_source_override_path.as_deref(),
+        source_profile_id.as_deref(),
+        analysis_color_space.as_deref(),
         &app,
         state.inner().clone(),
     )
@@ -7295,7 +7310,7 @@ pub async fn production_matchlab_save_run(
             crate::production_media_capabilities::classify_media_source(&item.analysis.clip_path);
         let confidence_score = compute_production_match_confidence(&ProductionMatchConfidenceInput {
             decode_path_kind: Some(capability_report.decode_path_kind.as_str()),
-            source_profile_id: None,
+            source_profile_id: item.analysis.source_profile_id.as_deref(),
             chart_detected: item.calibration.as_ref().map(|calibration| calibration.chart_detected),
             calibration_quality_score: item
                 .calibration
@@ -7340,8 +7355,8 @@ pub async fn production_matchlab_save_run(
                 .transpose()
                 .map_err(|e| format!("Failed to serialize calibration payload: {}", e))?,
             capability_json: Some(capability_json),
-            source_profile_id: None,
-            analysis_color_space: None,
+            source_profile_id: item.analysis.source_profile_id,
+            analysis_color_space: item.analysis.analysis_color_space,
             decode_path_kind: Some(capability_report.decode_path_kind),
             confidence_score: Some(confidence_score),
             created_at: now.clone(),

@@ -602,6 +602,9 @@ export interface CameraMatchAnalysisResult {
     proxy_info?: string | null;
     warnings?: string[];
     measurement_bundle: ProductionMeasurementBundle;
+    source_profile_id?: string | null;
+    analysis_color_space?: string | null;
+    color_transform_status?: string | null;
 }
 
 export interface CalibrationPatchSample {
