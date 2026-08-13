@@ -785,6 +785,45 @@ export interface ProductionMediaCapabilityReport {
     warnings: string[];
 }
 
+export interface RawMetadataReport {
+    decoder_family?: string | null;
+    decoder_version?: string | null;
+    raw_format_family?: string | null;
+    camera_make?: string | null;
+    camera_model?: string | null;
+    camera_serial?: string | null;
+    lens_model?: string | null;
+    iso?: string | null;
+    shutter?: string | null;
+    aperture?: string | null;
+    white_balance?: string | null;
+    wb_multipliers?: string[] | null;
+    cfa_pattern?: string | null;
+    black_level?: string | null;
+    white_level?: string | null;
+    bit_depth?: string | null;
+    active_area?: string | null;
+    color_matrix?: string | null;
+    embedded_color_profile?: string | null;
+    timecode?: string | null;
+    warnings: string[];
+}
+
+export interface RawIngestReport {
+    source_path: string;
+    adapter_id: string;
+    support_tier: "native" | "native_candidate" | "vendor" | "proxy" | "unsupported" | string;
+    format_family: string;
+    decode_path_kind: string;
+    analysis_ready: boolean;
+    vendor_decoder_required: boolean;
+    proxy_required: boolean;
+    recommended_proxy_tool?: string | null;
+    raw_metadata: RawMetadataReport;
+    capability: ProductionMediaCapabilityReport;
+    warnings: string[];
+}
+
 export interface CameraProfile {
     brand: string;
     model: string;
