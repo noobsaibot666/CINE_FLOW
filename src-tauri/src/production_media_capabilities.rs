@@ -1,0 +1,220 @@
+use serde::{Deserialize, Serialize};
+use std::path::Path;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProductionMediaCapabilityReport {
+    pub source_path: String,
+    pub format_family: String,
+    pub decode_path_kind: String,
+    pub direct_analysis_supported: bool,
+    pub vendor_decoder_required: bool,
+    pub proxy_required: bool,
+    pub recommended_proxy_tool: Option<String>,
+    pub warnings: Vec<String>,
+}
+
+pub fn classify_media_source(source_path: &str) -> ProductionMediaCapabilityReport {
+    let extension = Path::new(source_path)
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase());
+
+    match extension.as_deref() {
+        Some("braw") => vendor_decoded(
+            source_path,
+            "BLACKMAGIC_RAW",
+            "Blackmagic RAW SDK / CineFlow BRAW bridge",
+        ),
+        Some("r3d") => vendor_decoded(source_path, "RED_R3D", "REDline / RED R3D SDK"),
+        Some("nev") => vendor_decoded(source_path, "NIKON_NRAW", "REDline / RED R3D SDK"),
+        Some("crm") | Some("rmf") => operator_proxy(
+            source_path,
+            "CANON_CINEMA_RAW",
+            "Canon Cinema RAW Development",
+            "Canon Cinema RAW sources need an operator-created analysis proxy until native decode is integrated.",
+        ),
+        Some("xocn") => operator_proxy(
+            source_path,
+            "SONY_XOCN",
+            "Sony Catalyst Prepare / Catalyst Browse",
+            "Sony X-OCN sources need an operator-created analysis proxy until native decode is integrated.",
+        ),
+        Some("mxf") => direct_original(
+            source_path,
+            "MXF",
+            vec![
+                "MXF can contain directly decodable video or camera RAW variants; metadata probing must confirm the source profile before analysis."
+                    .to_string(),
+            ],
+        ),
+        Some("mov") => direct_original(source_path, "QUICKTIME", Vec::new()),
+        Some("mp4") => direct_original(source_path, "MP4", Vec::new()),
+        _ => ProductionMediaCapabilityReport {
+            source_path: source_path.to_string(),
+            format_family: "UNKNOWN".to_string(),
+            decode_path_kind: "unsupported_original".to_string(),
+            direct_analysis_supported: false,
+            vendor_decoder_required: false,
+            proxy_required: true,
+            recommended_proxy_tool: None,
+            warnings: vec![
+                "Unsupported source extension. Import a ProRes, DNxHR, H.264, H.265, or HEVC proxy for analysis."
+                    .to_string(),
+            ],
+        },
+    }
+}
+
+fn direct_original(
+    source_path: &str,
+    format_family: &str,
+    warnings: Vec<String>,
+) -> ProductionMediaCapabilityReport {
+    ProductionMediaCapabilityReport {
+        source_path: source_path.to_string(),
+        format_family: format_family.to_string(),
+        decode_path_kind: "direct_original".to_string(),
+        direct_analysis_supported: true,
+        vendor_decoder_required: false,
+        proxy_required: false,
+        recommended_proxy_tool: None,
+        warnings,
+    }
+}
+
+fn vendor_decoded(
+    source_path: &str,
+    format_family: &str,
+    recommended_proxy_tool: &str,
+) -> ProductionMediaCapabilityReport {
+    ProductionMediaCapabilityReport {
+        source_path: source_path.to_string(),
+        format_family: format_family.to_string(),
+        decode_path_kind: "vendor_decoded".to_string(),
+        direct_analysis_supported: false,
+        vendor_decoder_required: true,
+        proxy_required: false,
+        recommended_proxy_tool: Some(recommended_proxy_tool.to_string()),
+        warnings: vec![
+            "Original camera RAW source requires a vendor decode path before ACES analysis."
+                .to_string(),
+        ],
+    }
+}
+
+fn operator_proxy(
+    source_path: &str,
+    format_family: &str,
+    recommended_proxy_tool: &str,
+    warning: &str,
+) -> ProductionMediaCapabilityReport {
+    ProductionMediaCapabilityReport {
+        source_path: source_path.to_string(),
+        format_family: format_family.to_string(),
+        decode_path_kind: "operator_proxy".to_string(),
+        direct_analysis_supported: false,
+        vendor_decoder_required: false,
+        proxy_required: true,
+        recommended_proxy_tool: Some(recommended_proxy_tool.to_string()),
+        warnings: vec![warning.to_string()],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::classify_media_source;
+
+    #[test]
+    fn classifies_known_camera_sources() {
+        assert_eq!(
+            classify_media_source("/clip/A001.braw").format_family,
+            "BLACKMAGIC_RAW"
+        );
+        assert_eq!(
+            classify_media_source("/clip/A001.r3d").format_family,
+            "RED_R3D"
+        );
+        assert_eq!(
+            classify_media_source("/clip/A001.nev").format_family,
+            "NIKON_NRAW"
+        );
+        assert_eq!(
+            classify_media_source("/clip/A001.crm").format_family,
+            "CANON_CINEMA_RAW"
+        );
+        assert_eq!(
+            classify_media_source("/clip/A001.rmf").format_family,
+            "CANON_CINEMA_RAW"
+        );
+        assert_eq!(
+            classify_media_source("/clip/A001.mxf").format_family,
+            "MXF"
+        );
+        assert_eq!(
+            classify_media_source("/clip/A001.mov").format_family,
+            "QUICKTIME"
+        );
+        assert_eq!(classify_media_source("/clip/A001.mp4").format_family, "MP4");
+    }
+
+    #[test]
+    fn marks_standard_containers_as_direct_analysis_sources() {
+        for source in ["/clip/A001.mov", "/clip/A001.mp4", "/clip/A001.mxf"] {
+            let report = classify_media_source(source);
+
+            assert_eq!(report.decode_path_kind, "direct_original");
+            assert!(report.direct_analysis_supported);
+            assert!(!report.vendor_decoder_required);
+            assert!(!report.proxy_required);
+            assert!(report.recommended_proxy_tool.is_none());
+        }
+    }
+
+    #[test]
+    fn marks_vendor_decoded_raw_sources() {
+        let braw = classify_media_source("/clip/A001.braw");
+        assert_eq!(braw.decode_path_kind, "vendor_decoded");
+        assert!(!braw.direct_analysis_supported);
+        assert!(braw.vendor_decoder_required);
+        assert!(!braw.proxy_required);
+        assert_eq!(
+            braw.recommended_proxy_tool.as_deref(),
+            Some("Blackmagic RAW SDK / CineFlow BRAW bridge")
+        );
+
+        let r3d = classify_media_source("/clip/A001.r3d");
+        assert_eq!(r3d.decode_path_kind, "vendor_decoded");
+        assert!(r3d.vendor_decoder_required);
+        assert_eq!(
+            r3d.recommended_proxy_tool.as_deref(),
+            Some("REDline / RED R3D SDK")
+        );
+    }
+
+    #[test]
+    fn marks_operator_proxy_raw_sources() {
+        for source in ["/clip/A001.crm", "/clip/A001.rmf", "/clip/A001.xocn"] {
+            let report = classify_media_source(source);
+
+            assert_eq!(report.decode_path_kind, "operator_proxy");
+            assert!(!report.direct_analysis_supported);
+            assert!(!report.vendor_decoder_required);
+            assert!(report.proxy_required);
+            assert!(report.recommended_proxy_tool.is_some());
+            assert!(!report.warnings.is_empty());
+        }
+    }
+
+    #[test]
+    fn marks_unknown_sources_as_unsupported() {
+        let report = classify_media_source("/clip/A001.xyz");
+
+        assert_eq!(report.format_family, "UNKNOWN");
+        assert_eq!(report.decode_path_kind, "unsupported_original");
+        assert!(!report.direct_analysis_supported);
+        assert!(!report.vendor_decoder_required);
+        assert!(report.proxy_required);
+        assert!(report.recommended_proxy_tool.is_none());
+        assert!(!report.warnings.is_empty());
+    }
+}

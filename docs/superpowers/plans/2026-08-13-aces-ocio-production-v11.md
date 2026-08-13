@@ -36,7 +36,7 @@
 - Modify: `src-tauri/src/lib.rs`
 - Test: Rust unit tests in the new module
 
-- [ ] **Step 1: Write tests for file classification**
+- [x] **Step 1: Write tests for file classification**
 
 Add tests covering `.braw`, `.r3d`, `.nev`, `.crm`, `.rmf`, `.mxf`, `.mov`, `.mp4`, and unknown extensions.
 
@@ -51,13 +51,13 @@ fn classifies_known_camera_sources() {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cd src-tauri && cargo test production_media_capabilities`
 
 Expected: compile failure because the module does not exist.
 
-- [ ] **Step 3: Implement capability structs**
+- [x] **Step 3: Implement capability structs**
 
 Create `ProductionMediaCapabilityReport` with:
 
@@ -74,13 +74,13 @@ pub struct ProductionMediaCapabilityReport {
 }
 ```
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `cd src-tauri && cargo test production_media_capabilities`
 
 Expected: all classification tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src-tauri/src/production_media_capabilities.rs src-tauri/src/lib.rs

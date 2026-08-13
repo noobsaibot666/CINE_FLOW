@@ -18,6 +18,7 @@ mod perf;
 mod production;
 mod production_calibration;
 mod production_match_lab;
+pub mod production_media_capabilities;
 mod review_core;
 mod scanner;
 mod thumbnail;
