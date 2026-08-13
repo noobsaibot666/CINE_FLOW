@@ -595,6 +595,8 @@ export interface CameraMatchAnalysisResult {
     source_path: string;
     source_kind?: "original" | "proxy" | string;
     original_format_kind?: string | null;
+    decode_path_kind?: string | null;
+    decode_source_path?: string | null;
     clip_path: string;
     clip_name: string;
     representative_frame_path: string;
@@ -612,6 +614,9 @@ export interface CameraMatchAnalysisResult {
     ocio_config_status?: string | null;
     ocio_config_source?: string | null;
     ocio_config_path?: string | null;
+    transform_path_kind?: string | null;
+    ocio_processor_path?: string | null;
+    trust_fallback_reason?: string | null;
     metrics_trusted?: boolean | null;
 }
 

@@ -141,6 +141,10 @@ pub struct CameraMatchAnalysisResult {
     pub source_kind: Option<String>,
     #[serde(default)]
     pub original_format_kind: Option<String>,
+    #[serde(default)]
+    pub decode_path_kind: Option<String>,
+    #[serde(default)]
+    pub decode_source_path: Option<String>,
     pub clip_path: String,
     pub clip_name: String,
     pub representative_frame_path: String,
@@ -169,6 +173,12 @@ pub struct CameraMatchAnalysisResult {
     pub ocio_config_source: Option<String>,
     #[serde(default)]
     pub ocio_config_path: Option<String>,
+    #[serde(default)]
+    pub transform_path_kind: Option<String>,
+    #[serde(default)]
+    pub ocio_processor_path: Option<String>,
+    #[serde(default)]
+    pub trust_fallback_reason: Option<String>,
     #[serde(default)]
     pub metrics_trusted: Option<bool>,
 }
@@ -1668,6 +1678,8 @@ mod tests {
             source_path: "/clip/A001.mov".to_string(),
             source_kind: Some("original".to_string()),
             original_format_kind: Some("QUICKTIME".to_string()),
+            decode_path_kind: None,
+            decode_source_path: None,
             clip_path: "/clip/A001.mov".to_string(),
             clip_name: "A001.mov".to_string(),
             representative_frame_path: "/cache/frame_0.jpg".to_string(),
@@ -1685,6 +1697,9 @@ mod tests {
             ocio_config_status: None,
             ocio_config_source: None,
             ocio_config_path: None,
+            transform_path_kind: None,
+            ocio_processor_path: None,
+            trust_fallback_reason: None,
             metrics_trusted: None,
         }
     }
@@ -1829,6 +1844,34 @@ mod tests {
         assert_eq!(decoded.ocio_config_source.as_deref(), Some("metadata"));
         assert_eq!(decoded.ocio_config_path.as_deref(), None);
         assert_eq!(decoded.metrics_trusted, Some(false));
+    }
+
+    #[test]
+    fn analysis_result_carries_decode_and_transform_provenance() {
+        let mut result = sample_analysis_result();
+        result.decode_path_kind = Some("direct_original".to_string());
+        result.decode_source_path = Some("/clip/A001.mov".to_string());
+        result.transform_path_kind = Some("ocio_frame_transform".to_string());
+        result.ocio_processor_path = Some("/usr/local/bin/ocioconvert".to_string());
+        result.trust_fallback_reason = None;
+        result.metrics_trusted = Some(true);
+
+        let json = serde_json::to_string(&result).expect("serialize analysis result");
+        let decoded: CameraMatchAnalysisResult =
+            serde_json::from_str(&json).expect("deserialize analysis result");
+
+        assert_eq!(decoded.decode_path_kind.as_deref(), Some("direct_original"));
+        assert_eq!(decoded.decode_source_path.as_deref(), Some("/clip/A001.mov"));
+        assert_eq!(
+            decoded.transform_path_kind.as_deref(),
+            Some("ocio_frame_transform")
+        );
+        assert_eq!(
+            decoded.ocio_processor_path.as_deref(),
+            Some("/usr/local/bin/ocioconvert")
+        );
+        assert_eq!(decoded.trust_fallback_reason, None);
+        assert_eq!(decoded.metrics_trusted, Some(true));
     }
 
     #[test]

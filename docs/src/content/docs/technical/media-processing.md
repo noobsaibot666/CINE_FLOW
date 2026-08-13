@@ -45,6 +45,14 @@ Current transform states include:
 
 Metrics are marked trusted only when decode and transform execution both pass. Metadata-only and processor-missing paths remain usable for review, but they are treated as provisional.
 
+Saved Match Lab analyses now persist decode and transform provenance alongside metrics:
+
+- `decode_path_kind`: the analysis-time decode path, such as direct original, vendor decode, native candidate, or operator proxy.
+- `decode_source_path`: the file that actually supplied analysis frames.
+- `transform_path_kind`: the transform state that produced the measured frames, such as OCIO frame transform or metadata-only.
+- `ocio_processor_path`: the processor executable used when a frame transform was attempted.
+- `trust_fallback_reason`: the explicit reason metrics stayed provisional.
+
 ## LibRaw Bridge Status
 
 Open still/camera RAW formats such as DNG, ARW, CR2, CR3, NEF, RAF, RW2, ORF, SRW, RWL, and IIQ are routed through the LibRaw adapter contract.

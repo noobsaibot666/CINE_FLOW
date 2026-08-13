@@ -3289,6 +3289,21 @@ function buildExportProvenance(analysis: CameraMatchAnalysisResult) {
     `Source profile: ${analysis.source_profile_id ?? "Unconfirmed"}`,
     `Color path: ${analysis.analysis_color_space ?? ANALYSIS_COLOR_SPACE} · ${formatTransformStatus(analysis.color_transform_status)}`,
   ];
+  if (analysis.decode_path_kind) {
+    lines.push(`Decode path: ${formatAnalysisDecodePathKind(analysis.decode_path_kind)}`);
+  }
+  if (analysis.decode_source_path) {
+    lines.push(`Decode source: ${analysis.decode_source_path}`);
+  }
+  if (analysis.transform_path_kind) {
+    lines.push(`Transform path: ${formatTransformStatus(analysis.transform_path_kind)}`);
+  }
+  if (analysis.ocio_processor_path) {
+    lines.push(`OCIO processor: ${analysis.ocio_processor_path}`);
+  }
+  if (analysis.trust_fallback_reason) {
+    lines.push(`Fallback reason: ${analysis.trust_fallback_reason.replace(/_/g, " ")}`);
+  }
   if (analysis.proxy_validation) {
     lines.push(`Proxy: ${formatProxyValidationStatus(analysis.proxy_validation.validation_status)} · ${formatProxyPairing(analysis.proxy_validation.source_pairing)}`);
     lines.push(`Proxy codec/resolution: ${analysis.proxy_validation.proxy_codec ?? "Unknown"} · ${analysis.proxy_validation.proxy_resolution ?? "Unknown"}`);
@@ -3440,6 +3455,16 @@ function formatAnalysisSourceLabel(analysis: CameraMatchAnalysisResult) {
   if (analysis.source_kind === "original") return "Original";
   if (analysis.source_kind) return analysis.source_kind;
   return "Original";
+}
+
+function formatAnalysisDecodePathKind(kind?: string | null) {
+  if (kind === "direct_original") return "Original";
+  if (kind === "vendor_decoded") return "Vendor decode";
+  if (kind === "native_candidate") return "Native candidate";
+  if (kind === "operator_proxy") return "Operator proxy";
+  if (kind === "unsupported_original") return "Unsupported";
+  if (!kind) return "Unknown";
+  return kind.replace(/_/g, " ");
 }
 
 function formatProxyValidationStatus(status?: string | null) {

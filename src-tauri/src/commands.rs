@@ -5413,14 +5413,24 @@ async fn camera_match_analyze_clip_internal(
 
     let result: Result<CameraMatchAnalysisResult, String> = async {
         let mut proxy_info: Option<String> = None;
+        let mut decode_path_kind = crate::production_media_capabilities::classify_media_source(clip_path)
+            .decode_path_kind;
+        let mut decode_source_path = clip_path.to_string();
+        let mut decode_fallback_reason: Option<String> = None;
         let source_path = if let Some(override_path) = analysis_source_override_path {
             validate_analysis_override_path(override_path)?;
             proxy_info = Some("Override source: operator-selected proxy".to_string());
+            decode_path_kind = "operator_proxy".to_string();
+            decode_source_path = override_path.to_string();
+            decode_fallback_reason = Some("operator_selected_proxy".to_string());
             override_path.to_string()
         } else if is_decoder_backed_raw_path(clip_path) {
             let proxy_result =
                 ensure_matchlab_proxy_internal(project_id, camera_slot, clip_path, app, state.clone())
                     .await?;
+            decode_path_kind = "vendor_decoded".to_string();
+            decode_source_path = proxy_result.proxy_path.clone();
+            decode_fallback_reason = Some("vendor_decode_proxy".to_string());
             proxy_info = Some(format!(
                 "Proxy: {} | Decoder: {} | Strategy: {}",
                 proxy_result.proxy_path,
@@ -5621,9 +5631,26 @@ async fn camera_match_analyze_clip_internal(
             .as_ref()
             .map(|report| {
                 report.metrics_trusted
-                    && !(analysis_source_override_path.is_some() || is_braw_path(clip_path))
+                    && decode_path_kind == "direct_original"
             })
             .or(Some(false));
+        let transform_path_kind = ocio_execution_report.as_ref().map(|report| {
+            if report.execution_status == "transform_applied" {
+                "ocio_frame_transform".to_string()
+            } else {
+                report.execution_status.clone()
+            }
+        });
+        let trust_fallback_reason = if metrics_trusted == Some(true) {
+            None
+        } else {
+            decode_fallback_reason.or_else(|| {
+                ocio_execution_report
+                    .as_ref()
+                    .map(|report| format!("color_transform_{}", report.execution_status))
+                    .or_else(|| Some("missing_source_profile_or_transform".to_string()))
+            })
+        };
 
         Ok(CameraMatchAnalysisResult {
             measurement_bundle: build_measurement_bundle(
@@ -5644,6 +5671,8 @@ async fn camera_match_analyze_clip_internal(
                 "original".to_string()
             }),
             original_format_kind: Some(classify_source_format(clip_path)),
+            decode_path_kind: Some(decode_path_kind),
+            decode_source_path: Some(decode_source_path),
             clip_path: clip_path.to_string(),
             clip_name: clip_name.clone(),
             representative_frame_path,
@@ -5666,6 +5695,9 @@ async fn camera_match_analyze_clip_internal(
             ocio_config_status,
             ocio_config_source,
             ocio_config_path,
+            transform_path_kind,
+            ocio_processor_path: ocio_processor_status.executable_path.clone(),
+            trust_fallback_reason,
             metrics_trusted,
         })
     }
@@ -7435,8 +7467,13 @@ pub async fn production_matchlab_save_run(
         let source_hash = hash_source_signature(&item.analysis.clip_path);
         let capability_report =
             crate::production_media_capabilities::classify_media_source(&item.analysis.clip_path);
+        let analysis_decode_path_kind = item
+            .analysis
+            .decode_path_kind
+            .clone()
+            .unwrap_or_else(|| capability_report.decode_path_kind.clone());
         let confidence_score = compute_production_match_confidence(&ProductionMatchConfidenceInput {
-            decode_path_kind: Some(capability_report.decode_path_kind.as_str()),
+            decode_path_kind: Some(analysis_decode_path_kind.as_str()),
             source_profile_id: item.analysis.source_profile_id.as_deref(),
             color_transform_status: item.analysis.color_transform_status.as_deref(),
             metrics_trusted: item.analysis.metrics_trusted,
@@ -7497,7 +7534,7 @@ pub async fn production_matchlab_save_run(
             capability_json: Some(capability_json),
             source_profile_id: item.analysis.source_profile_id,
             analysis_color_space: item.analysis.analysis_color_space,
-            decode_path_kind: Some(capability_report.decode_path_kind),
+            decode_path_kind: Some(analysis_decode_path_kind),
             confidence_score: Some(confidence_score),
             created_at: now.clone(),
         });

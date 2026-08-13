@@ -240,10 +240,10 @@ git commit -m "Add OCIO processor readiness reporting"
 - Modify: `src-tauri/src/production_media_capabilities.rs`
 - Test: relevant Rust tests under `src-tauri/tests/`
 
-- [ ] Add provenance fields for decode path, transform path, processor path, and fallback reason.
-- [ ] Ensure Match Normalize labels metrics trusted only when decode and OCIO transform both succeeded.
-- [ ] Ensure proxy analysis remains explicitly provisional.
-- [ ] Commit with `git commit -m "Use decode and transform provenance for analysis trust"`.
+- [x] Add provenance fields for decode path, transform path, processor path, and fallback reason.
+- [x] Ensure Match Normalize labels metrics trusted only when decode and OCIO transform both succeeded.
+- [x] Ensure proxy analysis remains explicitly provisional.
+- [x] Commit with `git commit -m "Use decode and transform provenance for analysis trust"`.
 
 ### Task 5: UI Import and Diagnostics Closure
 

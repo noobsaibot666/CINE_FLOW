@@ -915,7 +915,7 @@ export function buildMatchPresetPayload(
       trust_label: buildMatchNormalizeTrustSummary(runResultsBySlot.get(camera.slot)).label,
       trust_reasons: buildMatchNormalizeTrustSummary(runResultsBySlot.get(camera.slot)).reasons,
       confidence_score: runResultsBySlot.get(camera.slot)?.confidence_score ?? null,
-      decode_path_kind: runResultsBySlot.get(camera.slot)?.decode_path_kind ?? null,
+      decode_path_kind: runResultsBySlot.get(camera.slot)?.analysis.decode_path_kind ?? runResultsBySlot.get(camera.slot)?.decode_path_kind ?? null,
     })),
   };
 }
@@ -945,6 +945,7 @@ function buildMatchNormalizeChecklist(
     ? result.analysis.aggregate.rgb_medians.blue - heroResult.analysis.aggregate.rgb_medians.blue
     : null;
   const calibration = result.calibration;
+  const checklistDecodePathKind = getAnalysisDecodePathKind(result);
   const checklist = [
     lumaDelta != null
       ? `Measured exposure delta vs Hero ${heroSlot}: ${formatSigned(lumaDelta)} median luma; normalize exposure before color trims.`
@@ -955,13 +956,14 @@ function buildMatchNormalizeChecklist(
     calibration?.chart_detected
       ? `Chart quality ${calibration.calibration_quality_level}; ${formatDeltaEChange(calibration.mean_delta_e_before, calibration.mean_delta_e_after)}.`
       : "No approved chart calibration on this slot; treat recommendations as signal-only.",
-    result.decode_path_kind
-      ? `Decode path: ${formatDecodePathKind(result.decode_path_kind)}.`
+    checklistDecodePathKind
+      ? `Decode path: ${formatDecodePathKind(checklistDecodePathKind)}.`
       : "Decode path not persisted; confirm original/proxy relationship before saving a final preset.",
   ];
 
-  const heroDecode = heroResult?.decode_path_kind;
-  if (heroDecode && result.decode_path_kind && heroDecode !== result.decode_path_kind) {
+  const heroDecode = heroResult ? getAnalysisDecodePathKind(heroResult) : null;
+  const resultDecode = getAnalysisDecodePathKind(result);
+  if (heroDecode && resultDecode && heroDecode !== resultDecode) {
     checklist.push(`Decode path differs from Hero ${heroSlot}; keep this preset tied to the saved analysis run.`);
   }
   for (const reason of buildMatchNormalizeTrustSummary(result).reasons.slice(0, 3)) {
@@ -989,6 +991,15 @@ function buildMatchNormalizeEvidence(result?: ProductionMatchLabRunResult): stri
   }
   if (analysis.analysis_color_space || analysis.color_transform_status) {
     evidence.push(`Color path ${analysis.analysis_color_space ?? "ACEScct"} · ${formatTransformStatus(analysis.color_transform_status)}`);
+  }
+  if (analysis.decode_path_kind) {
+    evidence.push(`Decode provenance ${formatDecodePathKind(analysis.decode_path_kind)}`);
+  }
+  if (analysis.transform_path_kind) {
+    evidence.push(`Transform provenance ${formatTransformStatus(analysis.transform_path_kind)}`);
+  }
+  if (analysis.trust_fallback_reason) {
+    evidence.push(`Fallback ${formatTrustFallbackReason(analysis.trust_fallback_reason)}`);
   }
   if (analysis.proxy_validation) {
     evidence.push(`Proxy ${formatProxyValidationStatus(analysis.proxy_validation.validation_status)} · ${formatProxyPairing(analysis.proxy_validation.source_pairing)}`);
@@ -1018,7 +1029,11 @@ function buildMatchNormalizeTrustSummary(result?: ProductionMatchLabRunResult): 
     reasons.push("Source profile is missing.");
   }
   if (!analysis.metrics_trusted) {
-    reasons.push(`ACES metrics are provisional: ${formatTransformStatus(analysis.color_transform_status)}.`);
+    reasons.push(
+      analysis.trust_fallback_reason
+        ? `ACES metrics are provisional: ${formatTrustFallbackReason(analysis.trust_fallback_reason)}.`
+        : `ACES metrics are provisional: ${formatTransformStatus(analysis.color_transform_status)}.`,
+    );
   }
   if (analysis.proxy_validation?.validation_status === "warnings") {
     reasons.push("Proxy provenance has warnings.");
@@ -1026,7 +1041,8 @@ function buildMatchNormalizeTrustSummary(result?: ProductionMatchLabRunResult): 
   if (analysis.proxy_validation?.warnings?.[0]) {
     reasons.push(analysis.proxy_validation.warnings[0]);
   }
-  if (result.decode_path_kind === "operator_proxy") {
+  const decodePathKind = getAnalysisDecodePathKind(result);
+  if (decodePathKind === "operator_proxy") {
     reasons.push("Analysis used an operator proxy; keep the preset tied to that proxy export.");
   }
   if (result.calibration?.chart_detected === false) {
@@ -1044,10 +1060,14 @@ function buildMatchNormalizeTrustSummary(result?: ProductionMatchLabRunResult): 
   if (reasons.length === 0) {
     return { label: "Trusted", reasons: ["Decode, transform, proxy, and chart provenance are acceptable."] };
   }
-  if (analysis.source_kind === "proxy" || result.decode_path_kind === "operator_proxy") {
+  if (analysis.source_kind === "proxy" || decodePathKind === "operator_proxy") {
     return { label: "Proxy-only", reasons };
   }
   return { label: "Provisional", reasons };
+}
+
+function getAnalysisDecodePathKind(result: ProductionMatchLabRunResult): string | null {
+  return result.analysis.decode_path_kind ?? result.decode_path_kind ?? null;
 }
 
 function formatTransformStatus(status?: string | null) {
@@ -1068,6 +1088,17 @@ function formatProxyValidationStatus(status?: string | null) {
   if (status === "warnings") return "Needs review";
   if (!status) return "Not checked";
   return status.replace(/_/g, " ");
+}
+
+function formatTrustFallbackReason(reason?: string | null) {
+  if (!reason) return "No fallback reason";
+  if (reason === "operator_selected_proxy") return "operator-selected proxy";
+  if (reason === "vendor_decode_proxy") return "vendor decode/proxy path";
+  if (reason === "missing_source_profile_or_transform") return "missing source profile or transform";
+  if (reason.startsWith("color_transform_")) {
+    return `color transform ${formatTransformStatus(reason.replace("color_transform_", ""))}`;
+  }
+  return reason.replace(/_/g, " ");
 }
 
 function formatProxyPairing(pairing?: string | null) {
