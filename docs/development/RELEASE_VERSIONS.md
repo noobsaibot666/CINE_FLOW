@@ -28,7 +28,7 @@ collide with App Store Connect's own history. **Before bumping, check this log �
 
 | Version | Date       | App Store Connect                              | Direct DMG | Notes |
 |---------|------------|-------------------------------------------------|------------|-------|
-| 1.0.6   | 2026-08-14 | not yet uploaded                                 | not built  | Bumped after Transporter rejected a `1.0.5` upload for a duplicate version ID. Also includes the Fuji/Nikon OCIO false-trusted-status fix and staging-script hardening. |
+| 1.0.6   | 2026-08-14 | uploaded via Transporter, build created successfully | built, notarized, queued in Store Manager (pending_review as of this log entry) | Bumped after Transporter rejected a `1.0.5` upload for a duplicate version ID. Also includes the Fuji/Nikon OCIO false-trusted-status fix and staging-script hardening. First release to go through Store Manager instead of a direct write to `licensing-server/releases/actual/` — see CLAUDE.md § "Every release updates the self-served store too". |
 | 1.0.5   | 2026-05-18 | uploaded at least once (exact date unknown — predates this log) | built | `.pkg` rebuilt and re-signed on 2026-08-14 for the V1.2 OCIO/RAW gate work, but never re-uploaded — Transporter caught the version collision against the earlier `1.0.5` upload before a second upload happened. |
 | 1.0.4   | 2026-05-02 | unknown                                          | unknown    | Direct-distribution bundle-ID split (`com.exposeu.cineflow-direct`) landed same day. |
 | 1.0.3   | 2026-05-01 | unknown                                          | unknown    | |
@@ -41,7 +41,10 @@ Versions before `1.0.0` (`0.1.0`, `1.0.0-beta.*`) predate App Store submission a
 ## Updating this log
 
 Add a row after every `mac_sign_and_package.sh` run whose `.pkg` is actually handed to
-Transporter, and after every `deploy_direct_macos.sh` run that reaches the live download
-endpoint (`web_three/licensing-server/releases/actual/CineFlow.dmg`). A build that was only
-produced locally and never uploaded doesn't need a row — only versions that reached Apple's
-servers or the live DMG endpoint can collide with a future release.
+Transporter, and after every `deploy_direct_macos.sh` run (queues the DMG in Store Manager's
+Inbox — see CLAUDE.md § "Every release updates the self-served store too"). A build that was
+only produced locally and never uploaded/queued doesn't need a row — only versions that reached
+Apple's servers or Store Manager's pipeline can collide with a future release. Note the
+distinction: reaching Store Manager's Inbox burns nothing by itself (App Store Connect's
+version-uniqueness check only cares about Transporter uploads) — but once a human clicks
+Publish, the direct-dist file is live, which is the moment worth recording here regardless.

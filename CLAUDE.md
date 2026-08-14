@@ -93,7 +93,7 @@ they're higher than Apple's own history. Add a row to that log after every real 
 
 ### Direct Distribution (macOS DMG)
 
-One command from the project root — handles build, DMG creation, signing, notarization, stapling, and file delivery:
+One command from the project root — handles build, OCIO/RAW resource signing, DMG creation, signing, notarization, stapling, and queues it for review:
 
 ```bash
 bash scripts/production/deploy_direct_macos.sh
@@ -102,17 +102,33 @@ bash scripts/production/deploy_direct_macos.sh
 What it does:
 
 1. `npm run build:direct` — builds with `direct-dist` feature + Developer ID signing
-2. Creates DMG via bundled `bundle_dmg.sh` (sandbox-safe, works in any terminal)
-3. Signs the DMG with Developer ID
-4. Notarizes via `notarytool` using the `cineflow-notary` keychain profile
-5. Staples and validates
-6. Copies to `builds/direct_distribution/macos/CineFlow Suite_<version>_aarch64.dmg`
-7. Copies to `web_three/licensing-server/releases/actual/CineFlow.dmg` (the live download endpoint)
+2. Signs bundled OCIO/RAW resources (`Contents/Resources/resources/{bin,lib}`) — Tauri's own signing doesn't reach these, only the sidecars it knows about via `tauri.conf.json`; skipping this makes notarization reject the DMG
+3. Creates DMG via bundled `bundle_dmg.sh` (sandbox-safe, works in any terminal) — clears any stale DMG left at the target path by step 1 first, or `hdiutil convert` fails with "File exists" and silently leaves the wrong file in place
+4. Signs the DMG with Developer ID
+5. Notarizes via `notarytool` using the `cineflow-notary` keychain profile
+6. Staples and validates
+7. Archives to `builds/direct_distribution/macos/CineFlow Suite_<version>_aarch64.dmg`, then drops a `manifest.json` + the DMG (renamed to the fixed `CineFlow.dmg`) into Store Manager's ingest folder — **does not** write into `web_three/licensing-server/releases/` directly anymore (see "Every release updates the self-served store too" below)
 
-After the script: `cd /Users/alan/_localDEV/web_three && git push`, then on the server `sudo docker compose down && sudo docker compose up -d`.
+Signing identity is pinned by SHA-1 fingerprint in the script, not by name — the keychain has carried two valid, differently-dated certs under the same "Developer ID Application" name before, which makes plain-name `codesign` calls fail with "ambiguous." See the script's own comment for how to re-resolve the hash if the cert ever rotates.
 
-Signing identity: `Developer ID Application: Nudson Alan Terrinha Alves (RD7UU4Z3D2)`
 Keychain profile: `cineflow-notary` (apple-id: `alan.creative@icloud.com`, team: `RD7UU4Z3D2`)
+
+### Every release updates the self-served store too
+
+The self-served store (`alan-design.com/#/store`) is managed by a separate project, **Store Manager** (`/Users/alan/_localDEV/_creative/_store_manager`), not by anything in this repo. It is a real, running system (TrueNAS, always-on) with its own watch → review → publish pipeline — see its own `CLAUDE.md` and `docs/runbook.md` before touching it.
+
+**Whenever a version ships — to Transporter (App Store) or otherwise — the direct-distribution DMG must also be published through Store Manager**, or the self-served store keeps selling a stale build under the same product listing while the App Store version moves ahead. The two channels don't update each other automatically; nothing enforces this except doing it every time.
+
+The process, end to end:
+
+1. Bump all three version files (see Versioning above).
+2. Build the App Store `.pkg` and deliver via Transporter as normal.
+3. Run `bash scripts/production/deploy_direct_macos.sh` — it builds, signs, notarizes, staples, and drops the result into Store Manager's ingest folder automatically (step 7 above).
+4. Within ~30s the new version appears in Store Manager's dashboard Inbox (`http://192.168.178.146:5180`) as `pending_review`.
+5. **A human reviews it — Dry-run first, then Publish. Do not script around this step.** It's a deliberate gate: Publish touches live Stripe records and rewrites `web_three`'s registry files and the storefront JSON. Read the dry-run output; confirm it says "reusing existing price" for `cineflow`, not creating a new one.
+6. Follow the deploy checklist Store Manager prints after Publish — review the staging-clone diff, commit, push, then the TrueNAS pull+rebuild steps. See Store Manager's `docs/runbook.md` § "TrueNAS (production)" for known gotchas in that sequence (git LFS not on the TrueNAS host PATH, the staging clone's `safe.directory` requirement, and the real deploy path being `store-manager/app/`, not `store-manager/` itself).
+
+CineFlow's Stripe product/price already existed before Store Manager was adopted (`prod_UMMyM42VfpzZRZ` / `price_1TNeEgCsCSs3k4X1vI6y28he`, hardcoded in `licensing-server/products.js`) — Store Manager's database has a matching `products` row seeded with those same IDs so it reuses them instead of minting duplicates. Don't delete or "clean up" that row.
 
 ### Mac App Store (.pkg)
 
