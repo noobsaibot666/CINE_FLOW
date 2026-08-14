@@ -29,7 +29,10 @@ if (args.ocioConfig) {
 
 if (args.ocioProcessor) {
   const processorName = basename(resolve(args.ocioProcessor));
-  const stagedProcessorName = processorName === "oiiotool" ? "oiiotool" : "ocioconvert";
+  // Matches processor_is_oiiotool()'s substring check in
+  // production_ocio_frame_transform.rs, so a renamed build (e.g. oiiotool-osx-arm64)
+  // still stages under the name the backend dispatches oiiotool-style CLI args for.
+  const stagedProcessorName = processorName.includes("oiiotool") ? "oiiotool" : "ocioconvert";
   stageFile({
     label: "OCIO processor",
     source: args.ocioProcessor,
@@ -101,9 +104,11 @@ function stageFile({ label, source, destination, executable, validate, validatio
   mkdirSync(dirname(destinationPath), { recursive: true });
   copyFileSync(sourcePath, destinationPath);
 
-  if (executable) {
-    chmodSync(destinationPath, 0o755);
-  }
+  // copyFileSync preserves the source file's mode. Reference ACES/OCIO configs and
+  // vendored binaries are frequently distributed read-only (444), which would leave
+  // the staged copy non-writable and break a later re-stage with EACCES. Always set
+  // an explicit writable mode regardless of the source's permissions.
+  chmodSync(destinationPath, executable ? 0o755 : 0o644);
 
   staged.push({ label, destination: destinationPath });
 }

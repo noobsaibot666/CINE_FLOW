@@ -18,9 +18,7 @@ pub fn build_color_transform_report(source_profile_id: &str) -> ProductionColorT
         | "ARRI_LOGC4_WIDE_GAMUT4"
         | "RED_LOG3G10_RED_WIDE_GAMUT"
         | "BMD_FILM_GEN5_WIDE_GAMUT"
-        | "PANASONIC_VLOG_VGAMUT"
-        | "FUJI_FLOG2_FGAMUT"
-        | "NIKON_NLOG" => ProductionColorTransformReport {
+        | "PANASONIC_VLOG_VGAMUT" => ProductionColorTransformReport {
             source_profile_id: source_profile_id.to_string(),
             analysis_space: "ACEScg".to_string(),
             transform_engine: "OpenColorIO/ACES".to_string(),
@@ -65,8 +63,6 @@ mod tests {
             "RED_LOG3G10_RED_WIDE_GAMUT",
             "BMD_FILM_GEN5_WIDE_GAMUT",
             "PANASONIC_VLOG_VGAMUT",
-            "FUJI_FLOG2_FGAMUT",
-            "NIKON_NLOG",
         ] {
             let report = build_color_transform_report(source_profile_id);
 
@@ -75,6 +71,21 @@ mod tests {
             assert_eq!(report.transform_engine, "OpenColorIO/ACES");
             assert_eq!(report.transform_status, "metadata_ready");
             assert!(report.warnings.is_empty());
+        }
+    }
+
+    /// The UI offers these two source profiles (src/components/Production/sourceProfiles.ts),
+    /// but the bundled ACES/OCIO config has no Fuji or Nikon input transform, and
+    /// production_ocio_frame_transform.rs's ocio_color_space_name() has no mapping for them
+    /// either. Treat them as unsupported until real IDTs are bundled, rather than reporting
+    /// them as trusted while the pixel transform silently fails.
+    #[test]
+    fn fuji_and_nikon_profiles_are_not_treated_as_trusted_transforms_until_config_support_exists() {
+        for source_profile_id in ["FUJI_FLOG2_FGAMUT", "NIKON_NLOG"] {
+            let report = build_color_transform_report(source_profile_id);
+
+            assert_eq!(report.transform_status, "unsupported_source_profile");
+            assert!(!report.warnings.is_empty());
         }
     }
 
