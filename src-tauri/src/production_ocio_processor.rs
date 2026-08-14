@@ -45,6 +45,13 @@ pub fn probe_ocio_processor(resource_dir: Option<&Path>) -> ProductionOcioProces
         for bundled_processor in [
             resource_dir
                 .join("bin")
+                .join(platform_executable_name("oiiotool")),
+            resource_dir
+                .join("resources")
+                .join("bin")
+                .join(platform_executable_name("oiiotool")),
+            resource_dir
+                .join("bin")
                 .join(platform_executable_name("ocioconvert")),
             resource_dir
                 .join("resources")
@@ -58,7 +65,7 @@ pub fn probe_ocio_processor(resource_dir: Option<&Path>) -> ProductionOcioProces
     }
 
     ProductionOcioProcessorStatus::unavailable(
-        "No OCIO processor executable was found. Configure CINEFLOW_OCIO_PROCESSOR or bundle bin/ocioconvert to enable pixel transforms.",
+        "No OCIO processor executable was found. Configure CINEFLOW_OCIO_PROCESSOR or bundle bin/oiiotool or bin/ocioconvert to enable pixel transforms.",
     )
 }
 
@@ -103,6 +110,30 @@ mod tests {
         fs::create_dir_all(&bin_dir).expect("create nested processor bin dir");
         let processor = bin_dir.join("ocioconvert");
         fs::write(&processor, "#!/bin/sh\n").expect("write fake processor");
+
+        let status = probe_ocio_processor(Some(&resource_dir));
+
+        assert_eq!(status.processor_status, "processor_available");
+        assert_eq!(
+            status.executable_path.as_deref(),
+            Some(processor.to_string_lossy().as_ref())
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn prefers_oiiotool_for_bundled_ocio_processor() {
+        let root = std::env::temp_dir().join(format!(
+            "cineflow_ocio_processor_oiio_{}",
+            std::process::id()
+        ));
+        let resource_dir = root.join("Resources");
+        let bin_dir = resource_dir.join("resources").join("bin");
+        fs::create_dir_all(&bin_dir).expect("create nested processor bin dir");
+        fs::write(bin_dir.join("ocioconvert"), "#!/bin/sh\n").expect("write fake ocioconvert");
+        let processor = bin_dir.join("oiiotool");
+        fs::write(&processor, "#!/bin/sh\n").expect("write fake oiiotool");
 
         let status = probe_ocio_processor(Some(&resource_dir));
 

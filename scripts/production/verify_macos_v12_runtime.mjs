@@ -36,6 +36,8 @@ const optionalChecks = [
     join(resources, "resources", "config.ocio"),
   ]),
   anyFileCheck("ocio-processor", "OCIO processor", [
+    join(resources, "bin", "oiiotool"),
+    join(resources, "resources", "bin", "oiiotool"),
     join(resources, "bin", "ocioconvert"),
     join(resources, "resources", "bin", "ocioconvert"),
   ]),

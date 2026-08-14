@@ -28,10 +28,12 @@ if (args.ocioConfig) {
 }
 
 if (args.ocioProcessor) {
+  const processorName = basename(resolve(args.ocioProcessor));
+  const stagedProcessorName = processorName === "oiiotool" ? "oiiotool" : "ocioconvert";
   stageFile({
     label: "OCIO processor",
     source: args.ocioProcessor,
-    destination: join("src-tauri", "resources", "bin", "ocioconvert"),
+    destination: join("src-tauri", "resources", "bin", stagedProcessorName),
     executable: true,
   });
 }
@@ -122,12 +124,12 @@ Usage:
 
 Options:
   --ocio-config <path>      Copy an OCIO/ACES config named config.ocio.
-  --ocio-processor <path>   Copy an ocioconvert-compatible executable.
+  --ocio-processor <path>   Copy an oiiotool or ocioconvert executable.
   --libraw-bridge <path>    Copy a LibRaw frame-decode bridge executable.
 
 Staging destinations:
   src-tauri/resources/ocio/config.ocio
-  src-tauri/resources/bin/ocioconvert
+  src-tauri/resources/bin/oiiotool or src-tauri/resources/bin/ocioconvert
   src-tauri/resources/bin/libraw_bridge
 `);
 }

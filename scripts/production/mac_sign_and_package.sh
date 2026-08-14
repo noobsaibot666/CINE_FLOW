@@ -9,7 +9,12 @@ INSTALLER_IDENTITY="3rd Party Mac Developer Installer: Nudson Alan Terrinha Alve
 
 # Support files location
 INFRA_DIR="infrastructure/macos"
-SIDECAR_ENTITLEMENTS="$INFRA_DIR/entitlements.sidecar.plist"
+# Nested executables (no Info.plist of their own) must use app-sandbox + inherit
+# so they join the parent app's sandbox instead of failing to resolve their own
+# container. entitlements.sidecar.plist grants broad standalone capabilities but
+# omits `inherit`, which crashes bare Mach-O sidecars at launch (SIGTRAP, "unable
+# to get bundle identifier for container").
+SIDECAR_ENTITLEMENTS="src-tauri/entitlements.child.plist"
 APP_ENTITLEMENTS="$INFRA_DIR/entitlements.plist"
 PROVISION="src-tauri/embedded.provisionprofile"
 
@@ -29,6 +34,14 @@ find "$APP_PATH/Contents/Frameworks" -name "*.framework" -exec codesign --force 
 
 echo "🛡️  Phase 5: Signing libraries..."
 find "$APP_PATH/Contents/Resources/libs" -name "*.dylib" -exec codesign --force --verify --verbose --sign "$IDENTITY" --entitlements "$SIDECAR_ENTITLEMENTS" --options runtime {} \;
+
+echo "🛡️  Phase 5b: Signing bundled OCIO/RAW runtime (oiiotool, LibRaw bridge, dependency dylibs)..."
+if [ -d "$APP_PATH/Contents/Resources/resources/lib" ]; then
+  find "$APP_PATH/Contents/Resources/resources/lib" -name "*.dylib" -exec codesign --force --verify --verbose --sign "$IDENTITY" --entitlements "$SIDECAR_ENTITLEMENTS" --options runtime {} \;
+fi
+if [ -d "$APP_PATH/Contents/Resources/resources/bin" ]; then
+  find "$APP_PATH/Contents/Resources/resources/bin" -type f -perm -u+x -exec codesign --force --verify --verbose --sign "$IDENTITY" --entitlements "$SIDECAR_ENTITLEMENTS" --options runtime {} \;
+fi
 
 echo "🛡️  Phase 6: Signing sidecars..."
 codesign --force --verify --verbose --sign "$IDENTITY" --entitlements "$SIDECAR_ENTITLEMENTS" --options runtime "$APP_PATH/Contents/MacOS/REDline"

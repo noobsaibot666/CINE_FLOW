@@ -28,6 +28,12 @@ src-tauri/bin/*
 docs/bin/*
 !docs/bin/.gitkeep
 
+# OCIO/RAW runtime assets (staged via stage_macos_v12_assets.mjs; directories are
+# created on demand by the staging script, so no .gitkeep is needed)
+src-tauri/resources/bin/
+src-tauri/resources/lib/
+src-tauri/resources/ocio/
+
 # Exclude manual staging folders
 WIN/
 MacOS/
