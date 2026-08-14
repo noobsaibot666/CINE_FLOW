@@ -1,8 +1,12 @@
-import { existsSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 const defaultApp = "src-tauri/target/release/bundle/macos/CineFlow Suite.app";
-const defaultDmg = "src-tauri/target/release/bundle/dmg/CineFlow Suite_1.0.5_aarch64.dmg";
+// Tauri names the DMG after package.json's version, so derive the default path from
+// it instead of hardcoding a version number here — a stale hardcoded version silently
+// fails this "required" check on every release bump until someone remembers to update it.
+const packageVersion = JSON.parse(readFileSync(resolve("package.json"), "utf8")).version;
+const defaultDmg = `src-tauri/target/release/bundle/dmg/CineFlow Suite_${packageVersion}_aarch64.dmg`;
 
 const args = parseArgs(process.argv.slice(2));
 const appPath = resolve(args.app ?? defaultApp);

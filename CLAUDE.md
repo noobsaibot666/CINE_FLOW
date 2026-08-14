@@ -85,6 +85,12 @@ These rules come from `docs/AI_DEV_RULES.md` and `docs/AI_UI_CONTRACT.md` — fo
 - `src-tauri/Cargo.toml` → `version`
 - `src-tauri/tauri.conf.json` → `"version"`
 
+Before bumping, check `docs/development/RELEASE_VERSIONS.md` for the highest version ever
+actually uploaded to App Store Connect — not just the current value in these files — and go one
+above that. App Store Connect rejects a re-used version even if the prior upload was rejected,
+replaced, or never shipped, so the three files being in sync with each other doesn't guarantee
+they're higher than Apple's own history. Add a row to that log after every real upload attempt.
+
 ### Direct Distribution (macOS DMG)
 
 One command from the project root — handles build, DMG creation, signing, notarization, stapling, and file delivery:
