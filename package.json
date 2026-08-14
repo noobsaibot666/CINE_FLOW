@@ -11,6 +11,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "build:direct": "npm run build && tauri build --features direct-dist --config src-tauri/tauri.direct.conf.json",
+    "stage:macos:v12-assets": "node scripts/production/stage_macos_v12_assets.mjs",
     "verify:macos:v12": "node scripts/production/verify_macos_v12_runtime.mjs",
     "build:windows": "npm run build && node scripts/production/verify_windows_sidecars.mjs && tauri build --features direct-dist --bundles nsis"
   },

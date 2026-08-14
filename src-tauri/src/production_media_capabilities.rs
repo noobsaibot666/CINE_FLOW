@@ -17,6 +17,17 @@ pub fn classify_media_source(source_path: &str) -> ProductionMediaCapabilityRepo
     classify_media_source_with_libraw(source_path, None)
 }
 
+pub fn classify_media_source_from_environment_and_resources(
+    source_path: &str,
+    resource_dir: Option<&Path>,
+) -> ProductionMediaCapabilityReport {
+    let libraw = crate::production_libraw::inspect_libraw_adapter_from_environment_and_resources(
+        source_path,
+        resource_dir,
+    );
+    classify_media_source_with_libraw(source_path, Some(libraw))
+}
+
 pub fn classify_media_source_with_libraw(
     source_path: &str,
     libraw_override: Option<crate::production_libraw::LibRawAdapterReport>,
@@ -298,6 +309,29 @@ mod tests {
         assert!(!report.vendor_decoder_required);
         assert!(!report.proxy_required);
         assert!(report.recommended_proxy_tool.is_none());
+    }
+
+    #[test]
+    fn marks_open_camera_raw_as_direct_with_nested_resource_libraw_bridge() {
+        let root = std::env::temp_dir().join(format!(
+            "cineflow_media_cap_libraw_nested_{}",
+            std::process::id()
+        ));
+        let resource_dir = root.join("Resources");
+        let bin_dir = resource_dir.join("resources").join("bin");
+        std::fs::create_dir_all(&bin_dir).expect("create nested libraw bin");
+        std::fs::write(bin_dir.join("libraw_bridge"), "#!/bin/sh\n").expect("write fake bridge");
+
+        let report = super::classify_media_source_from_environment_and_resources(
+            "/clip/A001.nef",
+            Some(&resource_dir),
+        );
+
+        assert_eq!(report.decode_path_kind, "direct_original");
+        assert!(report.direct_analysis_supported);
+        assert!(!report.proxy_required);
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

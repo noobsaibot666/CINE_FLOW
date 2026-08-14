@@ -2661,7 +2661,10 @@ pub async fn get_app_info(app: AppHandle) -> Result<AppInfo, String> {
         "ACEScct",
         resource_dir.as_deref(),
     );
-    let libraw_status = crate::production_libraw::inspect_libraw_adapter("/diagnostics/A001.nef");
+    let libraw_status = crate::production_libraw::inspect_libraw_adapter_from_environment_and_resources(
+        "/diagnostics/A001.nef",
+        resource_dir.as_deref(),
+    );
     Ok(AppInfo {
         version: env!("CARGO_PKG_VERSION").to_string(),
         build_date: option_env!("BUILD_DATE").unwrap_or("unknown").to_string(),
@@ -5433,7 +5436,12 @@ async fn camera_match_analyze_clip_internal(
 
     let result: Result<CameraMatchAnalysisResult, String> = async {
         let mut proxy_info: Option<String> = None;
-        let mut decode_path_kind = crate::production_media_capabilities::classify_media_source(clip_path)
+        let resource_dir = app.path().resource_dir().ok();
+        let mut decode_path_kind =
+            crate::production_media_capabilities::classify_media_source_from_environment_and_resources(
+                clip_path,
+                resource_dir.as_deref(),
+            )
             .decode_path_kind;
         let mut decode_source_path = clip_path.to_string();
         let mut decode_fallback_reason: Option<String> = None;
@@ -7404,15 +7412,25 @@ pub async fn production_get_preset(
 #[tauri::command]
 pub async fn production_get_media_capability_report(
     source_path: String,
+    app: AppHandle,
 ) -> Result<crate::production_media_capabilities::ProductionMediaCapabilityReport, String> {
-    Ok(crate::production_media_capabilities::classify_media_source(&source_path))
+    let resource_dir = app.path().resource_dir().ok();
+    Ok(crate::production_media_capabilities::classify_media_source_from_environment_and_resources(
+        &source_path,
+        resource_dir.as_deref(),
+    ))
 }
 
 #[tauri::command]
 pub async fn production_get_raw_ingest_report(
     source_path: String,
+    app: AppHandle,
 ) -> Result<crate::production_raw_ingest::RawIngestReport, String> {
-    Ok(crate::production_raw_ingest::build_raw_ingest_report(&source_path))
+    let resource_dir = app.path().resource_dir().ok();
+    Ok(crate::production_raw_ingest::build_raw_ingest_report_from_environment_and_resources(
+        &source_path,
+        resource_dir.as_deref(),
+    ))
 }
 
 #[tauri::command]
@@ -7439,7 +7457,10 @@ pub async fn production_get_v12_readiness_report(
         "ACEScct",
         resource_dir.as_deref(),
     );
-    let libraw_status = crate::production_libraw::inspect_libraw_adapter("/diagnostics/A001.nef");
+    let libraw_status = crate::production_libraw::inspect_libraw_adapter_from_environment_and_resources(
+        "/diagnostics/A001.nef",
+        resource_dir.as_deref(),
+    );
 
     Ok(crate::production_v12_readiness::build_v12_readiness_report(
         crate::production_v12_readiness::V12ReadinessDependencyState {
@@ -7498,6 +7519,7 @@ pub async fn production_matchlab_save_run(
     project_id: String,
     hero_slot: String,
     results: Vec<ProductionMatchLabRunResultInput>,
+    app: AppHandle,
     state: State<'_, Arc<AppState>>,
 ) -> Result<String, String> {
     let run_id = uuid::Uuid::new_v4().to_string();
@@ -7510,10 +7532,14 @@ pub async fn production_matchlab_save_run(
     };
 
     let mut result_records = Vec::with_capacity(results.len());
+    let resource_dir = app.path().resource_dir().ok();
     for item in results {
         let source_hash = hash_source_signature(&item.analysis.clip_path);
         let capability_report =
-            crate::production_media_capabilities::classify_media_source(&item.analysis.clip_path);
+            crate::production_media_capabilities::classify_media_source_from_environment_and_resources(
+                &item.analysis.clip_path,
+                resource_dir.as_deref(),
+            );
         let analysis_decode_path_kind = item
             .analysis
             .decode_path_kind

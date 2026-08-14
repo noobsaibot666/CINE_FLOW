@@ -168,6 +168,15 @@ fn find_bundled_ocio_config(resource_dir: &Path) -> Option<PathBuf> {
         resource_dir.join("ocio").join("config.ocio"),
         resource_dir.join("aces").join("config.ocio"),
         resource_dir.join("config.ocio"),
+        resource_dir
+            .join("resources")
+            .join("ocio")
+            .join("config.ocio"),
+        resource_dir
+            .join("resources")
+            .join("aces")
+            .join("config.ocio"),
+        resource_dir.join("resources").join("config.ocio"),
     ]
     .into_iter()
     .find(|path| path.is_file())
@@ -416,6 +425,34 @@ mod tests {
             "ACEScct",
             None,
             Some(&root.join("Resources")),
+        );
+
+        assert_eq!(report.config_source, "bundled");
+        assert_eq!(report.config_status, "ocio_ready");
+        assert_eq!(
+            report.config_path.as_deref(),
+            Some(bundled_config.to_string_lossy().as_ref())
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn discovers_nested_tauri_resource_ocio_config() {
+        let root = std::env::temp_dir().join(format!(
+            "cineflow_ocio_nested_bundled_{}",
+            std::process::id()
+        ));
+        let resource_dir = root.join("Resources");
+        let bundled_dir = resource_dir.join("resources").join("ocio");
+        fs::create_dir_all(&bundled_dir).expect("create nested bundled ocio dir");
+        let bundled_config = bundled_dir.join("config.ocio");
+        fs::write(&bundled_config, "ocio_profile_version: 2").expect("write bundled config");
+
+        let report = build_ocio_config_status_from_discovery(
+            "SONY_SLOG3_SGAMUT3_CINE",
+            "ACEScct",
+            None,
+            Some(&resource_dir),
         );
 
         assert_eq!(report.config_source, "bundled");

@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 const OPEN_CAMERA_RAW_EXTENSIONS: &[&str] = &[
     "dng", "arw", "cr2", "cr3", "nef", "nrw", "raf", "rw2", "orf", "srf", "sr2", "pef", "srw",
@@ -25,6 +25,27 @@ pub struct LibRawAdapterReport {
 pub fn inspect_libraw_adapter(source_path: &str) -> LibRawAdapterReport {
     let configured_bridge = std::env::var("CINEFLOW_LIBRAW_BRIDGE").ok();
     inspect_libraw_adapter_with_bridge_path(source_path, configured_bridge.as_deref())
+}
+
+pub fn inspect_libraw_adapter_from_environment_and_resources(
+    source_path: &str,
+    resource_dir: Option<&Path>,
+) -> LibRawAdapterReport {
+    let configured_bridge = std::env::var("CINEFLOW_LIBRAW_BRIDGE")
+        .ok()
+        .filter(|value| !value.trim().is_empty());
+
+    let bridge_path = configured_bridge
+        .map(PathBuf::from)
+        .or_else(|| resource_dir.and_then(find_bundled_libraw_bridge));
+
+    inspect_libraw_adapter_with_bridge_path(
+        source_path,
+        bridge_path
+            .as_ref()
+            .map(|path| path.to_string_lossy())
+            .as_deref(),
+    )
 }
 
 pub fn inspect_libraw_adapter_with_bridge_path(
@@ -134,6 +155,18 @@ pub fn is_open_camera_raw_extension(source_path: &str) -> bool {
         .is_some_and(|extension| OPEN_CAMERA_RAW_EXTENSIONS.contains(&extension))
 }
 
+fn find_bundled_libraw_bridge(resource_dir: &Path) -> Option<PathBuf> {
+    [
+        resource_dir.join("bin").join("libraw_bridge"),
+        resource_dir
+            .join("resources")
+            .join("bin")
+            .join("libraw_bridge"),
+    ]
+    .into_iter()
+    .find(|path| path.is_file())
+}
+
 fn extension_lowercase(source_path: &str) -> Option<String> {
     Path::new(source_path)
         .extension()
@@ -144,8 +177,8 @@ fn extension_lowercase(source_path: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        inspect_libraw_adapter, inspect_libraw_adapter_with_bridge_path,
-        is_open_camera_raw_extension,
+        inspect_libraw_adapter, inspect_libraw_adapter_from_environment_and_resources,
+        inspect_libraw_adapter_with_bridge_path, is_open_camera_raw_extension,
     };
     use std::fs;
 
@@ -204,10 +237,8 @@ mod tests {
 
     #[test]
     fn runtime_bridge_reports_metadata_and_frame_decode_available() {
-        let root = std::env::temp_dir().join(format!(
-            "cineflow_libraw_bridge_{}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("cineflow_libraw_bridge_{}", std::process::id()));
         fs::create_dir_all(&root).expect("create test root");
         let bridge = root.join("libraw-bridge");
         fs::write(&bridge, "fake bridge").expect("write bridge");
@@ -222,6 +253,30 @@ mod tests {
         assert!(report.metadata_available);
         assert!(report.frame_decode_available);
         assert!(!report.proxy_required);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn nested_tauri_resource_bridge_reports_frame_decode_available() {
+        let root = std::env::temp_dir().join(format!(
+            "cineflow_libraw_nested_bridge_{}",
+            std::process::id()
+        ));
+        let resource_dir = root.join("Resources");
+        let bin_dir = resource_dir.join("resources").join("bin");
+        fs::create_dir_all(&bin_dir).expect("create nested libraw bin dir");
+        let bridge = bin_dir.join("libraw_bridge");
+        fs::write(&bridge, "#!/bin/sh\n").expect("write fake bridge");
+
+        let report = inspect_libraw_adapter_from_environment_and_resources(
+            "/camera/A001.nef",
+            Some(&resource_dir),
+        );
+
+        assert_eq!(report.decode_status, "frame_decode_available");
+        assert!(report.frame_decode_available);
+        assert!(!report.proxy_required);
+
         let _ = fs::remove_dir_all(root);
     }
 

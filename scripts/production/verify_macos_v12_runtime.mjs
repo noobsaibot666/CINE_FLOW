@@ -28,12 +28,21 @@ const requiredChecks = [
 
 const optionalChecks = [
   anyFileCheck("ocio-config", "OCIO/ACES config", [
+    join(resources, "ocio", "config.ocio"),
+    join(resources, "aces", "config.ocio"),
+    join(resources, "config.ocio"),
     join(resources, "resources", "ocio", "config.ocio"),
     join(resources, "resources", "aces", "config.ocio"),
     join(resources, "resources", "config.ocio"),
   ]),
-  fileCheck("ocio-processor", "OCIO processor", join(macos, "ocioconvert"), "blocked"),
-  fileCheck("libraw-bridge", "LibRaw frame-decode bridge", join(macos, "libraw_bridge"), "blocked"),
+  anyFileCheck("ocio-processor", "OCIO processor", [
+    join(resources, "bin", "ocioconvert"),
+    join(resources, "resources", "bin", "ocioconvert"),
+  ]),
+  anyFileCheck("libraw-bridge", "LibRaw frame-decode bridge", [
+    join(resources, "bin", "libraw_bridge"),
+    join(resources, "resources", "bin", "libraw_bridge"),
+  ]),
 ];
 
 const requiredFailed = requiredChecks.filter((check) => check.status !== "pass");
