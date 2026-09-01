@@ -6143,12 +6143,16 @@ async fn ensure_matchlab_proxy_inner(
     };
 
     if let RawProxyPlan::Unavailable(detail) = &proxy_plan {
-        mark_proxy_attempt_failure(&state, &proxy_key, None);
-        return Err(format_matchlab_proxy_error(
+        mark_proxy_attempt_failure(&state, &proxy_key, Some(&job_id));
+        let err = format_matchlab_proxy_error(
             "Proxy generation failed",
             "This camera RAW format needs a decoder that isn't set up yet.",
             &format!("File: {}\n\n{}", source_path, detail),
-        ));
+        );
+        // Drive the job to a terminal state so the slot's progress bar stops.
+        state.job_manager.mark_failed(&job_id, &err);
+        emit_job_state(app, &state.job_manager, &job_id);
+        return Err(err);
     }
 
     // Activate any security-scoped bookmark for the source file's volume before
@@ -8115,6 +8119,21 @@ pub async fn production_set_decoder_path(
         other => return Err(format!("Unknown decoder path key: {other}")),
     }
     crate::production_decoder_status::save_overrides(&state.app_data_dir, &overrides)
+}
+
+/// The folder analysis proxies are written to. Stable for the life of the
+/// install; created on first use. Surfaced in Decoder Setup so operators can see
+/// (and clear) where generated proxies live.
+#[tauri::command]
+pub async fn production_matchlab_proxy_cache_dir(
+    state: State<'_, Arc<AppState>>,
+) -> Result<String, String> {
+    let dir = std::path::Path::new(&state.cache_dir)
+        .join("production")
+        .join("cache")
+        .join("match_lab");
+    let _ = std::fs::create_dir_all(&dir);
+    Ok(dir.to_string_lossy().to_string())
 }
 
 #[tauri::command]

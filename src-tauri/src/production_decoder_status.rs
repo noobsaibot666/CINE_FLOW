@@ -125,14 +125,12 @@ fn resolve_setup() -> DecoderSetup {
         download_url: Some("https://www.blackmagicdesign.com/products/davinciresolve".into()),
         download_label: Some("Download DaVinci Resolve (free)".into()),
         steps: vec![
-            "Install the free version of DaVinci Resolve.".into(),
-            "Launch it and finish first-run setup.".into(),
-            "Keep DaVinci Resolve OPEN whenever you generate a proxy — the free edition only responds to CineFlow while it is running.".into(),
-            "Come back here and press Re-check.".into(),
+            "Install DaVinci Resolve (free) and keep it open while generating a proxy.".into(),
+            "Then press Re-check.".into(),
         ],
         locate_key: Some("resolve_path".into()),
         locate_kind: Some(if cfg!(target_os = "macos") { "app" } else { "file" }.into()),
-        locate_hint: Some("Select the DaVinci Resolve application if it isn't in the default location.".into()),
+        locate_hint: Some("Pick the DaVinci Resolve app if it's not in the default location.".into()),
     }
 }
 
@@ -141,15 +139,13 @@ fn red_setup() -> DecoderSetup {
         download_url: Some("https://www.red.com/downloads".into()),
         download_label: Some("Get REDCINE-X PRO or the R3D SDK (free)".into()),
         steps: vec![
-            "R3D is a proprietary codec — there is no open-source decoder, so you need RED's own tooling. Two options:".into(),
-            "A) Install REDCINE-X PRO (free, native Apple Silicon). CineFlow auto-detects its REDline; nothing else to configure.".into(),
-            "B) Or download the R3D SDK from RED's developer portal, unzip it somewhere permanent, press Locate… and pick that folder.".into(),
-            "Already run DaVinci Resolve? Leave it open — CineFlow can decode R3D through Resolve with no RED install at all.".into(),
-            "Press Re-check when done.".into(),
+            "Install REDCINE-X PRO (free) — CineFlow auto-detects its REDline.".into(),
+            "Or press Locate… and pick an unzipped R3D SDK folder.".into(),
+            "Or keep DaVinci Resolve open — it decodes R3D with no RED install.".into(),
         ],
         locate_key: Some("red_sdk_dir".into()),
         locate_kind: Some("directory".into()),
-        locate_hint: Some("Pick the unzipped R3D SDK folder (contains Redistributable/ and Include/), or the REDCINE-X PRO app.".into()),
+        locate_hint: Some("Pick the R3D SDK folder (has Redistributable/ and Include/), or the REDCINE-X PRO app.".into()),
     }
 }
 
@@ -379,13 +375,13 @@ fn decide_resolve_or_proxy(family: &str, label: &str, resolve: Option<&str>) -> 
             family,
             label,
             "resolve",
-            "This format decodes through DaVinci Resolve. Make sure Resolve is open before you press Generate proxy — or attach an MP4/ProRes proxy instead.",
+            "Decodes through DaVinci Resolve — keep Resolve open when generating a proxy, or attach an MP4/ProRes proxy.",
         );
     }
     needs_setup(
         family,
         label,
-        "This format decodes through DaVinci Resolve. Install it (free) and keep it open for this operation, or attach an MP4/ProRes proxy.",
+        "Needs DaVinci Resolve (free) open during proxy generation, or an attached MP4/ProRes proxy.",
         resolve_setup(),
     )
 }
@@ -434,7 +430,7 @@ fn probe_resolve(resolve: Option<&str>) -> DecoderStatus {
                 "RESOLVE",
                 "DaVinci Resolve (universal fallback)",
                 "resolve",
-                "Installed. Decodes R3D / CRM / X-OCN / ARRIRAW when no other decoder is set up — it must be OPEN while a proxy is generated.",
+                "Installed. Decodes R3D / CRM / X-OCN / ARRIRAW — keep it open while a proxy is generated.",
             );
             s.path = Some(path.to_string());
             s.setup = Some(resolve_setup());
@@ -443,7 +439,7 @@ fn probe_resolve(resolve: Option<&str>) -> DecoderStatus {
         None => needs_setup(
             "RESOLVE",
             "DaVinci Resolve (universal fallback)",
-            "Not detected. Installing it (free) lets CineFlow decode every cinema RAW format.",
+            "Not detected. Installing it (free) covers every cinema RAW format.",
             resolve_setup(),
         ),
     }

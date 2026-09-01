@@ -1,6 +1,8 @@
 import React, { startTransition, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, BarChart3, ChevronDown, HelpCircle, Download, FolderOpen, Gauge, ImageIcon, Info, Maximize2, Palette, Pipette, RefreshCw, Trash2, Waves } from "lucide-react";
+import { AlertTriangle, BarChart3, ChevronDown, HelpCircle, Download, FolderOpen, Gauge, ImageIcon, Info, Maximize2, Palette, Pipette, RefreshCw, Trash2, Waves, X } from "lucide-react";
 import { open, save, confirm } from "@tauri-apps/plugin-dialog";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import { listen } from "@tauri-apps/api/event";
 import { openExternalUrl } from "../../utils/externalLinks";
 import {
   CalibrationChartDetection,
@@ -141,6 +143,10 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
   // Proxies the user explicitly generated (per slot, tied to the current clip).
   const [generatedProxyBySlot, setGeneratedProxyBySlot] = useState<Record<string, { path: string; clip: string }>>({});
   const [generatingProxySlots, setGeneratingProxySlots] = useState<Record<string, boolean>>({});
+  // Live proxy-decode progress, fed by the backend `job-progress` events for the
+  // `production_matchlab_proxy_<slot>` job. Cleared a few seconds after a result.
+  const [proxyProgressBySlot, setProxyProgressBySlot] = useState<Record<string, { pct: number; message: string; status: "running" | "done" | "failed" }>>({});
+  const proxyProgressTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const [sourceProfileBySlot, setSourceProfileBySlot] = useState<Record<string, ProductionSourceProfileId>>({});
   const [ocioStatusBySlot, setOcioStatusBySlot] = useState<Record<string, ProductionOcioConfigStatus>>({});
   const [frameDataUrls, setFrameDataUrls] = useState<Record<string, string>>({});
@@ -330,6 +336,9 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
   const refreshDecoderStatuses = React.useCallback(async () => {
     try {
       setDecoderStatuses(await invokeGuarded<ProductionDecoderStatus[]>("production_decoder_status"));
+      // Re-run the per-slot capability probes too so the slot chips reflect a
+      // decoder that was just installed or located.
+      setDecoderRefreshNonce((n) => n + 1);
     } catch (error) {
       console.error("Failed to read decoder status", error);
     }
@@ -338,6 +347,61 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
   useEffect(() => {
     void refreshDecoderStatuses();
   }, [refreshDecoderStatuses]);
+
+  // Mirror backend proxy-decode job progress into the per-slot card so a
+  // "Generate proxy" click shows a real bar + stage text instead of nothing.
+  useEffect(() => {
+    const PREFIX = "production_matchlab_proxy_";
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    void listen<{ kind: string; status: string; progress: number; message: string; error?: string | null }>(
+      "job-progress",
+      (event) => {
+        const job = event.payload;
+        if (!job || !job.kind.startsWith(PREFIX)) return;
+        const slot = job.kind.slice(PREFIX.length);
+        if (!slot) return;
+        const timers = proxyProgressTimersRef.current;
+        if (timers[slot]) {
+          clearTimeout(timers[slot]);
+          delete timers[slot];
+        }
+        if (job.status === "running" || job.status === "queued") {
+          setProxyProgressBySlot((prev) => ({
+            ...prev,
+            [slot]: { pct: Math.round((job.progress ?? 0) * 100), message: job.message || "Decoding…", status: "running" },
+          }));
+          return;
+        }
+        const done = job.status === "done";
+        setProxyProgressBySlot((prev) => ({
+          ...prev,
+          [slot]: {
+            pct: done ? 100 : (prev[slot]?.pct ?? 0),
+            message: done ? "Proxy ready" : job.error || job.message || "Proxy failed",
+            status: done ? "done" : "failed",
+          },
+        }));
+        timers[slot] = setTimeout(() => {
+          setProxyProgressBySlot((prev) => {
+            const next = { ...prev };
+            delete next[slot];
+            return next;
+          });
+          delete proxyProgressTimersRef.current[slot];
+        }, done ? 4000 : 9000);
+      },
+    ).then((fn) => {
+      if (disposed) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+      Object.values(proxyProgressTimersRef.current).forEach(clearTimeout);
+      proxyProgressTimersRef.current = {};
+    };
+  }, []);
 
   const locateDecoder = React.useCallback(async (key: string, kind: string | null | undefined) => {
     const picked = await open({
@@ -1165,6 +1229,11 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
     setGeneratingProxySlots((prev) => ({ ...prev, [slot]: true }));
     setSlotStatuses((prev) => ({ ...prev, [slot]: "Generating proxy…" }));
     setSlotErrors((prev) => { const n = { ...prev }; delete n[slot]; return n; });
+    if (proxyProgressTimersRef.current[slot]) {
+      clearTimeout(proxyProgressTimersRef.current[slot]);
+      delete proxyProgressTimersRef.current[slot];
+    }
+    setProxyProgressBySlot((prev) => ({ ...prev, [slot]: { pct: 0, message: "Starting decoder…", status: "running" } }));
     try {
       const res = await invokeGuarded<ProductionMatchLabProxyResult>("production_matchlab_ensure_proxy", {
         projectId: project.id,
@@ -1427,7 +1496,7 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
             <DecoderSetupPanel
               statuses={decoderStatuses}
               onClose={() => setDecoderSetupOpen(false)}
-              onRefresh={() => void refreshDecoderStatuses()}
+              onRefresh={() => refreshDecoderStatuses()}
               onLocate={(key, kind) => void locateDecoder(key, kind)}
               onClear={(key) => void clearDecoder(key)}
             />
@@ -1469,6 +1538,7 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
               const slotProxy = effectiveProxyForSlot(slot);
               const generatedProxy = generatedProxyForSlot(slot);
               const generatingProxy = Boolean(generatingProxySlots[slot]);
+              const proxyProgress = proxyProgressBySlot[slot];
               const sourceWorkflow = clipPath
                 ? describeSourceWorkflow(clipPath, capability, rawAnalysis, Boolean(slotProxy))
                 : null;
@@ -1565,10 +1635,20 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                           </button>
                         </div>
                       ) : null}
-                      {generatingProxy ? (
-                        <div style={{ marginTop: 2 }}>
-                          <div style={helperMetaStyle}>Decoding to an analysis proxy — this can take a few minutes.</div>
-                          <div className="matchlab-proxy-progress" />
+                      {(generatingProxy || proxyProgress) ? (
+                        <div style={{ marginTop: 4, display: "grid", gap: 4 }}>
+                          <div style={{ ...helperMetaStyle, display: "flex", alignItems: "center", gap: 6, color: proxyProgress?.status === "failed" ? "#fca5a5" : proxyProgress?.status === "done" ? "#86efac" : undefined }}>
+                            {proxyProgress?.status === "done" ? "✓ " : proxyProgress?.status === "failed" ? "✗ " : null}
+                            {proxyProgress?.message || "Decoding to an analysis proxy — this can take a few minutes."}
+                            {proxyProgress?.status === "running" && proxyProgress.pct > 0 ? ` · ${proxyProgress.pct}%` : null}
+                          </div>
+                          {proxyProgress && proxyProgress.status !== "running" ? null : proxyProgress && proxyProgress.pct > 0 ? (
+                            <div style={{ height: 4, borderRadius: 999, background: "rgba(255,255,255,0.08)", overflow: "hidden" }}>
+                              <div style={{ height: "100%", width: `${Math.min(100, Math.max(4, proxyProgress.pct))}%`, background: "var(--color-accent, #8b5cf6)", transition: "width 240ms ease" }} />
+                            </div>
+                          ) : (
+                            <div className="matchlab-proxy-progress" />
+                          )}
                         </div>
                       ) : null}
                     </div>
@@ -1579,6 +1659,15 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                         <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                           {analysisOverrideBySlot[slot] ? "Using attached proxy · " : "Using generated proxy · "}{getFileName(slotProxy)}
                         </span>
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-xs"
+                          style={{ flexShrink: 0 }}
+                          title={slotProxy}
+                          onClick={() => void revealItemInDir(slotProxy).catch((e) => console.warn("reveal proxy failed", e))}
+                        >
+                          Show in Finder
+                        </button>
                         <button
                           type="button"
                           className="btn btn-ghost btn-xs"
@@ -1729,7 +1818,7 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                               </div>
                             ) : null}
                           </>
-                        ) : isBrawClip(clipPath || "") || isProxyOnlyRawClip(clipPath || "") ? (
+                        ) : isBrawClip(clipPath || "") || isProxyOnlyRawClip(clipPath || "") || isDecodeFailureError(slotError, slotErrorDetail) ? (
                           <div style={errorActionsStyle}>
                             <button type="button" className="btn btn-ghost btn-sm" onClick={() => void pickExistingProxy(slot)} disabled={active}>
                               <FolderOpen size={14} /> Use existing MP4/MOV proxy…
@@ -2511,6 +2600,20 @@ function isCalibrationDetectionFailure(slotError?: string, summary?: string, det
   return text.includes("chart not detected");
 }
 
+// A decode / frame-extraction failure on any source (e.g. an ARRIRAW-in-MXF that
+// ffmpeg can't read) — offer the "attach a proxy" recovery even when the clip
+// isn't a format we'd normally route through a decoder.
+function isDecodeFailureError(slotError?: string, details?: string) {
+  const text = `${slotError || ""}\n${details || ""}`.toLowerCase();
+  return (
+    text.includes("no frames could be analyzed") ||
+    text.includes("no frames were analyzed") ||
+    text.includes("could not decode frames") ||
+    text.includes("can't be decoded directly") ||
+    text.includes("frame extraction failed")
+  );
+}
+
 function buildCalibrationRecoveryActions(slot: string, details: string) {
   const items: Array<{ label: string; reason: string }> = [];
   const detailText = details.toLowerCase();
@@ -3047,20 +3150,20 @@ function SourceSupportStrip({
   decoderStatuses: ProductionDecoderStatus[];
   onOpenDecoderSetup: () => void;
 }) {
+  const [dismissed, setDismissed] = useState(false);
   const needsSetup = decoderStatuses.filter((d) => d.state === "needs_setup").length;
+  if (dismissed) return null;
   return (
-    <section className="production-source-support" style={sourceSupportStripStyle} aria-label="Supported camera sources">
+    <aside className="production-source-support" style={sourceSupportStripStyle} role="status" aria-label="Camera source import">
       <div style={sourceSupportIntroStyle}>
-        <Info size={15} style={{ flexShrink: 0 }} />
-        <div style={sourceSupportTextBlockStyle}>
-          <div style={sourceSupportTitleStyle}>Camera source import</div>
-          <div style={sourceSupportBodyStyle}>
-            Select video, BRAW, vendor RAW, and open camera RAW here. Trusted analysis requires a decoded frame path and OCIO processor path; otherwise the slot stays provisional with a clear blocker.
-          </div>
-        </div>
-        <button type="button" className="btn btn-ghost btn-sm" style={{ flexShrink: 0 }} onClick={onOpenDecoderSetup}>
-          <Gauge size={14} /> Decoder Setup{needsSetup > 0 ? ` · ${needsSetup} to set up` : ""}
+        <Info size={14} style={{ flexShrink: 0 }} />
+        <div style={sourceSupportTitleStyle}>Camera source import</div>
+        <button type="button" aria-label="Dismiss" style={sourceNoticeCloseStyle} onClick={() => setDismissed(true)}>
+          <X size={13} />
         </button>
+      </div>
+      <div style={sourceSupportBodyStyle}>
+        Drop video, BRAW, vendor RAW, or open camera RAW into any slot. Unresolved formats fall back to an attached proxy.
       </div>
       <div style={sourceSupportGroupsStyle}>
         <SourceSupportGroup label="Direct video" value="MOV, MP4, MXF, MKV, AVI, ProRes RAW" tone="good" />
@@ -3068,7 +3171,10 @@ function SourceSupportStrip({
         <SourceSupportGroup label="Open RAW" value="DNG, ARW, CR2/CR3, NEF, RAF, RW2, ORF, IIQ" tone="warning" />
         <SourceSupportGroup label="Resolve path" value="X-OCN, Canon RAW, ARRIRAW" tone="warning" />
       </div>
-    </section>
+      <button type="button" className="btn btn-ghost btn-sm" style={{ alignSelf: "flex-start" }} onClick={onOpenDecoderSetup}>
+        <Gauge size={14} /> Decoder Setup{needsSetup > 0 ? ` · ${needsSetup} to set up` : ""}
+      </button>
+    </aside>
   );
 }
 
@@ -3081,67 +3187,107 @@ function DecoderSetupPanel({
 }: {
   statuses: ProductionDecoderStatus[];
   onClose: () => void;
-  onRefresh: () => void;
+  onRefresh: () => Promise<void>;
   onLocate: (key: string, kind: string | null | undefined) => void;
   onClear: (key: string) => void;
 }) {
+  const [busy, setBusy] = useState(false);
+  const [checkedAt, setCheckedAt] = useState<number | null>(null);
+  const [proxyDir, setProxyDir] = useState<string | null>(null);
+  useEffect(() => {
+    void invokeGuarded<string>("production_matchlab_proxy_cache_dir").then(setProxyDir).catch(() => undefined);
+  }, []);
   const toneFor = (state: string) =>
     state === "available" ? "#86efac" : state === "needs_setup" ? "#fcd34d" : "#fca5a5";
+  const handleRecheck = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await onRefresh();
+      setCheckedAt(Date.now());
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
     <div style={decoderPanelBackdropStyle} onClick={onClose}>
       <div style={decoderPanelCardStyle} onClick={(e) => e.stopPropagation()}>
         <div style={decoderPanelHeadStyle}>
-          <div>
+          <div style={{ minWidth: 0 }}>
             <strong style={{ fontSize: "1rem" }}>Decoder Setup</strong>
             <div style={{ ...sourceSupportBodyStyle, marginTop: 4 }}>
-              CineFlow analyses camera RAW through a decode provider. Bundled ones just work; the rest you install once or point us at. Nothing here blocks an analysis — unresolved formats fall back to an attached proxy.
+              Bundled decoders work out of the box. The rest need a one-time install or a folder path. Unresolved formats fall back to an attached proxy.
             </div>
           </div>
-          <button type="button" className="btn btn-ghost btn-sm" onClick={onRefresh}><RefreshCw size={14} /> Re-check</button>
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4, flexShrink: 0 }}>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => void handleRecheck()} disabled={busy}>
+              <RefreshCw size={14} style={busy ? { animation: "spin 1s linear infinite" } : undefined} /> {busy ? "Checking…" : "Re-check"}
+            </button>
+            {checkedAt != null && !busy && (
+              <span style={{ fontSize: "0.68rem", color: "var(--text-muted)" }}>Updated just now</span>
+            )}
+          </div>
         </div>
         <div style={{ display: "grid", gap: 10, overflowY: "auto" }}>
-          {statuses.map((d) => (
-            <div key={d.family} style={decoderRowStyle}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ width: 8, height: 8, borderRadius: 999, background: toneFor(d.state), flexShrink: 0 }} />
-                <strong style={{ fontSize: "0.88rem" }}>{d.label}</strong>
-                <span style={{ fontSize: "0.72rem", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
-                  {d.state === "available" ? `Ready · ${d.provider ?? ""}` : d.state === "needs_setup" ? "Needs setup" : "Unavailable"}
-                  {d.version ? ` · v${d.version}` : ""}
-                </span>
-              </div>
-              <div style={{ ...sourceSupportBodyStyle, marginTop: 2 }}>{d.detail}</div>
-              {d.path && <div style={{ fontSize: "0.72rem", color: "var(--text-muted)", wordBreak: "break-all" }}>{d.path}</div>}
-              {d.setup && (
-                <div style={{ display: "grid", gap: 6, marginTop: 6 }}>
-                  {d.setup.steps.length > 0 && (
-                    <ol style={{ margin: 0, paddingLeft: 18, fontSize: "0.78rem", color: "var(--text-secondary)", lineHeight: 1.5 }}>
-                      {d.setup.steps.map((s, i) => <li key={i}>{s}</li>)}
-                    </ol>
-                  )}
-                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                    {d.setup.download_url && (
-                      <button type="button" className="btn btn-secondary btn-sm" onClick={() => void openExternalUrl(d.setup!.download_url!)}>
-                        <Download size={14} /> {d.setup.download_label ?? "Download"}
-                      </button>
-                    )}
-                    {d.setup.locate_key && (
-                      <button type="button" className="btn btn-ghost btn-sm" onClick={() => onLocate(d.setup!.locate_key!, d.setup!.locate_kind)}>
-                        <FolderOpen size={14} /> Locate…
-                      </button>
-                    )}
-                    {d.path && d.setup.locate_key && (
-                      <button type="button" className="btn btn-ghost btn-sm" onClick={() => onClear(d.setup!.locate_key!)}>
-                        <Trash2 size={14} /> Clear path
-                      </button>
-                    )}
-                  </div>
-                  {d.setup.locate_hint && <div style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>{d.setup.locate_hint}</div>}
+          {statuses.map((d) => {
+            const ready = d.state === "available";
+            return (
+              <div key={d.family} style={decoderRowStyle}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ width: 8, height: 8, borderRadius: 999, background: toneFor(d.state), flexShrink: 0 }} />
+                  <strong style={{ fontSize: "0.88rem" }}>{d.label}</strong>
+                  <span style={{ fontSize: "0.72rem", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                    {ready ? `Ready · ${d.provider ?? ""}` : d.state === "needs_setup" ? "Needs setup" : "Unavailable"}
+                    {d.version ? ` · v${d.version}` : ""}
+                  </span>
                 </div>
-              )}
-            </div>
-          ))}
+                {!ready && <div style={{ ...sourceSupportBodyStyle, marginTop: 2 }}>{d.detail}</div>}
+                {d.path && <div style={{ fontSize: "0.72rem", color: "var(--text-muted)", wordBreak: "break-all" }}>{d.path}</div>}
+                {!ready && d.setup && (
+                  <div style={{ display: "grid", gap: 6, marginTop: 6 }}>
+                    {d.setup.steps.length > 0 && (
+                      <ol style={{ margin: 0, paddingLeft: 18, fontSize: "0.78rem", color: "var(--text-secondary)", lineHeight: 1.5 }}>
+                        {d.setup.steps.map((s, i) => <li key={i}>{s}</li>)}
+                      </ol>
+                    )}
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      {d.setup.download_url && (
+                        <button type="button" className="btn btn-secondary btn-sm" onClick={() => void openExternalUrl(d.setup!.download_url!)}>
+                          <Download size={14} /> {d.setup.download_label ?? "Download"}
+                        </button>
+                      )}
+                      {d.setup.locate_key && (
+                        <button type="button" className="btn btn-ghost btn-sm" onClick={() => onLocate(d.setup!.locate_key!, d.setup!.locate_kind)}>
+                          <FolderOpen size={14} /> Locate…
+                        </button>
+                      )}
+                      {d.path && d.setup.locate_key && (
+                        <button type="button" className="btn btn-ghost btn-sm" onClick={() => onClear(d.setup!.locate_key!)}>
+                          <Trash2 size={14} /> Clear path
+                        </button>
+                      )}
+                    </div>
+                    {d.setup.locate_hint && <div style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>{d.setup.locate_hint}</div>}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
+        {proxyDir && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: "0.72rem", color: "var(--text-muted)", minWidth: 0 }}>
+            <span style={{ flexShrink: 0 }}>Generated proxies:</span>
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={proxyDir}>{proxyDir}</span>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              style={{ flexShrink: 0 }}
+              onClick={() => void revealItemInDir(proxyDir).catch((e) => console.warn("reveal proxy dir failed", e))}
+            >
+              <FolderOpen size={14} /> Show in Finder
+            </button>
+          </div>
+        )}
         <div style={{ display: "flex", justifyContent: "flex-end" }}>
           <button type="button" className="btn btn-secondary btn-sm" onClick={onClose}>Done</button>
         </div>
@@ -4172,16 +4318,16 @@ const modalBodyStyle: React.CSSProperties = { color: "var(--text-secondary)", li
 const modalMetaStyle: React.CSSProperties = { marginTop: 10, color: "var(--text-muted)", fontSize: "0.82rem" };
 const modalActionsStyle: React.CSSProperties = { display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 18 };
 const subtleStyle: React.CSSProperties = { margin: 0, color: "var(--text-muted)", maxWidth: 760, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", textAlign: "left" };
-const sourceSupportStripStyle: React.CSSProperties = { display: "grid", gridTemplateColumns: "minmax(240px, 1.1fr) minmax(0, 1.9fr)", gap: 12, marginBottom: 14, padding: 14, borderRadius: 16, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.025)", minWidth: 0 };
-const sourceSupportIntroStyle: React.CSSProperties = { display: "flex", alignItems: "flex-start", gap: 10, minWidth: 0, color: "rgba(216,212,223,0.92)" };
-const decoderPanelBackdropStyle: React.CSSProperties = { position: "fixed", inset: 0, zIndex: 4000, background: "rgba(0,0,0,0.55)", backdropFilter: "blur(3px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 };
-const decoderPanelCardStyle: React.CSSProperties = { width: "min(720px, 100%)", maxHeight: "82vh", display: "flex", flexDirection: "column", gap: 16, padding: 22, borderRadius: 18, border: "1px solid rgba(255,255,255,0.1)", background: "var(--inspector-bg, #14151a)", boxShadow: "0 24px 64px rgba(0,0,0,0.5)" };
+const sourceSupportStripStyle: React.CSSProperties = { position: "fixed", top: 88, right: 24, zIndex: 30, width: 300, maxWidth: "calc(100vw - 48px)", maxHeight: "calc(100vh - 120px)", overflowY: "auto", display: "flex", flexDirection: "column", gap: 10, padding: 14, borderRadius: 14, border: "1px solid rgba(255,255,255,0.1)", background: "#101116", boxShadow: "0 16px 40px rgba(0,0,0,0.45)", minWidth: 0 };
+const sourceSupportIntroStyle: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8, minWidth: 0, color: "rgba(216,212,223,0.92)" };
+const sourceNoticeCloseStyle: React.CSSProperties = { marginLeft: "auto", flexShrink: 0, display: "inline-flex", alignItems: "center", justifyContent: "center", width: 22, height: 22, borderRadius: 6, border: "none", background: "transparent", color: "var(--text-muted)", cursor: "pointer" };
+const decoderPanelBackdropStyle: React.CSSProperties = { position: "fixed", inset: 0, zIndex: 4000, background: "rgba(0,0,0,0.72)", backdropFilter: "blur(2px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 };
+const decoderPanelCardStyle: React.CSSProperties = { width: "min(720px, 100%)", maxHeight: "82vh", display: "flex", flexDirection: "column", gap: 16, padding: 22, borderRadius: 18, border: "1px solid rgba(255,255,255,0.1)", background: "#101116", boxShadow: "0 24px 64px rgba(0,0,0,0.5)" };
 const decoderPanelHeadStyle: React.CSSProperties = { display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16 };
 const decoderRowStyle: React.CSSProperties = { display: "grid", gap: 3, padding: "12px 14px", borderRadius: 12, border: "1px solid rgba(255,255,255,0.07)", background: "rgba(255,255,255,0.02)" };
-const sourceSupportTextBlockStyle: React.CSSProperties = { display: "grid", gap: 4, minWidth: 0 };
 const sourceSupportTitleStyle: React.CSSProperties = { color: "var(--text-primary)", fontSize: "0.82rem", fontWeight: 800, lineHeight: 1.2 };
 const sourceSupportBodyStyle: React.CSSProperties = { color: "var(--text-secondary)", fontSize: "0.74rem", lineHeight: 1.45 };
-const sourceSupportGroupsStyle: React.CSSProperties = { display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 8, minWidth: 0 };
+const sourceSupportGroupsStyle: React.CSSProperties = { display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 8, minWidth: 0 };
 const sourceSupportGroupStyle: React.CSSProperties = { display: "grid", alignContent: "start", gap: 4, minWidth: 0, padding: "9px 10px", borderRadius: 12, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.02)" };
 const sourceSupportGroupLabelStyle: React.CSSProperties = { color: "var(--text-muted)", fontSize: "0.58rem", fontWeight: 800, letterSpacing: "0.08em", lineHeight: 1.15, textTransform: "uppercase" };
 const sourceSupportGroupValueStyle: React.CSSProperties = { color: "var(--text-primary)", fontSize: "0.72rem", fontWeight: 800, lineHeight: 1.3, whiteSpace: "normal", wordBreak: "break-word" };
