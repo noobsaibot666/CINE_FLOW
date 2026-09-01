@@ -1704,7 +1704,6 @@ function AppContent() {
                   }
                 >
                   <div className="jobs-indicator-content">
-                    <Briefcase size={16} />
                     <span className="jobs-label">Jobs</span>
                     {(scanning || extracting || runningJobs > 0 || failedJobs > 0) && (
                       <span className="jobs-count-badge">

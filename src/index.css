@@ -7545,16 +7545,21 @@ body {
 }
 
 /* Labelled Jobs button (header) — icon + "Jobs" text, sized like the
-   other header buttons rather than an icon-only square. */
-.btn-jobs-header {
+   other header buttons rather than an icon-only square. Specificity raised
+   to .btn.btn-jobs-header so it wins over the wider `.btn-jobs` base rule
+   that is declared later in this file. */
+.btn.btn-jobs-header {
   flex-direction: row;
   align-items: center;
   min-width: 0;
-  height: 32px;
-  padding: 0 12px;
+  width: auto;
+  height: 30px;
+  padding: 0 9px;
+  gap: 0;
 }
-.btn-jobs-header .jobs-indicator-content {
-  font-size: 12px;
+.btn.btn-jobs-header .jobs-indicator-content {
+  font-size: 11px;
+  gap: 5px;
 }
 /* Keep the running-job progress hairline pinned to the bottom edge instead
    of pushing it into the row. */
