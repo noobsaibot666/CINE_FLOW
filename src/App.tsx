@@ -53,7 +53,6 @@ const JobsPanel = lazy(() => import("./components/JobsPanel").then(m => ({ defau
 const AboutPanel = lazy(() => import("./components/AboutPanel").then(m => ({ default: m.AboutPanel })));
 const SettingsPanel = lazy(() => import("./components/SettingsPanel").then(m => ({ default: m.SettingsPanel })));
 const FolderCreator = lazy(() => import("./components/FolderCreator").then(m => ({ default: m.FolderCreator })));
-const MosaicBuilder = lazy(() => import("./components/MosaicBuilder").then(m => ({ default: m.MosaicBuilder })));
 const DuplicateFinderApp = lazy(() => import("./components/DuplicateFinderApp").then(m => ({ default: m.DuplicateFinderApp })));
 const ShotList = lazy(() => import("./components/PreProduction/ShotList"));
 const BrandedInstaller = lazy(() => import("./components/BrandedInstaller").then(m => ({ default: m.BrandedInstaller })));
@@ -184,6 +183,7 @@ function AppContent() {
   });
   const [othersMenuOpen, setOthersMenuOpen] = useState(false);
   const [activeMicroApp, setActiveMicroApp] = useState<"crop-factor" | "video-file-size" | "aspect-ratio" | "transfer-time" | null>(null);
+  // Internal key stays 'shot-planner'; the user-facing name for this section is "Reference Board".
   const isShotPlannerActive = activeTab === "preproduction" && activePreproductionApp === "shot-planner";
 
   // Persist tab state
@@ -331,6 +331,14 @@ function AppContent() {
 
   const [showPrint, setShowPrint] = useState(false);
   const [preparingExport, setPreparingExport] = useState<{ kind: "pdf" | "image" | "mosaic-pdf" | "mosaic-image"; message: string } | null>(null);
+  // Grid Mosaic export options (folded in from the former standalone Grid Mosaic module).
+  const [mosaicExportKind, setMosaicExportKind] = useState<"mosaic-pdf" | "mosaic-image" | null>(null);
+  const [mosaicDensity, setMosaicDensity] = useState<number>(() => {
+    const v = parseInt(localStorage.getItem("wp_mosaicDensity") || "12", 10);
+    return [7, 10, 12, 15, 20].includes(v) ? v : 12;
+  });
+  const [mosaicShuffle, setMosaicShuffle] = useState(false);
+  const [mosaicOriginalRatio, setMosaicOriginalRatio] = useState(false);
   const [showExportPanel, setShowExportPanel] = useState(false);
   const [selectedBlockIds, setSelectedBlockIds] = useState<string[]>([]);
   const [viewFilter] = useState<"all" | "picks" | "rated_min">("all");
@@ -360,6 +368,7 @@ function AppContent() {
   const [pendingExportValidation, setPendingExportValidation] = useState<null | {
     kind: "pdf" | "image" | "mosaic-pdf" | "mosaic-image";
     firstMissing: { clipId: string; field: "manual_order" | "shot_size" | "movement" };
+    options?: { shuffle?: boolean; useOriginalRatio?: boolean; density?: number };
   }>(null);
   const [lookbookSortMode, setLookbookSortMode] = useState<LookbookSortMode>(() => {
     const saved = localStorage.getItem("wp_lookbook_sort_mode");
@@ -553,7 +562,7 @@ function AppContent() {
   }, [safeInvoke]);
 
   // State for delayed actions
-  const [postScanTab, setPostScanTab] = useState<"preproduction" | "shot-planner" | "mosaic-builder" | "media-workspace" | "clip-review" | "scene-blocks" | "contact" | "blocks" | "all" | null>(null);
+  const [postScanTab, setPostScanTab] = useState<"preproduction" | "shot-planner" | "media-workspace" | "clip-review" | "scene-blocks" | "contact" | "blocks" | "all" | null>(null);
 
   const [projectLut, setProjectLut] = useState<{ path: string; name: string; hash: string } | null>(null);
   const [lutRenderNonce, setLutRenderNonce] = useState(0);
@@ -729,9 +738,9 @@ function AppContent() {
 
   useEffect(() => {
     if (projectId && postScanTab) {
-      if (postScanTab === "preproduction" || postScanTab === "shot-planner" || postScanTab === "mosaic-builder") {
+      if (postScanTab === "preproduction" || postScanTab === "shot-planner") {
         setActiveTab("preproduction");
-        setActivePreproductionApp(postScanTab === "preproduction" ? "shot-planner" : postScanTab);
+        setActivePreproductionApp("shot-planner");
       } else if (postScanTab === "media-workspace" || postScanTab === "clip-review") {
         setActiveTab("media-workspace");
         setActiveMediaWorkspaceApp("clip-review");
@@ -890,7 +899,7 @@ function AppContent() {
   }, []);
 
   const handleLoadFootage = useCallback(async (
-    targetTab?: "preproduction" | "shot-planner" | "mosaic-builder" | "media-workspace" | "clip-review" | "scene-blocks" | "contact" | "blocks" | "all",
+    targetTab?: "preproduction" | "shot-planner" | "media-workspace" | "clip-review" | "scene-blocks" | "contact" | "blocks" | "all",
     mode: 'folder' | 'files' = 'folder'
   ) => {
     const selected = await open({
@@ -907,7 +916,7 @@ function AppContent() {
 
     if (!selected) return;
 
-    const targetPhase: Phase = (targetTab === "preproduction" || targetTab === "shot-planner" || targetTab === "mosaic-builder") ? "pre" : "post";
+    const targetPhase: Phase = (targetTab === "preproduction" || targetTab === "shot-planner") ? "pre" : "post";
 
     // When loading more into an existing Shot Planner session, keep existing clips visible
     // during the scan so the user doesn't lose their tagged references.
@@ -1018,7 +1027,7 @@ function AppContent() {
     {
       target: ".tour-home-preproduction",
       title: "Planning & Prep",
-      description: "Prepare for your shoot with the Shot List builder, Folder Creator, and visual Shot Planner.",
+      description: "Prepare for your shoot with the Shot List builder, Folder Creator, and the visual Reference Board.",
       placement: "bottom",
       learnMore: [
         "Generate automated folder structures for multi-platform projects.",
@@ -1123,7 +1132,7 @@ function AppContent() {
     return null;
   }, [effectiveLookbookSortMode]);
 
-  const runExport = useCallback(async (kind: "pdf" | "image" | "mosaic-pdf" | "mosaic-image", options?: { shuffle?: boolean, useOriginalRatio?: boolean }) => {
+  const runExport = useCallback(async (kind: "pdf" | "image" | "mosaic-pdf" | "mosaic-image", options?: { shuffle?: boolean, useOriginalRatio?: boolean, density?: number }) => {
     const exportClips = getExportClips();
     if (exportClips.length === 0) {
       alert("Please select at least one clip to export.");
@@ -1139,7 +1148,7 @@ function AppContent() {
           clips: exportClips,
           thumbnailsByClipId,
           thumbnailCache,
-          thumbCount,
+          thumbCount: options?.density ?? thumbCount,
           jumpSeconds: selectedJumpSeconds,
           cacheKeyContext: thumbCacheContext,
           projectLutHash: projectLut?.hash || null,
@@ -1171,7 +1180,7 @@ function AppContent() {
         clips: exportClips,
         thumbnailsByClipId,
         thumbnailCache,
-        thumbCount,
+        thumbCount: options?.density ?? thumbCount,
         jumpSeconds: selectedJumpSeconds,
         cacheKeyContext: thumbCacheContext,
         projectLutHash: projectLut?.hash || null,
@@ -1194,7 +1203,10 @@ function AppContent() {
     }
   }, [appInfo, brandProfile, getExportClips, isShotPlannerActive, projectLut, projectName, selectedJumpSeconds, thumbCacheContext, thumbCount, thumbnailCache, thumbnailsByClipId]);
 
-  const requestExport = useCallback((kind: "pdf" | "image" | "mosaic-pdf" | "mosaic-image") => {
+  const requestExport = useCallback((
+    kind: "pdf" | "image" | "mosaic-pdf" | "mosaic-image",
+    options?: { shuffle?: boolean; useOriginalRatio?: boolean; density?: number },
+  ) => {
     setShotPlannerExportMenuOpen(false);
     const exportClips = getExportClips();
     if (exportClips.length === 0) {
@@ -1202,15 +1214,15 @@ function AppContent() {
       return;
     }
     if (!isShotPlannerActive) {
-      void runExport(kind);
+      void runExport(kind, options);
       return;
     }
     const firstMissing = getFirstMissingTag(exportClips);
     if (firstMissing) {
-      setPendingExportValidation({ kind, firstMissing });
+      setPendingExportValidation({ kind, firstMissing, options });
       return;
     }
-    void runExport(kind);
+    void runExport(kind, options);
   }, [getExportClips, getFirstMissingTag, isShotPlannerActive, runExport]);
 
 
@@ -1218,17 +1230,34 @@ function AppContent() {
     requestExport("image");
   }, [requestExport]);
 
-  const handleExportMosaicImage = useCallback(() => {
-    requestExport("mosaic-image");
-  }, [requestExport]);
-
   const handleExport = useCallback(() => {
     requestExport("pdf");
   }, [requestExport]);
 
+  // Grid Mosaic exports open an options dialog first (density / shuffle / ratio).
+  const handleExportMosaicImage = useCallback(() => {
+    setShotPlannerExportMenuOpen(false);
+    setReviewExportMenuOpen(false);
+    setMosaicExportKind("mosaic-image");
+  }, []);
+
   const handleExportMosaicPdf = useCallback(() => {
-    requestExport("mosaic-pdf");
-  }, [requestExport]);
+    setShotPlannerExportMenuOpen(false);
+    setReviewExportMenuOpen(false);
+    setMosaicExportKind("mosaic-pdf");
+  }, []);
+
+  const confirmMosaicExport = useCallback(() => {
+    const kind = mosaicExportKind;
+    setMosaicExportKind(null);
+    if (!kind) return;
+    localStorage.setItem("wp_mosaicDensity", String(mosaicDensity));
+    requestExport(kind, {
+      shuffle: mosaicShuffle,
+      useOriginalRatio: mosaicOriginalRatio,
+      density: mosaicDensity,
+    });
+  }, [mosaicExportKind, mosaicDensity, mosaicShuffle, mosaicOriginalRatio, requestExport]);
 
   const totalClips = clips.length;
   const runningJobs = jobs.filter((j) => j.status === "running" || j.status === "queued").length;
@@ -1346,7 +1375,7 @@ function AppContent() {
 
     const commandRefs = [
       { id: "nav-home", title: "Go to Modules", description: "Home screen", icon: "box", category: "Navigation" as const },
-      { id: "nav-shot-planner", title: "Shot Planner", description: "Pre-production planning", icon: "play", category: "Navigation" as const },
+      { id: "nav-shot-planner", title: "Reference Board", description: "Review references to plan the shoot", icon: "play", category: "Navigation" as const },
       { id: "nav-review", title: "Post-production Review", description: "Review and organize footage", icon: "play", category: "Navigation" as const },
       { id: "nav-safe-copy", title: "Safe Copy", description: "Secure ingest and verification", icon: "nav", category: "Navigation" as const },
     ];
@@ -1737,23 +1766,7 @@ function AppContent() {
               </div>
             )}
             {activeTab === 'preproduction' ? (
-              activePreproductionApp === 'mosaic-builder' ? (
-                <MosaicBuilder
-                  clips={clips}
-                  thumbnailCache={thumbnailCache}
-                  selectedIds={selectedClipIds}
-                  onToggleSelection={toggleClipSelection}
-                  onToggleSelectAll={() => toggleSelectAll(clips.filter(c => c.clip.flag !== "reject").map(c => c.clip.id))}
-                  thumbCount={thumbCount}
-                  onSetThumbCount={setThumbCount}
-                  jumpSeconds={selectedJumpSeconds}
-                  cacheKeyContext={thumbCacheContext}
-                  onExportPdf={(options) => runExport("mosaic-pdf", options)}
-                  onExportImage={(options) => runExport("mosaic-image", options)}
-                  onLoadFootage={() => handleLoadFootage("mosaic-builder")}
-                  scanning={projectStates.pre.scanning || false}
-                />
-              ) : activePreproductionApp === 'shot-planner' ? (
+              activePreproductionApp === 'shot-planner' ? (
                 projectId ? (
                   <div className="media-workspace">
                     <div className="stats-bar" style={{ background: "var(--inspector-bg)", borderBottom: "var(--inspector-border)", backdropFilter: "var(--inspector-glass-blur)" }}>
@@ -1921,9 +1934,9 @@ function AppContent() {
                   <div className="media-workspace">
                     <div className="workspace-empty-state premium-card" style={{ background: "var(--inspector-bg)", border: "var(--inspector-border)", backdropFilter: "var(--inspector-glass-blur)" }}>
                       <div className="module-icon"><Camera size={28} strokeWidth={1.5} /></div>
-                      <h2>Shot Planner</h2>
+                      <h2>Reference Board</h2>
                       <p style={{ color: "var(--text-secondary)", maxWidth: "400px", margin: "0 auto var(--space-md)" }}>
-                        Load reference clips to tag shot sizes, movement, and selections before the shoot.
+                        Load reference clips to tag shot sizes, movement, and selections, then export reference sheets or grid mosaics.
                       </p>
                       <button className="btn btn-secondary" onClick={() => handleLoadFootage("shot-planner")}>
                         <FolderOpen size={14} />
@@ -1997,26 +2010,9 @@ function AppContent() {
                         {isModuleLocked('shot-planner') && <TrialLockBadge />}
                         <div className="module-icon"><Camera size={20} strokeWidth={1.5} /></div>
                         <div className="module-info">
-                          <h3>Shot Planner</h3>
-                          <p>Analyze reference footage and export selected on-set reference sheets.</p>
+                          <h3>Reference Board</h3>
+                          <p>Review reference footage, tag shot size and movement, and export reference sheets or grid mosaics.</p>
                           <span className="module-action">{isModuleLocked('shot-planner') ? 'Full License required' : 'Open App'} <ArrowRight size={14} /></span>
-                        </div>
-                      </div>
-                      <div
-                        className={`module-card premium-card module-launcher-card ${isModuleLocked('mosaic-builder') ? 'disabled' : ''}`}
-                        style={{ position: 'relative' }}
-                        onClick={() => {
-                          if (isModuleLocked('mosaic-builder')) return;
-                          if (projectStates.pre.projectId) setActivePreproductionApp('mosaic-builder');
-                          else handleLoadFootage('mosaic-builder');
-                        }}
-                      >
-                        {isModuleLocked('mosaic-builder') && <TrialLockBadge />}
-                        <div className="module-icon"><LayoutGrid size={20} strokeWidth={1.5} /></div>
-                        <div className="module-info">
-                          <h3>Grid Mosaic</h3>
-                          <p>Generate large multi-frame image grids and PDF sheets from clip thumbnails.</p>
-                          <span className="module-action">{isModuleLocked('mosaic-builder') ? 'Full License required' : 'Open App'} <ArrowRight size={14} /></span>
                         </div>
                       </div>
                     </div>
@@ -2375,17 +2371,68 @@ function AppContent() {
                   <button
                     className="btn btn-accent"
                     onClick={() => {
-                      const kind = pendingExportValidation.kind;
+                      const { kind, options } = pendingExportValidation;
                       setPendingExportValidation(null);
                       setUiNotice({
                         title: "Untagged clips will be placed at the end of the export.",
                         hint: ""
                       });
-                      void runExport(kind);
+                      void runExport(kind, options);
                     }}
                   >
                     Export anyway
                   </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {mosaicExportKind && (
+            <div className="export-modal-backdrop" onClick={() => setMosaicExportKind(null)}>
+              <div className="export-modal" onClick={(e) => e.stopPropagation()}>
+                <div className="export-modal-header">
+                  <div className="export-modal-icon"><LayoutGrid size={18} /></div>
+                  <div>
+                    <h3 className="export-modal-title">Grid Mosaic {mosaicExportKind === "mosaic-pdf" ? "(PDF)" : "(Image)"}</h3>
+                    <p className="export-modal-subtitle">Frames per clip, order, and cell shape for the exported grid.</p>
+                  </div>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 16, padding: "4px 2px 12px" }}>
+                  <div>
+                    <span className="toolbar-label" style={{ textTransform: "uppercase", opacity: 0.6 }}>Frames per clip</span>
+                    <div className="clip-mode-pill-row" style={{ marginTop: 8, flexWrap: "wrap" }}>
+                      {[7, 10, 12, 15, 20].map((n) => (
+                        <button
+                          key={n}
+                          type="button"
+                          className={`clip-mode-pill ${mosaicDensity === n ? "active" : ""}`}
+                          onClick={() => setMosaicDensity(n)}
+                        >
+                          {n}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
+                    <div>
+                      <span className="toolbar-label" style={{ textTransform: "uppercase", opacity: 0.6 }}>Order</span>
+                      <div className="clip-mode-pill-row" style={{ marginTop: 8 }}>
+                        <button type="button" className={`clip-mode-pill ${!mosaicShuffle ? "active" : ""}`} onClick={() => setMosaicShuffle(false)}>Sequential</button>
+                        <button type="button" className={`clip-mode-pill ${mosaicShuffle ? "active" : ""}`} onClick={() => setMosaicShuffle(true)}>Shuffled</button>
+                      </div>
+                    </div>
+                    <div>
+                      <span className="toolbar-label" style={{ textTransform: "uppercase", opacity: 0.6 }}>Cell shape</span>
+                      <div className="clip-mode-pill-row" style={{ marginTop: 8 }}>
+                        <button type="button" className={`clip-mode-pill ${!mosaicOriginalRatio ? "active" : ""}`} onClick={() => setMosaicOriginalRatio(false)}>Square</button>
+                        <button type="button" className={`clip-mode-pill ${mosaicOriginalRatio ? "active" : ""}`} onClick={() => setMosaicOriginalRatio(true)}>Original</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div className="export-modal-actions">
+                  <button className="btn btn-secondary" onClick={() => setMosaicExportKind(null)}>Cancel</button>
+                  <button className="btn btn-accent" onClick={confirmMosaicExport}>Export mosaic</button>
                 </div>
               </div>
             </div>
