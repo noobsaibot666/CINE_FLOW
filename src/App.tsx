@@ -140,8 +140,10 @@ function AppContent() {
 
   const [activeTab, setActiveTab] = useState<"home" | "production" | "preproduction" | "shot-planner" | "media-workspace" | "contact" | "blocks" | "safe-copy" | "all" | "installer">(() => {
     if (IS_DEV) return "installer";
-    const saved = localStorage.getItem('wp_activeTab');
-    return (saved as any) || 'home';
+    // Always land on Pre-production at launch. We deliberately do not restore
+    // the last tab: restoring into Production mounts ProductionHome and fires
+    // the create-project prompt before the user has chosen to go there.
+    return 'preproduction';
   });
   const [activeProductionProject, setActiveProductionProject] = useState<ProductionProject | null>(null);
   const [activePreproductionApp, setActivePreproductionApp] = useState<string | null>(() => {
@@ -1615,9 +1617,7 @@ function AppContent() {
                     title={activeProductionProject ? `Project: ${activeProductionProject.name}` : "Projects"}
                   >
                     <Briefcase size={14} />
-                    <span style={{ maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {activeProductionProject ? activeProductionProject.name : 'Projects'}
-                    </span>
+                    <span>Projects</span>
                   </button>
                 )}
 
@@ -1694,7 +1694,7 @@ function AppContent() {
 
 
                 <button
-                  className={`btn btn-jobs btn-jobs-compact jobs-state-${jobHudState}`}
+                  className={`btn btn-jobs btn-jobs-header jobs-state-${jobHudState}`}
                   onClick={() => setJobsOpen(true)}
                   title={
                     (scanning || extracting) ? (scanning ? "Scanning…" : `Extracting ${extractProgress.done}/${extractProgress.total}`)
@@ -1705,6 +1705,7 @@ function AppContent() {
                 >
                   <div className="jobs-indicator-content">
                     <Briefcase size={16} />
+                    <span className="jobs-label">Jobs</span>
                     {(scanning || extracting || runningJobs > 0 || failedJobs > 0) && (
                       <span className="jobs-count-badge">
                         {(scanning || extracting) ? <span className="spinner spinner-xs" /> : (failedJobs > 0 ? failedJobs : runningJobs)}

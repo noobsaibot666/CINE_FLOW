@@ -1894,18 +1894,27 @@ body {
   display: flex;
   align-items: center;
   gap: var(--space-md);
+  /* Sit above the absolutely-centered nav so a narrow window occludes the
+     nav edge cleanly instead of overlapping its text. */
+  position: relative;
+  z-index: 30;
+  background: var(--bg-surface);
 }
 
 .app-header-right {
   display: flex;
   align-items: center;
   gap: var(--space-sm);
+  position: relative;
+  z-index: 30;
+  background: var(--bg-surface);
+  padding-left: 10px;
 }
 
 .app-tabs-nav.header-tabs {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 10px;
@@ -1922,7 +1931,7 @@ body {
 }
 
 .header-tabs .nav-tab {
-  padding: 6px 12px;
+  padding: 6px 10px;
   font-size: 12px;
 }
 
@@ -7518,6 +7527,7 @@ body {
   opacity: 0.82;
 }
 .active-project-pill span {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -7534,13 +7544,33 @@ body {
   transform: translateY(-2px);
 }
 
-/* Compact Jobs button (header) */
-.btn-jobs-compact {
+/* Labelled Jobs button (header) — icon + "Jobs" text, sized like the
+   other header buttons rather than an icon-only square. */
+.btn-jobs-header {
+  flex-direction: row;
+  align-items: center;
   min-width: 0;
-  padding: 0 10px;
   height: 32px;
+  padding: 0 12px;
 }
-.btn-jobs-compact .jobs-label { display: none; }
+.btn-jobs-header .jobs-indicator-content {
+  font-size: 12px;
+}
+/* Keep the running-job progress hairline pinned to the bottom edge instead
+   of pushing it into the row. */
+.btn-jobs-header .jobs-progress-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: auto;
+  height: 2px;
+  border-radius: 0 0 10px 10px;
+}
+.jobs-label {
+  font-weight: 600;
+  white-space: nowrap;
+}
 .jobs-count-badge {
   display: inline-flex;
   align-items: center;
