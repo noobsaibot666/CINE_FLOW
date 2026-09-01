@@ -8976,6 +8976,19 @@ body {
   border-color: rgba(255, 255, 255, 0.32);
 }
 
+/* Clean preview — strip the frame chrome (label bar, accent border, action
+   buttons) so the reframed video can be judged on its own. */
+.frame-preview-canvas-surface.clean-preview .frame-preview-frame-header {
+  display: none;
+}
+
+.frame-preview-canvas-surface.clean-preview .frame-preview-ratio-frame,
+.frame-preview-canvas-surface.clean-preview .frame-preview-ratio-frame.active,
+.frame-preview-canvas-surface.clean-preview .frame-preview-ratio-frame.selected {
+  border-color: transparent;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.55);
+}
+
 .frame-preview-frame-header {
   position: absolute;
   top: 0;
@@ -9397,31 +9410,47 @@ body {
 .frame-preview-playback-controls {
   display: flex;
   align-items: center;
-  gap: var(--space-md);
-  background: rgba(0, 0, 0, 0.3);
-  padding: 0 12px;
+  gap: 10px;
+  background: rgba(0, 0, 0, 0.32);
+  padding: 0 6px 0 4px;
   border-radius: 100px;
-  border: 1px solid rgba(255, 255, 255, 0.05);
-  width: 200px;
-  height: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  width: 208px;
+  height: 30px;
 }
 
 .playback-toggle-btn {
-  width: 20px;
-  height: 26px;
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
   padding: 0;
   display: flex !important;
   align-items: center;
   justify-content: center;
-  background: transparent;
+  border-radius: 999px;
+  background: var(--color-accent);
   border: none;
-  color: var(--color-accent);
+  color: #0d0b1a;
+  transition: filter var(--transition-fast), transform var(--transition-fast);
+}
+
+.playback-toggle-btn:hover {
+  filter: brightness(1.08);
+}
+
+.playback-toggle-btn:active {
+  transform: scale(0.94);
+}
+
+.playback-toggle-btn svg {
+  width: 12px;
+  height: 12px;
 }
 
 .frame-preview-scrubber {
   flex: 1;
   accent-color: var(--color-accent);
-  height: 4px;
+  height: 3px;
   cursor: pointer;
 }
 
@@ -9516,12 +9545,16 @@ body {
 }
 
 .frame-preview-filmstrip-scroll::-webkit-scrollbar {
-  height: 4px;
+  height: 2px;
 }
 
 .frame-preview-filmstrip-scroll::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.12);
-  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+}
+
+.frame-preview-filmstrip-scroll::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 .frame-preview-filmstrip-inner {

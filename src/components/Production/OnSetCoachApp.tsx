@@ -121,7 +121,14 @@ export function OnSetCoachApp({ project }: OnSetCoachAppProps) {
       </div>
 
       <SectionLabel step={1} title="Confirm each camera" hint="Read exposure and white balance off scopes, not a Rec.709 monitor." />
-      <div style={cameraGridStyle}>
+      <div
+        style={{
+          ...cameraGridStyle,
+          // Keep every camera side by side for at-a-glance comparison — never
+          // wrap the rig onto a second row.
+          gridTemplateColumns: `repeat(${Math.max(1, recommendations.length)}, minmax(0, 1fr))`,
+        }}
+      >
         {recommendations.map((item) => {
           const ready = Boolean(readyState[item.slot]);
           return (

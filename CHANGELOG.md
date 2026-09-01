@@ -15,7 +15,7 @@
 
 ### Improved
 - **Production page**: Project Manager opens from a header menu that shows the active project; first empty visit prompts to create one; Jobs button is compact; an open-project pill stays visible.
-- **On-Set Coach** and **Match & Normalize** restructured into numbered, higher-contrast workflows; Match & Normalize no longer repeats the generic method per camera.
+- **On-Set Coach** restructured into a numbered, higher-contrast workflow.
 - Camera Match Lab analysis: chroma-gated skin sampling and an evidence-aware confidence score.
 - Contact-sheet PDF and image exports render in a clean black-and-white layout.
 - Thumbnails are extracted at higher resolution for a sharper filmstrip and enlarge view.

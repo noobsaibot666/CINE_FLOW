@@ -83,7 +83,7 @@ Open still/camera RAW formats stay on the LibRaw adapter path described above.
 
 When Camera Match Lab analyzes RAW through a proxy, the app validates the proxy metadata and stores the report with the result. The validation can compare duration and frame-count estimates when the source metadata is available, records proxy resolution and codec, checks whether an operator-selected proxy filename appears paired with the RAW source, and stores the color pipeline note used for the analysis.
 
-Proxy validation warnings do not always block analysis, but they lower confidence and are shown in Camera Match Lab, Match & Normalize, and exports. Preferred analysis proxy codecs are H.264, H.265/HEVC, ProRes, and DNxHR.
+Proxy validation warnings do not always block analysis, but they lower confidence and are shown in Camera Match Lab and exports. Preferred analysis proxy codecs are H.264, H.265/HEVC, ProRes, and DNxHR.
 
 ## Confidence Labels
 

@@ -20,7 +20,7 @@ CineFlow Suite 1.x focuses on local-first production workflows across macOS and 
 - The reference tool is now the **Reference Board**, with grid-mosaic contact walls exported directly from the same view (frames per clip, sequential or shuffled, square or original cells).
 - **Camera Match Lab** camera database expanded to current cinema and hybrid bodies across eight manufacturers, with correct base ISO and log/gamut pairing per body; skin-tone sampling and the confidence score were tightened for more trustworthy results.
 - **Cinema RAW decode** for analysis: BRAW and Apple ProRes RAW decode directly; R3D, R3D NE, and Nikon N-RAW decode through an installed RED SDK / REDline; Canon Cinema RAW Light, Sony X-OCN, and ARRIRAW decode through DaVinci Resolve. A Decoder Setup panel reports readiness, links the free downloads, and lets you point the app at existing installs, with an explicit "Generate proxy" step and a proxy fallback so analysis never stalls.
-- **Look Setup** notes now open in a roomy editor saved with the project, and the results section is an on-set playbook with a readiness checklist. **On-Set Coach** and **Match & Normalize** were restructured into clear, numbered workflows.
+- **Look Setup** notes now open in a roomy editor saved with the project, and the results section is an on-set playbook with a readiness checklist. **On-Set Coach** was restructured into a clear, numbered workflow.
 - **Frame Preview** accepts drag-and-drop media anywhere on the window and gives the working canvas more room.
 - **Contact sheets** render in a clean black-and-white layout. **FCPXML timeline export** now imports cleanly into Final Cut Pro and DaVinci Resolve, with encoded media links and standard broadcast timebases.
 

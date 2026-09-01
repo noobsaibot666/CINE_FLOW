@@ -16,7 +16,9 @@ import {
   Download,
   CopyCheck,
   PanelBottomClose,
-  PanelBottomOpen
+  PanelBottomOpen,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -647,6 +649,7 @@ export const FramePreviewApp: React.FC<FramePreviewAppProps> = ({ project, onBac
   const [compositionMenuOpen, setCompositionMenuOpen] = useState(false);
   const [socialMenuOpen, setSocialMenuOpen] = useState(false);
   const [thumbnailsHidden, setThumbnailsHidden] = useState(false);
+  const [cleanPreview, setCleanPreview] = useState(false);
   const [isDropActive, setIsDropActive] = useState(false);
   const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
   const dragStartRef = useRef<{ x: number; y: number; offX: number; offY: number; ratio: RatioType } | null>(null);
@@ -765,6 +768,52 @@ export const FramePreviewApp: React.FC<FramePreviewAppProps> = ({ project, onBac
     const entries = await Promise.all(media.map((path) => buildMediaEntry(path)));
     setMediaList([...mediaListRef.current, ...entries]);
   }, [buildMediaEntry, setMediaList]);
+
+  // Remember which media files were added to this project so they come back
+  // after the app is closed and reopened. Only the file paths are stored; the
+  // entries are rebuilt from disk on mount.
+  const mediaStorageKey = `fp_media_paths_${project?.id ?? 'global'}`;
+  const mediaRestoredRef = useRef(false);
+
+  useEffect(() => {
+    if (mediaRestoredRef.current) return;
+    mediaRestoredRef.current = true;
+    let cancelled = false;
+    let savedPaths: string[] = [];
+    try {
+      const raw = localStorage.getItem(mediaStorageKey);
+      savedPaths = raw ? (JSON.parse(raw) as string[]) : [];
+    } catch {
+      savedPaths = [];
+    }
+    if (!Array.isArray(savedPaths) || savedPaths.length === 0) return;
+    void (async () => {
+      const entries: FramePreviewMedia[] = [];
+      for (const path of savedPaths) {
+        try {
+          entries.push(await buildMediaEntry(path));
+        } catch {
+          // File moved or deleted since last session — drop it silently.
+        }
+      }
+      if (!cancelled && entries.length > 0) {
+        setMediaList([...mediaListRef.current, ...entries]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [mediaStorageKey, buildMediaEntry, setMediaList]);
+
+  useEffect(() => {
+    try {
+      const paths = state.mediaList.map((media) => media.file_path).filter(Boolean);
+      if (paths.length > 0) localStorage.setItem(mediaStorageKey, JSON.stringify(paths));
+      else localStorage.removeItem(mediaStorageKey);
+    } catch {
+      // Storage unavailable (private mode etc.) — persistence is best-effort.
+    }
+  }, [state.mediaList, mediaStorageKey]);
 
   const handleAddMedia = async () => {
     const selected = await open({
@@ -1226,7 +1275,7 @@ export const FramePreviewApp: React.FC<FramePreviewAppProps> = ({ project, onBac
     }
   };
 
-  const fitToFrame = useCallback((ratio: RatioType, mode: 'contain' | 'cover' = 'contain') => {
+  const fitToFrame = useCallback((ratio: RatioType, mode: 'contain' | 'cover' = 'cover') => {
     if (!activeMedia) return;
     const renderedRect = renderedFrameRectMap[ratio];
     const frameWidth = Math.max((renderedRect?.width ?? 0) - 24, 1);
@@ -1375,17 +1424,24 @@ export const FramePreviewApp: React.FC<FramePreviewAppProps> = ({ project, onBac
                 </div>
                 
                 <div className="frame-preview-btn-group">
-                    <button className="btn btn-ghost btn-xs" onClick={() => activeMedia && fitToFrame(state.activeRatio, 'contain')} title="Fit: scale video to show the full frame (letterbox/pillarbox)">
+                    <button className="btn btn-ghost btn-xs" onClick={() => activeMedia && fitToFrame(state.activeRatio, 'cover')} title="Fit: fill the frame edge to edge — no letterbox or pillarbox bars">
                         <Maximize2 size={14} /> <span>Fit</span>
                     </button>
-                    <button className="btn btn-ghost btn-xs" onClick={() => activeMedia && fitToFrame(state.activeRatio, 'cover')} title="Fill: scale video to cover the full frame (crop edges)">
-                        <Maximize2 size={14} /> <span>Fill</span>
+                    <button className="btn btn-ghost btn-xs" onClick={() => activeMedia && fitToFrame(state.activeRatio, 'contain')} title="Whole frame: scale the video so the entire frame is visible (may show bars)">
+                        <Maximize2 size={14} /> <span>Whole frame</span>
                     </button>
                     <button className="btn btn-ghost btn-xs" onClick={() => activeMedia && resetTransform(activeMedia.id, state.activeRatio)}>
                         <RotateCcw size={14} /> <span>Reset</span>
                     </button>
                     <button className="btn btn-ghost btn-xs" onClick={arrangeFrames} title="Arrange all visible frames">
                         <LayoutGrid size={14} /> <span>Arrange</span>
+                    </button>
+                    <button
+                        className={`btn btn-ghost btn-xs ${cleanPreview ? 'is-active' : ''}`}
+                        onClick={() => setCleanPreview((v) => !v)}
+                        title={cleanPreview ? 'Show frame chrome (label, border, controls)' : 'Clean preview — hide frame chrome and borders'}
+                    >
+                        {cleanPreview ? <EyeOff size={14} /> : <Eye size={14} />} <span>Clean</span>
                     </button>
                     <div className="frame-preview-export-menu" ref={exportMenuRef}>
                         <button
@@ -1432,7 +1488,7 @@ export const FramePreviewApp: React.FC<FramePreviewAppProps> = ({ project, onBac
         )}
         <div className="frame-preview-canvas-stage" ref={canvasStageRef}>
             {activeMedia && state.visibleRatios.length > 0 ? (
-                <div className="frame-preview-canvas-surface">
+                <div className={`frame-preview-canvas-surface ${cleanPreview ? 'clean-preview' : ''}`}>
                     {state.visibleRatios.map((ratio) => {
                         const transform = activeMedia ? getTransform(activeMedia.id, ratio) : INITIAL_TRANSFORM;
                         const isRatioActive = state.activeRatio === ratio;

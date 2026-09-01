@@ -19,7 +19,7 @@ Generates camera-specific technical setup sheets with safe starting values for f
 
 ## Look Setup
 
-Defines camera roles, target look parameters, color temperature, exposure offset, contrast, and LUT selection. The saved look setup feeds On-Set Coach and Match & Normalize.
+Defines camera roles, target look parameters, color temperature, exposure offset, contrast, and LUT selection. The saved look setup feeds On-Set Coach and the Camera Match Lab match actions.
 
 - **Notes** open in a full editing window, are saved with the project, and are there again the next time you open it.
 - Every change auto-saves — target look, lighting, faces-first priority, and each camera's settings.
@@ -57,21 +57,6 @@ Saved runs keep provenance with the analysis, so later normalization and exports
 ## On-Set Coach
 
 Carries the saved look setup into a numbered on-set routine: confirm each camera on scopes and mark it ready, work the lighting checklist, and flag any failure mode you see on the monitor. A status strip and a "cleared to roll" indicator show how far through you are at a glance.
-
-## Match & Normalize
-
-Designates a hero camera and saves repeatable alignment presets for the rest of the camera package. Use it after Camera Match Lab has established the normalization target.
-
-The page is a three-step flow: pick the hero baseline, bring each camera onto it, save the preset. When a saved Camera Match Lab run is selected, each camera card shows the measured exposure and white-balance deltas plus its evidence; without a run, the generic matching method is shown once.
-
-Each camera receives a trust label:
-
-- `Trusted`: decode, transform, proxy, and chart provenance are acceptable.
-- `Provisional`: analysis is useful, but at least one provenance requirement needs review.
-- `Proxy-only`: the preset depends on a proxy-backed analysis path.
-- `Setup only`: no Match Lab run is selected, so the preset is based on setup guidance.
-
-Exported PDFs include the same trust reasons and evidence so a preset can be traced back to the saved analysis run.
 
 ## Frame Preview
 

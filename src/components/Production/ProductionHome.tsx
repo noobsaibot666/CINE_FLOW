@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { ArrowRight, BarChart3, Camera, ClipboardCheck, Maximize2, Minus, Plus, ShieldCheck, SlidersHorizontal, X } from "lucide-react";
+import { ArrowRight, BarChart3, ClipboardCheck, Maximize2, Minus, Plus, ShieldCheck, SlidersHorizontal, X } from "lucide-react";
 import { ProductionProject } from "../../types";
 import { invokeGuarded } from "../../utils/tauri";
 
@@ -8,7 +8,6 @@ interface ProductionHomeProps {
   onSelectProject: (project: ProductionProject | null) => void;
   onOpenLookSetup: () => void;
   onOpenOnSetCoach: () => void;
-  onOpenMatchNormalize: () => void;
   onOpenCameraMatchLab: () => void;
   onOpenFramePreview: () => void;
   onOpenStarterSetup: () => void;
@@ -23,7 +22,6 @@ export function ProductionHome({
   onSelectProject,
   onOpenLookSetup,
   onOpenOnSetCoach,
-  onOpenMatchNormalize,
   onOpenCameraMatchLab,
   onOpenFramePreview,
   onOpenStarterSetup,
@@ -243,14 +241,6 @@ export function ProductionHome({
                 enabled={Boolean(activeProject)}
                 locked={lockedModuleIds.includes('onset-coach')}
                 onClick={onOpenOnSetCoach}
-              />
-              <ModuleCard
-                icon={<Camera size={22} strokeWidth={1.35} />}
-                title="Match & Normalize"
-                description="Choose a hero camera and save repeatable alignment presets for the rest of the camera package."
-                enabled={Boolean(activeProject)}
-                locked={lockedModuleIds.includes('match-normalize')}
-                onClick={onOpenMatchNormalize}
               />
               <ModuleCard
                 icon={<Maximize2 size={22} strokeWidth={1.35} />}

@@ -75,7 +75,6 @@ import { useAppKeyboard } from "./hooks/useAppKeyboard";
 const ProductionLanding = lazy(() => import("./modules/Production/ProductionLanding").then(m => ({ default: m.ProductionLanding })));
 const LookSetup = lazy(() => import('./modules/Production/apps/LookSetup'));
 const OnSetCoach = lazy(() => import('./modules/Production/apps/OnSetCoach.tsx'));
-const MatchNormalize = lazy(() => import('./modules/Production/apps/MatchNormalize.tsx'));
 const CameraMatchLab = lazy(() => import('./modules/Production/apps/CameraMatchLab.tsx'));
 const FramePreview = lazy(() => import('./modules/Production/apps/FramePreview'));
 const StarterSetup = lazy(() => import('./components/Production/StarterSetup'));
@@ -2265,11 +2264,6 @@ function AppContent() {
                   project={activeProductionProject}
                   onBack={() => setActiveProductionApp(null)}
                 />
-              ) : activeProductionApp === "match-normalize" && activeProductionProject ? (
-                <MatchNormalize
-                  project={activeProductionProject}
-                  onBack={() => setActiveProductionApp(null)}
-                />
               ) : activeProductionApp === "camera-match-lab" && activeProductionProject ? (
                 <CameraMatchLab
                   project={activeProductionProject}
@@ -2293,9 +2287,6 @@ function AppContent() {
                   onOpenOnSetCoach={() => {
                     setActiveProductionApp("onset-coach");
                   }}
-                  onOpenMatchNormalize={() => {
-                    setActiveProductionApp("match-normalize");
-                  }}
                   onOpenCameraMatchLab={() => {
                     setActiveProductionApp("camera-match-lab");
                   }}
@@ -2308,7 +2299,7 @@ function AppContent() {
                   activeProject={activeProductionProject}
                   projectListOpen={productionProjectsOpen}
                   onProjectListOpenChange={setProductionProjectsOpen}
-                  lockedModuleIds={licenseMode === 'trial' ? ['onset-coach', 'match-normalize', 'frame-preview', 'starter-setup'] : []}
+                  lockedModuleIds={licenseMode === 'trial' ? ['onset-coach', 'frame-preview', 'starter-setup'] : []}
                 />
               )
             ) : activeTab === 'installer' ? (
@@ -2499,6 +2490,7 @@ function AppContent() {
               onClick={() => {
                 if (activeMediaWorkspaceApp) setActiveMediaWorkspaceApp(null);
                 else if (activePreproductionApp) setActivePreproductionApp(null);
+                else if (activeProductionApp) setActiveProductionApp(null);
                 else setActiveTab('home');
               }}
               title="Back to Dashboard"

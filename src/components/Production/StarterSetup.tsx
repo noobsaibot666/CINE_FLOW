@@ -1,7 +1,6 @@
 import React, { useState, useMemo } from "react";
-import { 
-  ArrowLeft,
-  Circle, 
+import {
+  Circle,
   Clock, 
   BarChart, 
   Zap, 
@@ -62,7 +61,7 @@ const ChipSelect: React.FC<{
   </div>
 );
 
-export const StarterSetup: React.FC<StarterSetupProps> = ({ onBack }) => {
+export const StarterSetup: React.FC<StarterSetupProps> = () => {
   // --- State ---
   const [selectedCamera, setSelectedCamera] = useState<CameraModel>(CAMERA_MODELS[0]);
   const [selectedLens, setSelectedLens] = useState<LensData>(LENS_MODELS[0]);
@@ -107,12 +106,6 @@ export const StarterSetup: React.FC<StarterSetupProps> = ({ onBack }) => {
     <div className="starter-setup-container">
       <div className="starter-setup-header">
         <div className="header-info">
-          {onBack && (
-            <button className="back-btn-technical" onClick={onBack}>
-              <ArrowLeft size={16} />
-              <span>Back</span>
-            </button>
-          )}
           <h1>Starter Setup</h1>
           <p className="subtitle">Get a safe technical starting setup before shooting.</p>
         </div>
