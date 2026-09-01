@@ -286,8 +286,6 @@ export function SafeCopy({ projectId, onJobCreated, onError }: SafeCopyProps) {
       onError?.({ title: "Missing source or destination", hint: "Fill source and destination for all queue rows." });
       return;
     }
-    const confirm = window.confirm(`Start ${queue.length} verification checks sequentially?`);
-    if (!confirm) return;
 
     try {
       setResults([]);

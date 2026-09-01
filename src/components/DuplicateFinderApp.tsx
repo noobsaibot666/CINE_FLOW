@@ -75,7 +75,7 @@ export function DuplicateFinderApp() {
   const [includeHidden, setIncludeHidden] = useState(false);
   const [includeExts, setIncludeExts] = useState("");
   const [excludeExts, setExcludeExts] = useState("");
-  const [excludeDirs, setExcludeDirs] = useState("node_modules, .git");
+  const [excludeDirs, setExcludeDirs] = useState("");
 
   // Bulk selection of files marked for trash
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -524,7 +524,7 @@ export function DuplicateFinderApp() {
               <label className="opt-row opt-stack">
                 <span>Skip folders</span>
                 <input
-                  type="text" placeholder="e.g. node_modules, .git" value={excludeDirs}
+                  type="text" placeholder="e.g. Proxies, Renders" value={excludeDirs}
                   onChange={e => setExcludeDirs(e.target.value)}
                   disabled={isScanning}
                 />
@@ -687,7 +687,12 @@ export function DuplicateFinderApp() {
           color: var(--text-primary);
           animation: fadeInApp 0.36s ease;
           box-shadow: var(--shadow-lg);
-          height: calc(100vh - 180px);
+          /* Fill the scroll wrapper rather than guessing viewport chrome height,
+             and clip so nothing paints past the rounded background. Internal
+             panes scroll on their own. */
+          height: 100%;
+          min-height: 0;
+          overflow: hidden;
           display: flex;
           flex-direction: column;
         }
@@ -726,10 +731,22 @@ export function DuplicateFinderApp() {
           min-height: 0;
         }
 
+        /* Grid children default to min-height:auto, which lets the results
+           column grow to fit every group and blow past the container. Force
+           them to share the row height so the inner lists scroll instead. */
+        .workspace-sidebar,
+        .workspace-results {
+          min-height: 0;
+          min-width: 0;
+        }
+
         .workspace-sidebar {
           display: flex;
           flex-direction: column;
           gap: 24px;
+          overflow-y: auto;
+          /* Clear the fixed "Back" button that floats at the bottom-left. */
+          padding-bottom: 56px;
         }
 
         .segment {
@@ -757,6 +774,7 @@ export function DuplicateFinderApp() {
         .folder-list {
           padding: 12px;
           flex: 1;
+          max-height: 220px;
           overflow-y: auto;
           display: flex;
           flex-direction: column;
