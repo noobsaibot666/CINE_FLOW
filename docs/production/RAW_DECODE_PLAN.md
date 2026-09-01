@@ -136,7 +136,22 @@ The Analyze button stays enabled; slots that still can't decode are marked
   `RESOLVE_SCRIPT_LIB` (defaults set per-OS, overridable by env). Every
   failure returns an actionable message and the attach-proxy fallback still
   applies.
-- **Phase 6 (FFmpeg 8 / ProRes RAW)** — not started.
+- **Phase 6 done** — the bundled FFmpeg is already **8.0.1**, which decodes
+  Apple ProRes RAW natively, so `.mov`/`.mxf` ProRes RAW analyses through the
+  normal `direct_original` path with no extra work. `probe_prores_raw`
+  reports it Ready; `verify_macos_v12_runtime.mjs` now fails the build if the
+  bundled FFmpeg drops below 8; the source-support strip lists ProRes RAW
+  under "Direct video".
+
+### Explicit proxy generation (operator control)
+
+Provider-backed sources (BRAW / RED / Resolve) no longer auto-decode on
+Analyze. The slot shows a **Generate proxy** button; clicking it confirms
+(naming the provider and warning it may take minutes / that Resolve must be
+open), runs `production_matchlab_ensure_proxy` as a visible job, and caches
+the result against the current clip. Analyze skips a provider-backed slot
+that has neither a generated nor an attached proxy, with a "click Generate
+proxy" message — it never silently starts a long decode.
 
 `ensure_matchlab_proxy_internal` now picks a `RawProxyPlan`
 (Braw / Redline / Resolve / Unavailable) up front; `Unavailable` fails with

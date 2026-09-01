@@ -126,7 +126,8 @@ fn resolve_setup() -> DecoderSetup {
         download_label: Some("Download DaVinci Resolve (free)".into()),
         steps: vec![
             "Install the free version of DaVinci Resolve.".into(),
-            "Open it once so it finishes first-run setup.".into(),
+            "Launch it and finish first-run setup.".into(),
+            "Keep DaVinci Resolve OPEN whenever you generate a proxy — the free edition only responds to CineFlow while it is running.".into(),
             "Come back here and press Re-check.".into(),
         ],
         locate_key: Some("resolve_path".into()),
@@ -380,9 +381,10 @@ fn probe_resolve(resolve: Option<&str>) -> DecoderStatus {
                 "RESOLVE",
                 "DaVinci Resolve (universal fallback)",
                 "resolve",
-                "Detected. Used to decode formats without a bundled decoder.",
+                "Installed. Decodes R3D / CRM / X-OCN / ARRIRAW when no other decoder is set up — it must be OPEN while a proxy is generated.",
             );
             s.path = Some(path.to_string());
+            s.setup = Some(resolve_setup());
             s
         }
         None => needs_setup(

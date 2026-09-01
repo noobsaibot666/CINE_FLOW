@@ -1,6 +1,6 @@
 import React, { startTransition, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, BarChart3, ChevronDown, HelpCircle, Download, FolderOpen, Gauge, ImageIcon, Info, Maximize2, Palette, Pipette, RefreshCw, Trash2, Waves } from "lucide-react";
-import { open, save } from "@tauri-apps/plugin-dialog";
+import { open, save, confirm } from "@tauri-apps/plugin-dialog";
 import { openExternalUrl } from "../../utils/externalLinks";
 import {
   CalibrationChartDetection,
@@ -14,6 +14,7 @@ import {
   ProductionDecoderStatus,
   ProductionMediaCapabilityReport,
   ProductionOcioConfigStatus,
+  ProductionMatchLabProxyResult,
   ProductionMatchLabRun,
   ProductionMatchLabRunSummary,
   ProductionProject,
@@ -137,6 +138,9 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
   const [decoderStatuses, setDecoderStatuses] = useState<ProductionDecoderStatus[]>([]);
   const [decoderSetupOpen, setDecoderSetupOpen] = useState(false);
   const [decoderRefreshNonce, setDecoderRefreshNonce] = useState(0);
+  // Proxies the user explicitly generated (per slot, tied to the current clip).
+  const [generatedProxyBySlot, setGeneratedProxyBySlot] = useState<Record<string, { path: string; clip: string }>>({});
+  const [generatingProxySlots, setGeneratingProxySlots] = useState<Record<string, boolean>>({});
   const [sourceProfileBySlot, setSourceProfileBySlot] = useState<Record<string, ProductionSourceProfileId>>({});
   const [ocioStatusBySlot, setOcioStatusBySlot] = useState<Record<string, ProductionOcioConfigStatus>>({});
   const [frameDataUrls, setFrameDataUrls] = useState<Record<string, string>>({});
@@ -931,10 +935,16 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
         const clipPath = clipsBySlot[slot];
         if (!clipPath) continue;
         try {
-          if (isDecoderBackedRawClip(clipPath)) {
+          const effectiveProxy = effectiveProxyForSlot(slot);
+          if (isDecoderBackedRawClip(clipPath) && !effectiveProxy) {
             startTransition(() => {
-              setSlotStatuses((prev) => ({ ...prev, [slot]: "Preparing proxy..." }));
+              setSlotErrors((prev) => ({
+                ...prev,
+                [slot]: "Proxy required — click ‘Generate proxy’ for this camera, or attach one.",
+              }));
+              setSlotStatuses((prev) => { const n = { ...prev }; delete n[slot]; return n; });
             });
+            continue;
           }
           startTransition(() => {
             setSlotStatuses((prev) => ({ ...prev, [slot]: "Analyzing..." }));
@@ -944,7 +954,7 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
             cameraSlot: slot,
             clipPath,
             frameCount: FRAME_COUNT,
-            analysisSourceOverridePath: analysisOverrideBySlot[slot] ?? null,
+            analysisSourceOverridePath: effectiveProxy ?? null,
             sourceProfileId: sourceProfileBySlot[slot] ?? DEFAULT_SOURCE_PROFILE_ID,
             analysisColorSpace: ANALYSIS_COLOR_SPACE,
           });
@@ -1116,6 +1126,62 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
     if (typeof selected !== "string") return;
     setAnalysisOverrideBySlot((prev) => ({ ...prev, [slot]: selected }));
     setSlotStatuses((prev) => ({ ...prev, [slot]: "Proxy selected" }));
+  };
+
+  // A generated proxy is only valid while its clip is still loaded in the slot.
+  const generatedProxyForSlot = (slot: string): string | undefined => {
+    const entry = generatedProxyBySlot[slot];
+    return entry && entry.clip === clipsBySlot[slot] ? entry.path : undefined;
+  };
+  const effectiveProxyForSlot = (slot: string): string | undefined =>
+    analysisOverrideBySlot[slot] ?? generatedProxyForSlot(slot);
+
+  // Drop generated proxies whose clip changed / was cleared.
+  useEffect(() => {
+    setGeneratedProxyBySlot((prev) => {
+      let changed = false;
+      const next: typeof prev = {};
+      for (const [slot, entry] of Object.entries(prev)) {
+        if (entry.clip === clipsBySlot[slot]) next[slot] = entry;
+        else changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [clipsBySlot]);
+
+  const generateProxy = async (slot: string) => {
+    const clipPath = clipsBySlot[slot];
+    if (!clipPath) return;
+    const decoder = capabilityBySlot[slot]?.decoder_status;
+    const provider = decoder?.provider;
+    const fileName = getFileName(clipPath);
+
+    const message = provider === "resolve"
+      ? `Camera ${slot}: decode "${fileName}" with DaVinci Resolve?\n\nDaVinci Resolve must be installed AND open — the free edition only responds while it is running. This can take several minutes; watch the Jobs panel for progress.`
+      : `Camera ${slot}: generate an analysis proxy from "${fileName}"?\n\nCineFlow will decode it with ${provider === "red_sdk" ? "REDline / the RED SDK" : "the bundled decoder"}. This runs as a background job and can take a few minutes — watch the Jobs panel.`;
+    const ok = await confirm(message, { title: "Generate analysis proxy", kind: "info" });
+    if (!ok) return;
+
+    setGeneratingProxySlots((prev) => ({ ...prev, [slot]: true }));
+    setSlotStatuses((prev) => ({ ...prev, [slot]: "Generating proxy…" }));
+    setSlotErrors((prev) => { const n = { ...prev }; delete n[slot]; return n; });
+    try {
+      const res = await invokeGuarded<ProductionMatchLabProxyResult>("production_matchlab_ensure_proxy", {
+        projectId: project.id,
+        slot,
+        sourcePath: clipPath,
+      });
+      setGeneratedProxyBySlot((prev) => ({ ...prev, [slot]: { path: res.proxy_path, clip: clipPath } }));
+      setSlotStatuses((prev) => ({ ...prev, [slot]: res.reused_proxy ? "Proxy ready (cached)" : "Proxy ready" }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const parsed = parseStructuredError(message);
+      setSlotErrors((prev) => ({ ...prev, [slot]: parsed.summary || message.split("\n")[0] }));
+      if (parsed.details) setSlotErrorDetails((prev) => ({ ...prev, [slot]: parsed.details as string }));
+      setSlotStatuses((prev) => { const n = { ...prev }; delete n[slot]; return n; });
+    } finally {
+      setGeneratingProxySlots((prev) => ({ ...prev, [slot]: false }));
+    }
   };
 
   const openCropAssist = (slot: string) => {
@@ -1400,8 +1466,11 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
               const selectedSourceProfileId = sourceProfileBySlot[slot] ?? rawAnalysis?.source_profile_id ?? DEFAULT_SOURCE_PROFILE_ID;
               const selectedSourceProfile = PRODUCTION_SOURCE_PROFILES[selectedSourceProfileId];
               const ocioStatus = ocioStatusBySlot[slot];
+              const slotProxy = effectiveProxyForSlot(slot);
+              const generatedProxy = generatedProxyForSlot(slot);
+              const generatingProxy = Boolean(generatingProxySlots[slot]);
               const sourceWorkflow = clipPath
-                ? describeSourceWorkflow(clipPath, capability, rawAnalysis, Boolean(analysisOverrideBySlot[slot]))
+                ? describeSourceWorkflow(clipPath, capability, rawAnalysis, Boolean(slotProxy))
                 : null;
               const decisionSummary = analysis && rawAnalysis
                 ? buildDecisionSummary({
@@ -1470,11 +1539,27 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                       </div>
                       {isDecoderBackedRawClip(clipPath || "") ? (
                         <div style={sourceMetaRowStyle}>
-                          <span style={sourceMetaTextStyle}>{analysisOverrideBySlot[slot] ? "Proxy attached" : "Auto proxy or operator proxy"}</span>
+                          <span style={sourceMetaTextStyle}>
+                            {analysisOverrideBySlot[slot]
+                              ? "Proxy attached"
+                              : generatedProxy
+                                ? "Proxy generated"
+                                : "Needs an analysis proxy"}
+                          </span>
                         </div>
                       ) : null}
                       {isDecoderBackedRawClip(clipPath || "") && !rawAnalysis?.representative_frame_path ? (
                         <div style={cameraActionsSupportRowStyle}>
+                          {capability?.decoder_status?.state === "available" && !slotProxy ? (
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-sm"
+                              onClick={() => void generateProxy(slot)}
+                              disabled={generatingProxy}
+                            >
+                              <RefreshCw size={14} /> {generatingProxy ? "Generating proxy…" : "Generate proxy"}
+                            </button>
+                          ) : null}
                           <button type="button" className="btn btn-ghost btn-sm" onClick={() => void pickExistingProxy(slot)}>
                             <FolderOpen size={14} /> Use existing MP4/MOV proxy…
                           </button>
@@ -1483,15 +1568,15 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                     </div>
                     <div className="matchLabPathPrimary" style={fileMetaStyle} title={clipPath ? getFileName(clipPath) : "No clip selected"}>{clipPath ? getFileName(clipPath) : "No clip selected"}</div>
                     <div className="matchLabPathSecondary" style={helperMetaStyle} title={clipPath || "Import MOV, MP4, MXF, BRAW, R3D, X-OCN, Canon RAW, N-RAW, or still RAW."}>{clipPath || "Import MOV, MP4, MXF, BRAW, R3D, X-OCN, Canon RAW, N-RAW, or still RAW."}</div>
-                    {analysisOverrideBySlot[slot] ? (
-                      <div style={sourceMetaInlineStyle} title={analysisOverrideBySlot[slot]}>
-                        Using proxy · {getFileName(analysisOverrideBySlot[slot])}
+                    {slotProxy ? (
+                      <div style={sourceMetaInlineStyle} title={slotProxy}>
+                        {analysisOverrideBySlot[slot] ? "Using attached proxy · " : "Using generated proxy · "}{getFileName(slotProxy)}
                       </div>
                     ) : null}
                     {sourceWorkflow ? (
                       <SourceWorkflowNotice workflow={sourceWorkflow} onPickProxy={() => void pickExistingProxy(slot)} />
                     ) : null}
-                    {capability?.decoder_status?.state === "needs_setup" ? (
+                    {isDecoderBackedRawClip(clipPath || "") && !slotProxy && capability?.decoder_status?.state === "needs_setup" ? (
                       <button
                         type="button"
                         className="btn btn-secondary btn-sm"
@@ -1500,9 +1585,10 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                       >
                         <Gauge size={14} /> Set up {capability.decoder_status.label} decoder
                       </button>
-                    ) : capability?.decoder_status?.provider === "resolve" ? (
-                      <div style={{ ...sourceMetaInlineStyle, marginTop: 6 }}>
-                        Will decode via DaVinci Resolve.
+                    ) : null}
+                    {isDecoderBackedRawClip(clipPath || "") && !slotProxy && capability?.decoder_status?.provider === "resolve" ? (
+                      <div style={{ ...sourceMetaInlineStyle, marginTop: 6, color: "rgba(253,224,71,0.9)" }}>
+                        Decodes via DaVinci Resolve — it must be installed <strong>and open</strong> before you press Generate proxy.
                       </div>
                     ) : null}
                     {clipPath ? (
@@ -2954,10 +3040,10 @@ function SourceSupportStrip({
         </button>
       </div>
       <div style={sourceSupportGroupsStyle}>
-        <SourceSupportGroup label="Direct video" value="MOV, MP4, MXF, MKV, AVI" tone="good" />
-        <SourceSupportGroup label="Decoder-backed" value="BRAW" tone="info" />
+        <SourceSupportGroup label="Direct video" value="MOV, MP4, MXF, MKV, AVI, ProRes RAW" tone="good" />
+        <SourceSupportGroup label="Decoder-backed" value="BRAW, R3D, N-RAW" tone="info" />
         <SourceSupportGroup label="Open RAW" value="DNG, ARW, CR2/CR3, NEF, RAF, RW2, ORF, IIQ" tone="warning" />
-        <SourceSupportGroup label="Proxy/vendor path" value="R3D, N-RAW, X-OCN, Canon RAW" tone="warning" />
+        <SourceSupportGroup label="Resolve path" value="X-OCN, Canon RAW, ARRIRAW" tone="warning" />
       </div>
     </section>
   );

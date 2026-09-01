@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { spawnSync } from "node:child_process";
 
 const defaultApp = "src-tauri/target/release/bundle/macos/CineFlow Suite.app";
 // Tauri names the DMG after package.json's version, so derive the default path from
@@ -22,6 +23,7 @@ const requiredChecks = [
   fileCheck("macos-binary", "CineFlow executable", join(macos, "cineflow-suite")),
   fileCheck("macos-dmg", "macOS DMG installer", dmgPath),
   fileCheck("ffmpeg", "FFmpeg sidecar", join(macos, "ffmpeg")),
+  ffmpegVersionCheck("ffmpeg-8", "FFmpeg >= 8 (ProRes RAW decode)", join(macos, "ffmpeg"), 8),
   fileCheck("ffprobe", "FFprobe sidecar", join(macos, "ffprobe")),
   fileCheck("braw-bridge", "BRAW bridge sidecar", join(macos, "braw_bridge")),
   anyFileCheck(
@@ -111,6 +113,23 @@ function fileCheck(id, label, path, missingStatus = "fail") {
     path,
     status: existsSync(path) ? "pass" : missingStatus,
     detail: existsSync(path) ? sizeDetail(path) : "missing",
+  };
+}
+
+function ffmpegVersionCheck(id, label, path, minMajor) {
+  if (!existsSync(path)) {
+    return { id, label, path, status: "fail", detail: "missing" };
+  }
+  const out = spawnSync(path, ["-version"], { encoding: "utf8" });
+  const line = (out.stdout || "").split("\n")[0] || "";
+  const match = line.match(/ffmpeg version n?(\d+)\.(\d+)/i);
+  const major = match ? Number(match[1]) : NaN;
+  return {
+    id,
+    label,
+    path,
+    status: Number.isFinite(major) && major >= minMajor ? "pass" : "fail",
+    detail: match ? `${match[1]}.${match[2]}` : "version unreadable",
   };
 }
 
