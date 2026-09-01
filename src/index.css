@@ -3722,19 +3722,26 @@ body {
 .btn-utilities {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  min-height: 40px;
-  padding: 0 16px;
-  font-size: 0.72rem;
-  font-weight: 700;
-  letter-spacing: 0.12em;
+  gap: 6px;
+  /* Secondary header controls: kept visibly below the phase nav in size and
+     weight so they don't compete with it for hierarchy. */
+  min-height: 30px;
+  padding: 0 10px;
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--text-secondary);
+  color: var(--text-muted);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-md);
   background: transparent;
   cursor: pointer;
   transition: all var(--transition-fast);
+}
+
+.btn-utilities svg {
+  width: 13px;
+  height: 13px;
 }
 
 .btn-utilities:hover,
@@ -4020,7 +4027,8 @@ body {
 
 .crop-factor-adapters-column {
   display: grid;
-  grid-template-rows: repeat(3, 1fr);
+  grid-template-rows: repeat(3, auto);
+  align-content: start;
   gap: 18px;
 }
 
@@ -4133,8 +4141,16 @@ body {
 
 .crop-factor-results {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 18px;
+}
+
+.crop-factor-results-note {
+  margin: -12px 0 0;
+  font-size: 0.72rem;
+  line-height: 1.45;
+  color: var(--text-muted);
+  max-width: 62ch;
 }
 
 .crop-factor-field-header {
@@ -4212,7 +4228,7 @@ body {
 
 .micro-tool-inputs {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: 18px;
 }
 
@@ -4228,6 +4244,15 @@ body {
 
 .micro-tool-select {
   appearance: none;
+  -webkit-appearance: none;
+  /* A custom chevron — `appearance: none` strips the native one, which left
+     these looking like plain text inputs with no dropdown affordance. */
+  padding-right: 38px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8' fill='none'%3E%3Cpath d='M1 1.5 6 6.5 11 1.5' stroke='%23a1a1aa' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 14px center;
+  background-size: 12px 8px;
+  text-overflow: ellipsis;
 }
 
 .micro-tool-readout {
@@ -4268,12 +4293,12 @@ body {
 
 .micro-tool-results {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 18px;
 }
 
 .transfer-top-stats {
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   width: 100%;
 }
 
@@ -7554,11 +7579,15 @@ body {
   min-width: 0;
   width: auto;
   height: 30px;
-  padding: 0 9px;
+  padding: 0 10px;
   gap: 0;
 }
 .btn.btn-jobs-header .jobs-indicator-content {
-  font-size: 11px;
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
   gap: 5px;
 }
 /* Keep the running-job progress hairline pinned to the bottom edge instead

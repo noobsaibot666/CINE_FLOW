@@ -4349,9 +4349,23 @@ function MicroAppModal({
   headerAction?: ReactNode;
   className?: string;
 }) {
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
   return (
-    <div className="microapp-backdrop" onClick={onClose}>
-      <div className={`microapp-modal ${className}`} onClick={(event) => event.stopPropagation()}>
+    <div className="microapp-backdrop" onClick={onClose} role="presentation">
+      <div
+        className={`microapp-modal ${className}`}
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+      >
         <div className="microapp-modal-header">
           <div className="microapp-modal-heading">
             <span className="microapp-modal-eyebrow">Utilities</span>
@@ -4382,9 +4396,11 @@ function CropFactorCalculator() {
 
   const activeSensorPresets = SENSOR_PRESETS[sensorMode];
 
-  const sensor = Math.max(0, Number(sensorSize) || 0);
-  const focal = Math.max(0, Number(focalLength) || 0);
-  const fStop = Math.max(0, Number(aperture) || 0);
+  // Clamp to physically sane ranges so a stray keystroke (e.g. an extra digit)
+  // can't produce a 3600x crop factor or similar nonsense downstream.
+  const sensor = Math.min(120, Math.max(0, Number(sensorSize) || 0));
+  const focal = Math.min(5000, Math.max(0, Number(focalLength) || 0));
+  const fStop = Math.min(90, Math.max(0, Number(aperture) || 0));
 
   let effectiveFocal = focal;
   let effectiveAperture = fStop;
@@ -4532,8 +4548,16 @@ function CropFactorCalculator() {
               <div
                 className={`crop-factor-toggle ${adapterType === "tele" ? "active" : ""}`}
                 onClick={() => setAdapterType(adapterType === "tele" ? "none" : "tele")}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    setAdapterType(adapterType === "tele" ? "none" : "tele");
+                  }
+                }}
                 role="switch"
                 aria-checked={adapterType === "tele"}
+                aria-label="Teleconverter"
+                tabIndex={0}
               >
                 <div className="crop-factor-toggle-handle" />
               </div>
@@ -4566,8 +4590,16 @@ function CropFactorCalculator() {
               <div
                 className={`crop-factor-toggle ${adapterType === "wide" ? "active" : ""}`}
                 onClick={() => setAdapterType(adapterType === "wide" ? "none" : "wide")}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    setAdapterType(adapterType === "wide" ? "none" : "wide");
+                  }
+                }}
                 role="switch"
                 aria-checked={adapterType === "wide"}
+                aria-label="Wide converter"
+                tabIndex={0}
               >
                 <div className="crop-factor-toggle-handle" />
               </div>
@@ -4600,8 +4632,16 @@ function CropFactorCalculator() {
               <div
                 className={`crop-factor-toggle ${adapterType === "fisheye" ? "active" : ""}`}
                 onClick={() => setAdapterType(adapterType === "fisheye" ? "none" : "fisheye")}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    setAdapterType(adapterType === "fisheye" ? "none" : "fisheye");
+                  }
+                }}
                 role="switch"
                 aria-checked={adapterType === "fisheye"}
+                aria-label="Fisheye converter"
+                tabIndex={0}
               >
                 <div className="crop-factor-toggle-handle" />
               </div>
@@ -4637,10 +4677,15 @@ function CropFactorCalculator() {
           <strong>{Number.isFinite(equivalentFocalLength) && equivalentFocalLength > 0 ? `${Math.round(equivalentFocalLength)} mm` : "—"}</strong>
         </div>
         <div className="crop-factor-result-card">
-          <span className="crop-factor-result-label">Equivalent Aperture</span>
+          <span className="crop-factor-result-label">Equiv. Aperture (DoF)</span>
           <strong>{Number.isFinite(equivalentAperture) && equivalentAperture > 0 ? `f/${equivalentAperture.toFixed(1)}` : "—"}</strong>
         </div>
       </div>
+      <p className="crop-factor-results-note">
+        Equivalent focal length and aperture are relative to a 36&nbsp;mm full-frame width.
+        The aperture figure is depth-of-field equivalence only — exposure and T-stop do not
+        change with sensor size. A teleconverter does cost real light and is included above.
+      </p>
     </div>
   );
 }
@@ -4656,11 +4701,28 @@ function VideoFileSizeCalculator() {
   const [minutes, setMinutes] = useState("10");
   const [seconds, setSeconds] = useState("0");
 
-  const brandOptions: string[] = Array.from(new Set(VIDEO_FILE_SIZE_PRESETS.map((preset) => preset.brand)));
-  const cameraOptions: string[] = Array.from(new Set(VIDEO_FILE_SIZE_PRESETS.filter((preset) => preset.brand === brand).map((preset) => preset.camera)));
-  const codecOptions: string[] = Array.from(new Set(VIDEO_FILE_SIZE_PRESETS.filter((preset) => preset.brand === brand && preset.camera === camera).map((preset) => preset.codec)));
-  const resolutionOptions: string[] = Array.from(new Set(VIDEO_FILE_SIZE_PRESETS.filter((preset) => preset.brand === brand && preset.camera === camera && preset.codec === codec).map((preset) => preset.resolution)));
-  const frameRateOptions: string[] = Array.from(new Set(VIDEO_FILE_SIZE_PRESETS.filter((preset) => preset.brand === brand && preset.camera === camera && preset.codec === codec && preset.resolution === resolution).map((preset) => preset.frameRate)));
+  // Memoised so the cascade below isn't rebuilding five Sets — and re-running
+  // its reconcile effects — on every keystroke elsewhere in the modal.
+  const brandOptions = useMemo(
+    () => Array.from(new Set(VIDEO_FILE_SIZE_PRESETS.map((preset) => preset.brand))),
+    [],
+  );
+  const cameraOptions = useMemo(
+    () => Array.from(new Set(VIDEO_FILE_SIZE_PRESETS.filter((preset) => preset.brand === brand).map((preset) => preset.camera))),
+    [brand],
+  );
+  const codecOptions = useMemo(
+    () => Array.from(new Set(VIDEO_FILE_SIZE_PRESETS.filter((preset) => preset.brand === brand && preset.camera === camera).map((preset) => preset.codec))),
+    [brand, camera],
+  );
+  const resolutionOptions = useMemo(
+    () => Array.from(new Set(VIDEO_FILE_SIZE_PRESETS.filter((preset) => preset.brand === brand && preset.camera === camera && preset.codec === codec).map((preset) => preset.resolution))),
+    [brand, camera, codec],
+  );
+  const frameRateOptions = useMemo(
+    () => Array.from(new Set(VIDEO_FILE_SIZE_PRESETS.filter((preset) => preset.brand === brand && preset.camera === camera && preset.codec === codec && preset.resolution === resolution).map((preset) => preset.frameRate))),
+    [brand, camera, codec, resolution],
+  );
 
   useEffect(() => {
     if (!cameraOptions.includes(camera)) {
@@ -4697,6 +4759,15 @@ function VideoFileSizeCalculator() {
   const videoMbps = resolveCodecVideoMbps(selectedPreset.codecRateName, selectedPreset.resolution, selectedPreset.frameRate) ?? selectedPreset.videoMbps;
   const audioKbps = Math.max(0, Number(audioBitrate) || 0);
   
+  // Clamp on input so the field can't display "90" while the math quietly
+  // uses 59.
+  const clampField = (raw: string, max: number) => {
+    if (raw.trim() === "") return "";
+    const n = Math.floor(Number(raw));
+    if (!Number.isFinite(n)) return "";
+    return String(Math.max(0, Math.min(max, n)));
+  };
+
   const h = Math.max(0, Number(hours) || 0);
   const m = Math.max(0, Math.min(59, Number(minutes) || 0));
   const s = Math.max(0, Math.min(59, Number(seconds) || 0));
@@ -4798,27 +4869,30 @@ function VideoFileSizeCalculator() {
             <input
               type="number"
               min="0"
+              max="999"
               step="1"
               value={hours}
-              onChange={(event) => setHours(event.target.value)}
+              onChange={(event) => setHours(clampField(event.target.value, 999))}
               className="crop-factor-input"
               placeholder="0"
             />
             <input
               type="number"
               min="0"
+              max="59"
               step="1"
               value={minutes}
-              onChange={(event) => setMinutes(event.target.value)}
+              onChange={(event) => setMinutes(clampField(event.target.value, 59))}
               className="crop-factor-input"
               placeholder="10"
             />
             <input
               type="number"
               min="0"
+              max="59"
               step="1"
               value={seconds}
-              onChange={(event) => setSeconds(event.target.value)}
+              onChange={(event) => setSeconds(clampField(event.target.value, 59))}
               className="crop-factor-input"
               placeholder="0"
             />
@@ -4834,7 +4908,17 @@ function VideoFileSizeCalculator() {
       <div className="micro-tool-results">
         <div className="crop-factor-result-card">
           <span className="crop-factor-result-label">Total Bitrate</span>
-          <strong>{totalMbps ? `${totalMbps.toFixed(3)} Mbps` : "—"}</strong>
+          <strong>
+            {!totalMbps
+              ? "—"
+              : totalMbps >= 1000
+                ? `${(totalMbps / 1000).toFixed(2)} Gbps`
+                : totalMbps >= 100
+                  ? `${totalMbps.toFixed(0)} Mbps`
+                  : totalMbps >= 10
+                    ? `${totalMbps.toFixed(1)} Mbps`
+                    : `${totalMbps.toFixed(2)} Mbps`}
+          </strong>
         </div>
         <div className="crop-factor-result-card">
           <span className="crop-factor-result-label">Estimated Size</span>
@@ -4881,6 +4965,20 @@ function AspectRatioCalculator() {
   const ratioWidth = roundedWidth / divisor;
   const ratioHeight = roundedHeight / divisor;
   const decimalRatio = heightValue > 0 ? widthValue / heightValue : 0;
+  // Reduced fractions like 959:540 aren't useful — fall back to a decimal ratio
+  // once the terms get unwieldy.
+  const simplifiedRatioLabel = (widthValue > 0 && heightValue > 0)
+    ? ((ratioWidth > 60 || ratioHeight > 60)
+        ? `${decimalRatio.toFixed(2)}:1`
+        : `${ratioWidth}:${ratioHeight}`)
+    : "—";
+  // Match a preset chip on the decimal ratio within 0.5% so 1.85:1 / 2.39:1
+  // (whose "185:100" form never survives fraction reduction) still light up.
+  const matchesRatioPreset = (presetW: number, presetH: number) => {
+    if (decimalRatio <= 0 || presetH <= 0) return false;
+    const target = presetW / presetH;
+    return Math.abs(decimalRatio - target) / target < 0.005;
+  };
   const heightAt1920 = (decimalRatio > 0 && Number.isFinite(1920 / decimalRatio)) ? 1920 / decimalRatio : 0;
   const widthAt1080 = (decimalRatio > 0 && Number.isFinite(1080 * decimalRatio)) ? 1080 * decimalRatio : 0;
   const targetPreset = ASPECT_DELIVERY_PRESETS.find((preset) => preset.label === targetPresetLabel) ?? ASPECT_DELIVERY_PRESETS[0];
@@ -4944,7 +5042,7 @@ function AspectRatioCalculator() {
               <button
                 key={preset.label}
                 type="button"
-                className={`crop-factor-chip ${ratioWidth === preset.width && ratioHeight === preset.height ? "active" : ""}`}
+                className={`crop-factor-chip ${matchesRatioPreset(preset.width, preset.height) ? "active" : ""}`}
                 onClick={() => {
                   setWidth(String(preset.width));
                   setHeight(String(preset.height));
@@ -5004,7 +5102,7 @@ function AspectRatioCalculator() {
       <div className="micro-tool-results">
         <div className="crop-factor-result-card">
           <span className="crop-factor-result-label">Simplified Ratio</span>
-          <strong>{widthValue > 0 && heightValue > 0 ? `${ratioWidth}:${ratioHeight}` : "—"}</strong>
+          <strong>{simplifiedRatioLabel}</strong>
         </div>
         <div className="crop-factor-result-card">
           <span className="crop-factor-result-label">Decimal Ratio</span>
@@ -5076,7 +5174,13 @@ function TransferTimeCalculator({ resetNonce = 0 }: { resetNonce?: number }) {
     destinationBytesPerSecond || Infinity
   );
   
-  const hasBottleneck = new Set([sourceBytesPerSecond, interfaceBytesPerSecond, destinationBytesPerSecond]).size > 1;
+  // Only call something a bottleneck when the slowest stage is at least 5%
+  // slower than the next one — otherwise near-identical presets (2800 vs 2799)
+  // would always flag one.
+  const finiteStageRates = [sourceBytesPerSecond, interfaceBytesPerSecond, destinationBytesPerSecond]
+    .filter((rate) => rate > 0 && Number.isFinite(rate))
+    .sort((a, b) => a - b);
+  const hasBottleneck = finiteStageRates.length >= 2 && finiteStageRates[0] < finiteStageRates[1] * 0.95;
   const efficiencyVal = Math.max(0, Math.min(100, Number(efficiency) || 0));
   const effectiveBytesPerSecond = bottleneckBytesPerSecond !== Infinity ? bottleneckBytesPerSecond * efficiencyVal / 100 : 0;
   
