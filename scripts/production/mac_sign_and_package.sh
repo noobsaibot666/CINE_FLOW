@@ -29,6 +29,17 @@ xattr -cr "$PROVISION" || true
 cp "$PROVISION" "$APP_PATH/Contents/embedded.provisionprofile"
 xattr -rc "$APP_PATH"
 
+echo "🛡️  Phase 3b: Signing nested Mach-O inside frameworks (must precede the bundle re-seal)..."
+# BlackmagicRawAPI.framework carries loose Mach-O helpers under Versions/A/Libraries/
+# (DecoderMetal, DecoderOpenCL, InstructionSetServices*). `codesign` on the
+# framework bundle re-seals but does NOT re-sign these — they keep Blackmagic's
+# Developer ID signature, which App Store validation rejects ("must be signed
+# with the certificate that is contained in the provisioning profile").
+find "$APP_PATH/Contents/Frameworks" -type d -name "*.framework" | while read -r FW; do
+  find "$FW/Versions" -type f \( -perm -u+x -o -name "*.dylib" \) -not -path "*/_CodeSignature/*" \
+    -exec codesign --force --sign "$IDENTITY" --entitlements "$SIDECAR_ENTITLEMENTS" --options runtime {} \;
+done
+
 echo "🛡️  Phase 4: Signing frameworks..."
 find "$APP_PATH/Contents/Frameworks" -name "*.framework" -exec codesign --force --verify --verbose --sign "$IDENTITY" --entitlements "$SIDECAR_ENTITLEMENTS" --options runtime {} \;
 

@@ -72,6 +72,21 @@ if [ -d "$RES" ]; then
         --entitlements "$DIRECT_ENTITLEMENTS" "$f"
     done
   fi
+  # BlackmagicRawAPI.framework ships loose Mach-O helpers under
+  # Versions/A/Libraries/ that Tauri's framework signing doesn't reach. Re-sign
+  # them (and the framework binary) with our Developer ID + hardened runtime so
+  # notarization doesn't reject them, then let the app re-seal pick up the new
+  # hashes.
+  if [ -d "$APP/Contents/Frameworks" ]; then
+    echo "[2/7] Signing nested framework Mach-O..."
+    find "$APP/Contents/Frameworks" -type d -name "*.framework" | while read -r FW; do
+      find "$FW/Versions" -type f \( -perm -u+x -o -name "*.dylib" \) -not -path "*/_CodeSignature/*" -print0 \
+        | while IFS= read -r -d '' f; do
+            codesign --force --sign "$IDENTITY" --options runtime --timestamp "$f"
+          done
+      codesign --force --sign "$IDENTITY" --options runtime --timestamp "$FW"
+    done
+  fi
   echo "[2/7] Re-sealing app bundle..."
   codesign --force --sign "$IDENTITY" --options runtime --timestamp \
     --entitlements "$DIRECT_ENTITLEMENTS" "$APP"
