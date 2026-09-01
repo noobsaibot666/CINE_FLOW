@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from "react";
-import { ArrowRight, BarChart3, Briefcase, Camera, CircleDot, ClipboardCheck, Maximize2, Minus, Plus, ShieldCheck, SlidersHorizontal, X } from "lucide-react";
+import React, { useEffect, useRef, useState } from "react";
+import { ArrowRight, BarChart3, Camera, ClipboardCheck, Maximize2, Minus, Plus, ShieldCheck, SlidersHorizontal, X } from "lucide-react";
 import { ProductionProject } from "../../types";
 import { invokeGuarded } from "../../utils/tauri";
 
@@ -13,6 +13,9 @@ interface ProductionHomeProps {
   onOpenFramePreview: () => void;
   onOpenStarterSetup: () => void;
   lockedModuleIds?: string[];
+  /** Project Manager open state, controlled by the header entry point. */
+  projectListOpen?: boolean;
+  onProjectListOpenChange?: (open: boolean) => void;
 }
 
 export function ProductionHome({
@@ -25,6 +28,8 @@ export function ProductionHome({
   onOpenFramePreview,
   onOpenStarterSetup,
   lockedModuleIds = [],
+  projectListOpen,
+  onProjectListOpenChange,
 }: ProductionHomeProps) {
   const [projects, setProjects] = useState<ProductionProject[]>([]);
   const [projectName, setProjectName] = useState("");
@@ -32,7 +37,14 @@ export function ProductionHome({
   const [creatingProject, setCreatingProject] = useState(false);
   const [deletingProjectId, setDeletingProjectId] = useState<string | null>(null);
   const [createModalOpen, setCreateModalOpen] = useState(false);
-  const [showFullProjectList, setShowFullProjectList] = useState(false);
+  const [internalListOpen, setInternalListOpen] = useState(false);
+  const promptedForFirstProject = useRef(false);
+
+  const showFullProjectList = projectListOpen ?? internalListOpen;
+  const setShowFullProjectList = (open: boolean) => {
+    setInternalListOpen(open);
+    onProjectListOpenChange?.(open);
+  };
 
   useEffect(() => {
     void loadProjects();
@@ -42,6 +54,12 @@ export function ProductionHome({
     try {
       const list = await invokeGuarded<ProductionProject[]>("production_list_projects");
       setProjects(list);
+      // First time the Production page is opened with nothing set up: jump
+      // straight to the create-project dialog.
+      if (list.length === 0 && !activeProject && !promptedForFirstProject.current) {
+        promptedForFirstProject.current = true;
+        setCreateModalOpen(true);
+      }
     } catch (error) {
       console.error("Failed to load production projects", error);
       setProjects([]);
@@ -202,10 +220,6 @@ export function ProductionHome({
             </div>
 
             <div className="production-apps-grid module-launcher-grid">
-              <ProjectsCard
-                activeProject={activeProject}
-                onViewAll={() => setShowFullProjectList(true)}
-              />
               <ModuleCard
                 icon={<SlidersHorizontal size={22} strokeWidth={1.35} />}
                 title="Look Setup"
@@ -290,39 +304,6 @@ export function ProductionHome({
             </div>
           </div>
         ) : null}
-      </div>
-    </div>
-  );
-}
-
-function ProjectsCard({
-  activeProject,
-  onViewAll,
-}: {
-  activeProject: ProductionProject | null;
-  onViewAll: () => void;
-}) {
-  return (
-    <div 
-      className="module-card premium-card module-launcher-card production-project-card" 
-      style={{ ...moduleCardStyle, alignText: "left", position: "relative" } as any}
-      onClick={onViewAll}
-    >
-      {activeProject && (
-        <div style={activeBadgeStyle} title={`Active Project: ${activeProject.name}`}>
-          <CircleDot size={8} strokeWidth={3} className="pulse-slow" />
-          <span>In Session</span>
-        </div>
-      )}
-      <div className="module-icon">
-        <Briefcase size={22} strokeWidth={1.35} />
-      </div>
-      <div className="module-info">
-        <h2>Project Manager</h2>
-        <p>Manage your projects here and open the one you want to work on.</p>
-        <span className="module-action">
-           Manage Projects <ArrowRight size={16} />
-        </span>
       </div>
     </div>
   );
@@ -528,22 +509,3 @@ const tableCellStyle: React.CSSProperties = {
   verticalAlign: "middle",
 };
 
-const activeBadgeStyle: React.CSSProperties = {
-  position: "absolute",
-  top: 16,
-  right: 16,
-  display: "flex",
-  alignItems: "center",
-  gap: 6,
-  padding: "3px 8px",
-  borderRadius: 99,
-  background: "rgba(165,146,255,0.12)",
-  border: "1px solid rgba(165,146,255,0.2)",
-  color: "var(--color-accent)",
-  fontSize: "0.55rem",
-  fontWeight: 700,
-  textTransform: "uppercase",
-  letterSpacing: "0.06em",
-  boxShadow: "0 2px 8px rgba(0,0,0,0.2)",
-  zIndex: 10,
-};

@@ -346,6 +346,13 @@ function AppContent() {
   const [jobsOpen, setJobsOpen] = useState(false);
   const [jobs, setJobs] = useState<JobInfo[]>([]);
   const [aboutOpen, setAboutOpen] = useState(false);
+  // Production Project Manager, opened from the header (no longer a grid card).
+  const [productionProjectsOpen, setProductionProjectsOpen] = useState(false);
+  const openProjectManager = useCallback(() => {
+    setActiveTab('production');
+    setActiveProductionApp(null);
+    setProductionProjectsOpen(true);
+  }, []);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
   const {
@@ -1601,47 +1608,18 @@ function AppContent() {
               </nav>
               <>
 
-                <div className="help-menu-wrapper" style={{ position: 'relative' }}>
-                  <button 
-                    className="btn btn-ghost help-menu-trigger" 
-                    style={{ 
-                      width: '32px', 
-                      height: '32px', 
-                      color: 'var(--text-secondary)', 
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      padding: 0
-                    }} 
-                    onClick={() => setHelpMenuOpen(!helpMenuOpen)} 
-                    title="Help & Info"
+                {activeTab === 'production' && (
+                  <button
+                    className="btn btn-utilities"
+                    onClick={openProjectManager}
+                    title={activeProductionProject ? `Project: ${activeProductionProject.name}` : "Projects"}
                   >
-                    <CircleHelp size={16} strokeWidth={1.5} />
+                    <Briefcase size={14} />
+                    <span style={{ maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {activeProductionProject ? activeProductionProject.name : 'Projects'}
+                    </span>
                   </button>
-                  {helpMenuOpen && (
-                    <>
-                      <div className="dropdown-backdrop" onClick={() => setHelpMenuOpen(false)} />
-                      <div className="help-dropdown menu-dropdown">
-                        <button className="dropdown-item menu-item" onClick={() => { setSettingsOpen(true); setHelpMenuOpen(false); }}>
-                          <span className="menu-item-icon"><Settings size={16} /></span>
-                          <span className="menu-item-label">Settings</span>
-                        </button>
-                        <button className="dropdown-item menu-item" onClick={() => { setAboutOpen(true); setHelpMenuOpen(false); }}>
-                          <span className="menu-item-icon"><Info size={16} /></span>
-                          <span className="menu-item-label">About CineFlow</span>
-                        </button>
-                        <div className="dropdown-divider menu-divider" />
-                        <button className="dropdown-item menu-item" onClick={() => {
-                          if (tourRun) completeTour();
-                          else startTour();
-                        }}>
-                          <span className="menu-item-icon"><Compass size={16} /></span>
-                          <span className="menu-item-label">{tourRun ? "Hide Tour" : "Show Tour"}</span>
-                        </button>
-                      </div>
-                    </>
-                  )}
-                </div>
+                )}
 
                 <div className="utilities-menu-wrapper" style={{ position: 'relative' }}>
                   <button
@@ -1715,15 +1693,23 @@ function AppContent() {
                 </div>
 
 
-                <button className={`btn btn-jobs jobs-state-${jobHudState}`} onClick={() => setJobsOpen(true)}>
+                <button
+                  className={`btn btn-jobs btn-jobs-compact jobs-state-${jobHudState}`}
+                  onClick={() => setJobsOpen(true)}
+                  title={
+                    (scanning || extracting) ? (scanning ? "Scanning…" : `Extracting ${extractProgress.done}/${extractProgress.total}`)
+                      : runningJobs > 0 ? `${runningJobs} job${runningJobs === 1 ? "" : "s"} running`
+                      : failedJobs > 0 ? `${failedJobs} job${failedJobs === 1 ? "" : "s"} failed`
+                      : "Jobs"
+                  }
+                >
                   <div className="jobs-indicator-content">
                     <Briefcase size={16} />
-                    <span className="jobs-label">
-                      {(scanning || extracting) ? (scanning ? "Scanning…" : `Extracting ${extractProgress.done}/${extractProgress.total}`) : (
-                        runningJobs > 0 ? `Running ${runningJobs}` : failedJobs > 0 ? `Errors ${failedJobs}` : "Jobs"
-                      )}
-                    </span>
-                    {failedJobs > 0 && <AlertTriangle size={14} className="status-icon-failed" style={{ marginLeft: 4 }} />}
+                    {(scanning || extracting || runningJobs > 0 || failedJobs > 0) && (
+                      <span className="jobs-count-badge">
+                        {(scanning || extracting) ? <span className="spinner spinner-xs" /> : (failedJobs > 0 ? failedJobs : runningJobs)}
+                      </span>
+                    )}
                   </div>
                   {(scanning || extracting || runningJobs > 0) && (
                     <div className="jobs-progress-bar">
@@ -1731,6 +1717,48 @@ function AppContent() {
                     </div>
                   )}
                 </button>
+
+                <div className="help-menu-wrapper" style={{ position: 'relative' }}>
+                  <button
+                    className="btn btn-ghost help-menu-trigger"
+                    style={{
+                      width: '32px',
+                      height: '32px',
+                      color: 'var(--text-secondary)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      padding: 0
+                    }}
+                    onClick={() => setHelpMenuOpen(!helpMenuOpen)}
+                    title="Help & Info"
+                  >
+                    <CircleHelp size={16} strokeWidth={1.5} />
+                  </button>
+                  {helpMenuOpen && (
+                    <>
+                      <div className="dropdown-backdrop" onClick={() => setHelpMenuOpen(false)} />
+                      <div className="help-dropdown menu-dropdown">
+                        <button className="dropdown-item menu-item" onClick={() => { setSettingsOpen(true); setHelpMenuOpen(false); }}>
+                          <span className="menu-item-icon"><Settings size={16} /></span>
+                          <span className="menu-item-label">Settings</span>
+                        </button>
+                        <button className="dropdown-item menu-item" onClick={() => { setAboutOpen(true); setHelpMenuOpen(false); }}>
+                          <span className="menu-item-icon"><Info size={16} /></span>
+                          <span className="menu-item-label">About CineFlow</span>
+                        </button>
+                        <div className="dropdown-divider menu-divider" />
+                        <button className="dropdown-item menu-item" onClick={() => {
+                          if (tourRun) completeTour();
+                          else startTour();
+                        }}>
+                          <span className="menu-item-icon"><Compass size={16} /></span>
+                          <span className="menu-item-label">{tourRun ? "Hide Tour" : "Show Tour"}</span>
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
               </>
             </div>
           </header>
@@ -2280,6 +2308,8 @@ function AppContent() {
                     setActiveProductionApp("starter-setup");
                   }}
                   activeProject={activeProductionProject}
+                  projectListOpen={productionProjectsOpen}
+                  onProjectListOpenChange={setProductionProjectsOpen}
                   lockedModuleIds={licenseMode === 'trial' ? ['onset-coach', 'match-normalize', 'frame-preview', 'starter-setup'] : []}
                 />
               )
@@ -2477,6 +2507,17 @@ function AppContent() {
             >
               <ArrowLeft size={14} />
               <span>Back</span>
+            </button>
+          )}
+
+          {activeTab === 'production' && activeProductionProject && (
+            <button
+              className="active-project-pill"
+              onClick={openProjectManager}
+              title={`Open Project Manager — ${activeProductionProject.name}`}
+            >
+              <CircleDot size={9} strokeWidth={3} className="pulse-slow" />
+              <span>{activeProductionProject.name}</span>
             </button>
           )}
 
