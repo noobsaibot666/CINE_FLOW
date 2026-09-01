@@ -583,15 +583,34 @@ pub fn locate_art_cmd(art_cmd_dir: Option<&str>) -> Option<String> {
 
     // 2. Standard install locations.
     #[cfg(target_os = "macos")]
-    for path in [
-        "/Applications/ARRI Reference Tool.app/Contents/MacOS/art-cmd",
-        "/Applications/ARRI/ARRI Reference Tool.app/Contents/MacOS/art-cmd",
-        "/Applications/ARRI Reference Tool CMD/art-cmd",
-        "/usr/local/bin/art-cmd",
-        "/opt/homebrew/bin/art-cmd",
-    ] {
-        if Path::new(path).exists() {
-            return Some(path.to_string());
+    {
+        for path in [
+            "/Applications/ARRI Reference Tool.app/Contents/MacOS/art-cmd",
+            "/Applications/ARRI/ARRI Reference Tool.app/Contents/MacOS/art-cmd",
+            "/Applications/ARRI Reference Tool CMD/art-cmd",
+            "/Applications/ARRI/art-cmd",
+            "/usr/local/bin/art-cmd",
+            "/opt/homebrew/bin/art-cmd",
+        ] {
+            if Path::new(path).exists() {
+                return Some(path.to_string());
+            }
+        }
+        // ARRI installs everything under /Applications/ARRI/ — scan one level of
+        // app bundles / folders there for the CLI (the GUI "ART Viewer" does NOT
+        // ship it; the full ART or the art-cmd package does).
+        for root in ["/Applications/ARRI", "/Applications"] {
+            if let Ok(entries) = std::fs::read_dir(root) {
+                for entry in entries.flatten() {
+                    let base = entry.path();
+                    for sub in ["art-cmd", "Contents/MacOS/art-cmd", "bin/art-cmd"] {
+                        let candidate = base.join(sub);
+                        if candidate.is_file() {
+                            return Some(candidate.to_string_lossy().to_string());
+                        }
+                    }
+                }
+            }
         }
     }
     #[cfg(target_os = "windows")]

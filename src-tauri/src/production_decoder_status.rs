@@ -158,15 +158,16 @@ fn art_setup() -> DecoderSetup {
             "https://www.arri.com/en/learn-help/learn-help-camera-system/tools/arri-reference-tool"
                 .into(),
         ),
-        download_label: Some("Get the ARRI Reference Tool (free)".into()),
+        download_label: Some("Get ARRI Reference Tool — CMD / art-cmd (free)".into()),
         steps: vec![
-            "Install the ARRI Reference Tool (free) — its command-line tool `art-cmd` decodes ARRIRAW and ARRIRAW MXF natively, no DaVinci Resolve needed.".into(),
-            "Or press Locate… and pick the ARRI Reference Tool app (or a folder containing `art-cmd`).".into(),
+            "Download the ARRI Reference Tool **CMD** package (or the full ART) — its `art-cmd` tool decodes ARRIRAW and ARRIRAW MXF natively, no DaVinci Resolve needed.".into(),
+            "The 'ARRI Reference Tool Viewer' (playback only) does NOT include art-cmd — you need the CMD/full download.".into(),
+            "Or press Locate… and pick the `art-cmd` binary (or the folder / app that contains it).".into(),
             "Press Re-check.".into(),
         ],
         locate_key: Some("art_cmd_dir".into()),
-        locate_kind: Some("app".into()),
-        locate_hint: Some("Pick 'ARRI Reference Tool.app', or a folder that contains the `art-cmd` binary.".into()),
+        locate_kind: Some("file".into()),
+        locate_hint: Some("Pick the `art-cmd` binary itself, or a folder / .app that contains it.".into()),
     }
 }
 
