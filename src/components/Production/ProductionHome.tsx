@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { ArrowRight, BarChart3, Briefcase, Camera, CircleDot, Maximize2, Minus, Plus, ShieldCheck, SlidersHorizontal, X } from "lucide-react";
+import { ArrowRight, BarChart3, Briefcase, Camera, CircleDot, ClipboardCheck, Maximize2, Minus, Plus, ShieldCheck, SlidersHorizontal, X } from "lucide-react";
 import { ProductionProject } from "../../types";
 import { invokeGuarded } from "../../utils/tauri";
 
@@ -11,6 +11,7 @@ interface ProductionHomeProps {
   onOpenMatchNormalize: () => void;
   onOpenCameraMatchLab: () => void;
   onOpenFramePreview: () => void;
+  onOpenStarterSetup: () => void;
   lockedModuleIds?: string[];
 }
 
@@ -22,6 +23,7 @@ export function ProductionHome({
   onOpenMatchNormalize,
   onOpenCameraMatchLab,
   onOpenFramePreview,
+  onOpenStarterSetup,
   lockedModuleIds = [],
 }: ProductionHomeProps) {
   const [projects, setProjects] = useState<ProductionProject[]>([]);
@@ -243,6 +245,14 @@ export function ProductionHome({
                 enabled={true}
                 locked={lockedModuleIds.includes('frame-preview')}
                 onClick={onOpenFramePreview}
+              />
+              <ModuleCard
+                icon={<ClipboardCheck size={22} strokeWidth={1.35} />}
+                title="Starter Setup"
+                description="Get a safe technical starting setup sheet for your shoot instantly."
+                enabled={true}
+                locked={lockedModuleIds.includes('starter-setup')}
+                onClick={onOpenStarterSetup}
               />
             </div>
           </>

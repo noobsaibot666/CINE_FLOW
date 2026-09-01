@@ -18,7 +18,7 @@ import {
 import { 
   CAMERA_MODELS, 
   LENS_MODELS 
-} from "../../modules/PreProduction/StarterSetupData";
+} from "../../modules/Production/StarterSetupData";
 import { 
   StarterSetupInputs, 
   SetupOutput, 
@@ -31,8 +31,8 @@ import {
   LightCondition,
   MovementLevel,
   PriorityType
-} from "../../modules/PreProduction/StarterSetupTypes";
-import { StarterSetupEngine } from "../../modules/PreProduction/StarterSetupEngine";
+} from "../../modules/Production/StarterSetupTypes";
+import { StarterSetupEngine } from "../../modules/Production/StarterSetupEngine";
 
 interface StarterSetupProps {
   onBack?: () => void;

@@ -55,7 +55,6 @@ const SettingsPanel = lazy(() => import("./components/SettingsPanel").then(m => 
 const FolderCreator = lazy(() => import("./components/FolderCreator").then(m => ({ default: m.FolderCreator })));
 const MosaicBuilder = lazy(() => import("./components/MosaicBuilder").then(m => ({ default: m.MosaicBuilder })));
 const DuplicateFinderApp = lazy(() => import("./components/DuplicateFinderApp").then(m => ({ default: m.DuplicateFinderApp })));
-const StarterSetup = lazy(() => import("./components/PreProduction/StarterSetup"));
 const ShotList = lazy(() => import("./components/PreProduction/ShotList"));
 const BrandedInstaller = lazy(() => import("./components/BrandedInstaller").then(m => ({ default: m.BrandedInstaller })));
 import { TourGuide, TourStep } from "./components/TourGuide";
@@ -80,6 +79,7 @@ const OnSetCoach = lazy(() => import('./modules/Production/apps/OnSetCoach.tsx')
 const MatchNormalize = lazy(() => import('./modules/Production/apps/MatchNormalize.tsx'));
 const CameraMatchLab = lazy(() => import('./modules/Production/apps/CameraMatchLab.tsx'));
 const FramePreview = lazy(() => import('./modules/Production/apps/FramePreview'));
+const StarterSetup = lazy(() => import('./components/Production/StarterSetup'));
 import { useCommandPalette } from "./hooks/useCommandPalette";
 import { CommandPalette } from "./components/CommandPalette";
 import { getJumpIntervalForThumbCount, getThumbnailCacheContext } from "./utils/thumbnailIntervals";
@@ -1940,10 +1940,6 @@ function AppContent() {
                 <div className="scrollable-view">
                   <DuplicateFinderApp />
                 </div>
-              ) : activePreproductionApp === 'starter-setup' ? (
-                <div className="scrollable-view">
-                  <StarterSetup onBack={() => setActivePreproductionApp(null)} />
-                </div>
               ) : activePreproductionApp === 'shot-list' ? (
                 <div className="scrollable-view">
                   <ShotList onBack={() => setActivePreproductionApp(null)} appVersion={appInfo?.version} />
@@ -2021,19 +2017,6 @@ function AppContent() {
                           <h3>Grid Mosaic</h3>
                           <p>Generate large multi-frame image grids and PDF sheets from clip thumbnails.</p>
                           <span className="module-action">{isModuleLocked('mosaic-builder') ? 'Full License required' : 'Open App'} <ArrowRight size={14} /></span>
-                        </div>
-                      </div>
-                      <div
-                        className={`module-card premium-card module-launcher-card ${isModuleLocked('starter-setup') ? 'disabled' : ''}`}
-                        style={{ position: 'relative' }}
-                        onClick={() => { if (!isModuleLocked('starter-setup')) setActivePreproductionApp('starter-setup'); }}
-                      >
-                        {isModuleLocked('starter-setup') && <TrialLockBadge />}
-                        <div className="module-icon"><ClipboardCheck size={20} strokeWidth={1.5} /></div>
-                        <div className="module-info">
-                          <h3>Starter Setup</h3>
-                          <p>Get a safe technical starting setup sheet for your shoot instantly.</p>
-                          <span className="module-action">{isModuleLocked('starter-setup') ? 'Full License required' : 'Open App'} <ArrowRight size={14} /></span>
                         </div>
                       </div>
                     </div>
@@ -2275,6 +2258,10 @@ function AppContent() {
                   project={activeProductionProject}
                   onBack={() => setActiveProductionApp(null)}
                 />
+              ) : activeProductionApp === "starter-setup" ? (
+                <div className="scrollable-view">
+                  <StarterSetup onBack={() => setActiveProductionApp(null)} />
+                </div>
               ) : (
                 <ProductionLanding
                   onSelectProject={setActiveProductionProject}
@@ -2293,8 +2280,11 @@ function AppContent() {
                   onOpenFramePreview={() => {
                     setActiveProductionApp("frame-preview");
                   }}
+                  onOpenStarterSetup={() => {
+                    setActiveProductionApp("starter-setup");
+                  }}
                   activeProject={activeProductionProject}
-                  lockedModuleIds={licenseMode === 'trial' ? ['onset-coach', 'match-normalize', 'frame-preview'] : []}
+                  lockedModuleIds={licenseMode === 'trial' ? ['onset-coach', 'match-normalize', 'frame-preview', 'starter-setup'] : []}
                 />
               )
             ) : activeTab === 'installer' ? (
