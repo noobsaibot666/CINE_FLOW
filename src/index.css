@@ -93,10 +93,12 @@
   --shadow-glow: none;
 
   /* Inspector Suite Design Tokens */
-  --inspector-bg: rgba(255, 255, 255, 0.02);
-  --inspector-bg-hover: rgba(255, 255, 255, 0.04);
-  --inspector-border: 1px solid rgba(255, 255, 255, 0.04);
-  --inspector-border-bright: 1px solid rgba(255, 255, 255, 0.08);
+  /* Baseline contrast against the app background — these must read clearly
+     at rest, not only once hovered. */
+  --inspector-bg: rgba(255, 255, 255, 0.035);
+  --inspector-bg-hover: rgba(255, 255, 255, 0.055);
+  --inspector-border: 1px solid rgba(255, 255, 255, 0.08);
+  --inspector-border-bright: 1px solid rgba(255, 255, 255, 0.14);
   --inspector-glass-blur: blur(20px);
 
   --inspector-label-size: 0.55rem;
@@ -121,15 +123,13 @@
 }
 
 .inspector-field {
+  /* A plain label/value display field (Safe Copy, Jobs, Export Panel) — not
+     interactive, so it does not react to the pointer. Its contrast against
+     the background comes from --inspector-bg at rest. */
   display: flex;
   flex-direction: column;
   padding: 8px 12px;
   background: var(--inspector-bg);
-  transition: background var(--transition-fast);
-}
-
-.inspector-field:hover {
-  background: var(--inspector-bg-hover);
 }
 
 .inspector-label {
@@ -2762,19 +2762,20 @@ body {
 }
 
 .stat-card {
+  /* A read-only stat readout, not a control — its contrast comes from the
+     resting background/border below, not from hovering it. */
   display: flex;
   flex-direction: column;
   gap: 4px;
   padding: 16px 20px;
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 16px;
   flex: 1;
   min-width: 0;
   min-height: 100px;
   position: relative;
   overflow: hidden;
-  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
   backdrop-filter: blur(10px);
 }
 
@@ -2788,11 +2789,6 @@ body {
   background: radial-gradient(circle at top right, var(--corner-color, rgba(255, 255, 255, 0.03)) 0%, transparent 70%);
   opacity: 0.6;
   pointer-events: none;
-}
-
-.stat-card:hover {
-  background: rgba(255, 255, 255, 0.04);
-  border-color: rgba(255, 255, 255, 0.15);
 }
 
 .stat-card-highlight {
@@ -4827,13 +4823,21 @@ body {
 
 .premium-card {
   background: #111215;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  /* Contrast against the app background is baked into the resting state —
+     it must not depend on hover to read clearly. */
+  border: 1px solid rgba(255, 255, 255, 0.1);
   position: relative;
   overflow: hidden;
   transition: border-color 180ms ease, background-color 180ms ease, box-shadow 180ms ease;
 }
 
-.premium-card:hover {
+/* The hover brighten belongs only to cards that are actually clickable —
+   module launchers and selectable clip cards. This class is also used on
+   plain content panels (Safe Copy's dashboard/config/results, Export Panel,
+   Shot List columns, the workspace empty state, etc.) purely for its resting
+   look; those must not react to the pointer as if they were buttons. */
+.module-card.premium-card:hover,
+.clip-card.premium-card:hover {
   background: #15161a;
   border-color: rgba(255, 255, 255, 0.16);
 }
