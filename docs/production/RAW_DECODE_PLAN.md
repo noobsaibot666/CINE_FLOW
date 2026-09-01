@@ -214,13 +214,14 @@ A review of the wiring turned up and fixed:
   `locate_redline` finds the `/usr/local/bin/REDline` symlink it drops.
 - The Resolve render preset (`SetCurrentRenderFormatAndCodec("mp4", "H264")`)
   is still unverified against every Resolve version.
-- **ARRI `art-cmd` flags unverified against a live install.** The invocation
-  (`process --input … --video-codec prores422 --output …`) is taken from ARRI's
-  published `art-cmd` v1.0 manual, not tested here (ART wasn't installed on the
-  dev machine). `create_arri_proxy_via_art_cmd` accepts the named output file
-  *or* any `.mov`/`.mxf` art-cmd leaves in the scratch dir, and surfaces
-  stderr + a Decoder Setup hint on failure. Verify the flag set and whether ART
-  needs activation when a real install is available.
+- **ARRI `art-cmd` — verified end to end** against art-cmd 1.0.0 (universal) and a
+  real ALEXA ARRIRAW MXF: `art-cmd process --input <src> --video-codec prores422
+  --output-width 1920 --output <dir>/art_decode.mxf` → ProRes422 MXF (Metal GPU,
+  default LogC, no `--embedded-look`), then ffmpeg → the shared H.264 proxy.
+  ProRes `--video-codec` values require a `.mxf` output. No activation/licence
+  prompt observed. `create_arri_proxy_via_art_cmd` still falls back to scanning
+  the scratch dir for any `.mxf`/`.mov` if the named file is missing.
+  `art-cmd` needs its sibling `lib/` folder intact (ARRI Image SDK dylibs).
 
 ### Explicit proxy generation (operator control)
 

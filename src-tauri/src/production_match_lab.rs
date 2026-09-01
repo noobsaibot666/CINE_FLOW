@@ -711,12 +711,13 @@ pub fn create_red_proxy_via_redline(
 }
 
 /// Decode an ARRIRAW source (`.ari`/`.arx` or ARRIRAW MXF) to an analysis proxy
-/// with ARRI's `art-cmd` (`process` mode → Apple ProRes), then re-encode to the
-/// shared H.264 proxy. No DaVinci Resolve needed.
+/// with ARRI's `art-cmd` (`process` mode → ProRes422 MXF, default LogC), then
+/// re-encode to the shared H.264 proxy. No DaVinci Resolve needed.
 ///
-/// `art-cmd process --input <src> --video-codec prores422 --output <dir>/art_decode.mov`
-/// — flag set verified against the published art-cmd v1.0 manual; re-check
-/// against the installed ART version if output is missing.
+/// `art-cmd process --input <src> --video-codec prores422 --output-width 1920 --output <dir>/art_decode.mxf`
+/// — verified against art-cmd 1.0.0 (universal). `--video-codec` ProRes values
+/// require a `.mxf` output; `--output-width` keeps the intermediate small; no
+/// `--embedded-look` so the proxy stays scene-referred LogC for analysis.
 pub fn create_arri_proxy_via_art_cmd(
     art_cmd_path: &str,
     input_path: &str,
@@ -729,7 +730,7 @@ pub fn create_arri_proxy_via_art_cmd(
     }
     std::fs::create_dir_all(decoded_dir)
         .map_err(|e| format!("Failed to prepare ARRI decode scratch: {e}"))?;
-    let decoded_mov_path = decoded_dir.join("art_decode.mov");
+    let decoded_mxf_path = decoded_dir.join("art_decode.mxf");
 
     let mut cmd = crate::tools::create_command(art_cmd_path);
     cmd.args([
@@ -738,8 +739,10 @@ pub fn create_arri_proxy_via_art_cmd(
         input_path,
         "--video-codec",
         "prores422",
+        "--output-width",
+        "1920",
         "--output",
-        &decoded_mov_path.to_string_lossy(),
+        &decoded_mxf_path.to_string_lossy(),
     ]);
     let out = cmd
         .output()
@@ -757,9 +760,9 @@ pub fn create_arri_proxy_via_art_cmd(
     }
 
     // art-cmd may write exactly the named file, or a variant name in the same
-    // directory (batch/sub-dir behaviour) — accept the first .mov/.mxf it left.
-    let decoded = if decoded_mov_path.exists() {
-        decoded_mov_path
+    // directory (batch/sub-dir behaviour) — accept the first .mxf/.mov it left.
+    let decoded = if decoded_mxf_path.exists() {
+        decoded_mxf_path
     } else {
         std::fs::read_dir(decoded_dir)
             .map_err(|e| format!("Cannot read ARRI decode output: {e}"))?

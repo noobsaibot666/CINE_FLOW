@@ -48,6 +48,7 @@ const FRAME_COUNT = 5;
 const MATCH_ENGINE_VERSION = "tuning_v2";
 const DEFAULT_SOURCE_PROFILE_ID: ProductionSourceProfileId = "REC709";
 const ANALYSIS_COLOR_SPACE = "ACEScct";
+const DECODER_DEPS_NOTICE_KEY = "cineflow_matchlab_decoder_deps_notice_v1";
 type CameraSlot = (typeof SLOT_ORDER)[number];
 type MatchActionChip = {
   key: string;
@@ -141,6 +142,10 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
   const [decoderStatuses, setDecoderStatuses] = useState<ProductionDecoderStatus[]>([]);
   const [decoderSetupOpen, setDecoderSetupOpen] = useState(false);
   const [decoderRefreshNonce, setDecoderRefreshNonce] = useState(0);
+  // One-time notice that optional camera-RAW decoders are third-party installs.
+  const [decoderDepsNoticeDismissed, setDecoderDepsNoticeDismissed] = useState<boolean>(() => {
+    try { return localStorage.getItem(DECODER_DEPS_NOTICE_KEY) === "dismissed"; } catch { return false; }
+  });
   // Proxies the user explicitly generated (per slot, tied to the current clip).
   const [generatedProxyBySlot, setGeneratedProxyBySlot] = useState<Record<string, { path: string; clip: string }>>({});
   const [generatingProxySlots, setGeneratingProxySlots] = useState<Record<string, boolean>>({});
@@ -1496,6 +1501,35 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
               </div>
             </div>
           </div>
+
+          {!decoderDepsNoticeDismissed && decoderStatuses.some((d) => d.state === "needs_setup") && (
+            <div style={decoderDepsNoticeStyle}>
+              <Info size={16} style={{ flexShrink: 0, marginTop: 1 }} />
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontWeight: 700, marginBottom: 2 }}>Some camera-RAW decoders aren&apos;t installed on this Mac</div>
+                <div style={{ color: "var(--text-secondary)", lineHeight: 1.45 }}>
+                  ProRes, MP4/MOV and BRAW analyse out of the box. R3D, ARRIRAW, Canon RAW and Sony X-OCN each need a free
+                  third-party decoder installed once (REDCINE-X PRO, the ARRI Reference Tool, or DaVinci Resolve) — or you
+                  can attach your own MP4/ProRes proxies. Open Decoder Setup for the download links.
+                </div>
+                <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => setDecoderSetupOpen(true)}>
+                    <Gauge size={14} /> Open Decoder Setup
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => {
+                      setDecoderDepsNoticeDismissed(true);
+                      try { localStorage.setItem(DECODER_DEPS_NOTICE_KEY, "dismissed"); } catch { /* ignore */ }
+                    }}
+                  >
+                    Got it
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           <SourceSupportStrip decoderStatuses={decoderStatuses} onOpenDecoderSetup={() => setDecoderSetupOpen(true)} />
 
@@ -4348,6 +4382,7 @@ const modalBodyStyle: React.CSSProperties = { color: "var(--text-secondary)", li
 const modalMetaStyle: React.CSSProperties = { marginTop: 10, color: "var(--text-muted)", fontSize: "0.82rem" };
 const modalActionsStyle: React.CSSProperties = { display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 18 };
 const subtleStyle: React.CSSProperties = { margin: 0, color: "var(--text-muted)", maxWidth: 760, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", textAlign: "left" };
+const decoderDepsNoticeStyle: React.CSSProperties = { display: "flex", alignItems: "flex-start", gap: 10, marginBottom: 12, padding: "12px 14px", borderRadius: 12, border: "1px solid rgba(96,165,250,0.28)", background: "rgba(96,165,250,0.08)", fontSize: "0.78rem", color: "var(--text-primary)" };
 const sourceSupportStripStyle: React.CSSProperties = { display: "grid", gridTemplateColumns: "minmax(240px, 1.1fr) minmax(0, 1.9fr)", gap: 12, marginBottom: 14, padding: 14, borderRadius: 16, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.025)", minWidth: 0 };
 const sourceSupportIntroStyle: React.CSSProperties = { display: "flex", alignItems: "flex-start", gap: 10, minWidth: 0, color: "rgba(216,212,223,0.92)" };
 const sourceSupportTextBlockStyle: React.CSSProperties = { display: "grid", gap: 4, minWidth: 0 };
