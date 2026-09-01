@@ -7,6 +7,7 @@ import {
   Gauge,
   HelpCircle,
   Monitor,
+  Pencil,
   RefreshCw,
   SlidersHorizontal,
   SunMedium,
@@ -63,6 +64,23 @@ export function LookSetupApp({ project, onContinueToMatchLab }: LookSetupAppProp
   const [saving, setSaving] = useState(false);
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const [includeDetailsPages, setIncludeDetailsPages] = useState(false);
+  const [notesModalOpen, setNotesModalOpen] = useState(false);
+  const [notesDraft, setNotesDraft] = useState("");
+
+  const openNotes = () => {
+    setNotesDraft(setup.custom_notes ?? "");
+    setNotesModalOpen(true);
+  };
+
+  const saveNotes = () => {
+    const next = { ...setup, custom_notes: notesDraft.trim() };
+    setSetup(next);
+    setNotesModalOpen(false);
+    // Persist immediately as well as via the debounced auto-save.
+    void invokeGuarded("production_save_look_setup", { setup: next }).catch((e) =>
+      console.error("Failed to save notes", e),
+    );
+  };
 
   useEffect(() => {
     void load();
@@ -289,17 +307,14 @@ export function LookSetupApp({ project, onContinueToMatchLab }: LookSetupAppProp
           />
           <IntentControl
             label="Notes"
-            helper="Optional project notes carried into the export."
+            helper="Saved with this project. Click to open, edit, and save."
             control={(
-              <details style={notesDrawerStyle}>
-                <summary style={notesSummaryStyle}>{setup.custom_notes?.trim() ? "Edit notes" : "Add notes"}</summary>
-                <textarea
-                  value={setup.custom_notes ?? ""}
-                  onChange={(event) => setSetup((prev) => ({ ...prev, custom_notes: event.target.value }))}
-                  placeholder={lookPresets.length > 0 ? `Optional. Starter refs: ${lookPresets.map((preset) => preset.name).join(" · ")}` : "Optional custom notes"}
-                  style={notesAreaStyle}
-                />
-              </details>
+              <button type="button" style={notesButtonStyle} onClick={openNotes} title="Open project notes">
+                {setup.custom_notes?.trim()
+                  ? <span style={notesPreviewStyle}>{setup.custom_notes.trim()}</span>
+                  : <span style={{ opacity: 0.55 }}>Add notes…</span>}
+                <Pencil size={13} style={{ flexShrink: 0, opacity: 0.55 }} />
+              </button>
             )}
           />
         </div>
@@ -463,6 +478,34 @@ export function LookSetupApp({ project, onContinueToMatchLab }: LookSetupAppProp
           </div>
         </section>
       ) : null}
+
+      {notesModalOpen && (
+        <div style={notesModalBackdropStyle} onClick={() => setNotesModalOpen(false)}>
+          <div style={notesModalCardStyle} onClick={(e) => e.stopPropagation()}>
+            <div style={notesModalHeaderStyle}>
+              <strong>Project notes</strong>
+              <span style={subtleHintStyle}>{project.name}</span>
+            </div>
+            <textarea
+              autoFocus
+              value={notesDraft}
+              onChange={(e) => setNotesDraft(e.target.value)}
+              placeholder={lookPresets.length > 0
+                ? `Anything the camera team should know. Starter refs: ${lookPresets.map((p) => p.name).join(" · ")}`
+                : "Anything the camera team should know for this shoot."}
+              style={notesModalTextareaStyle}
+              onKeyDown={(e) => {
+                if ((e.metaKey || e.ctrlKey) && e.key === "Enter") saveNotes();
+                if (e.key === "Escape") setNotesModalOpen(false);
+              }}
+            />
+            <div style={notesModalActionsStyle}>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => setNotesModalOpen(false)}>Cancel</button>
+              <button type="button" className="btn btn-secondary btn-sm" onClick={saveNotes}>Save notes</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -605,9 +648,13 @@ const intentControlWrapStyle: React.CSSProperties = { minWidth: 0, height: 38, b
 const segmentedControlStyle: React.CSSProperties = { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, width: "100%", minHeight: 34 };
 const segmentedButtonStyle: React.CSSProperties = { minHeight: 34, borderRadius: 8, color: "var(--text-muted)", border: "1px solid transparent", fontSize: "0.78rem" };
 const segmentedActiveButtonStyle: React.CSSProperties = { minHeight: 34, borderRadius: 8, color: "var(--color-accent)", border: "1px solid rgba(0,209,255,0.28)", background: "rgba(0,209,255,0.08)", fontSize: "0.78rem" };
-const notesDrawerStyle: React.CSSProperties = { minWidth: 0, alignSelf: "stretch", width: "100%", padding: "0 10px", minHeight: 34, borderRadius: 8, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.02)", display: "flex", alignItems: "center" };
-const notesSummaryStyle: React.CSSProperties = { cursor: "pointer", listStyle: "none", fontSize: "0.78rem", fontWeight: 700, color: "var(--text-primary)", lineHeight: "1" };
-const notesAreaStyle: React.CSSProperties = { marginTop: 10, width: "100%", minHeight: 86, resize: "vertical", padding: "10px 12px", borderRadius: 10, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(10,10,12,0.6)", color: "var(--text-primary)" };
+const notesButtonStyle: React.CSSProperties = { minWidth: 0, alignSelf: "stretch", width: "100%", padding: "0 10px", minHeight: 34, borderRadius: 8, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.02)", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: "0.78rem", fontWeight: 600, textAlign: "left" };
+const notesPreviewStyle: React.CSSProperties = { flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" };
+const notesModalBackdropStyle: React.CSSProperties = { position: "fixed", inset: 0, zIndex: 4000, background: "rgba(0,0,0,0.55)", backdropFilter: "blur(3px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 };
+const notesModalCardStyle: React.CSSProperties = { width: "min(640px, 100%)", display: "flex", flexDirection: "column", gap: 14, padding: 20, borderRadius: 18, border: "1px solid rgba(255,255,255,0.1)", background: "var(--inspector-bg, #14151a)", boxShadow: "0 24px 64px rgba(0,0,0,0.5)" };
+const notesModalHeaderStyle: React.CSSProperties = { display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12 };
+const notesModalTextareaStyle: React.CSSProperties = { width: "100%", minHeight: 260, resize: "vertical", padding: "12px 14px", borderRadius: 12, border: "1px solid rgba(255,255,255,0.1)", background: "rgba(10,10,12,0.6)", color: "var(--text-primary)", fontSize: "0.9rem", lineHeight: 1.5 };
+const notesModalActionsStyle: React.CSSProperties = { display: "flex", justifyContent: "flex-end", gap: 10 };
 const columnLayoutStyle: React.CSSProperties = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 16, alignItems: "stretch" };
 const guidanceSectionStyle: React.CSSProperties = { marginTop: 18, display: "grid", gap: 12, padding: 16, borderRadius: 18, background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.08)" };
 const guidanceHeaderStyle: React.CSSProperties = { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 };
