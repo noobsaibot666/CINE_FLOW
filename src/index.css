@@ -3405,7 +3405,77 @@ body {
 
 .film-strip-thumb:hover img {
   opacity: 1;
+  transform: scale(1.03);
 }
+
+.film-strip-thumb .thumb {
+  cursor: zoom-in;
+}
+
+/* Click-to-enlarge lightbox */
+.film-strip-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 5000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 40px;
+  background: rgba(0, 0, 0, 0.82);
+  backdrop-filter: blur(4px);
+  cursor: zoom-out;
+}
+.film-strip-lightbox-figure {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  max-width: 92vw;
+  max-height: 88vh;
+  cursor: default;
+}
+.film-strip-lightbox-figure img {
+  max-width: 92vw;
+  max-height: 82vh;
+  object-fit: contain;
+  border-radius: 6px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+}
+.film-strip-lightbox-figure figcaption {
+  color: rgba(255, 255, 255, 0.75);
+  font-size: 0.8rem;
+  letter-spacing: 0.02em;
+}
+.film-strip-lightbox-close {
+  position: absolute;
+  top: 18px;
+  right: 22px;
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  font-size: 1.4rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.film-strip-lightbox-close:hover { background: rgba(255, 255, 255, 0.22); }
+.film-strip-lightbox-nav {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  font-size: 1.5rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.film-strip-lightbox-nav:hover { background: rgba(255, 255, 255, 0.2); }
 
 .film-strip-thumb .thumb-time {
   position: absolute;

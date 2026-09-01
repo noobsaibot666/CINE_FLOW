@@ -3,14 +3,16 @@ use std::path::Path;
 /// Minimum skip time in seconds (skip first 0.5s)
 const SKIP_SECONDS: f64 = 0.5;
 
-/// Max width for thumbnails
-const MAX_WIDTH: u32 = 640;
+/// Max width for thumbnails. 1280 keeps the filmstrip crisp and gives the
+/// click-to-enlarge view real detail; JPEGs stay well under ~200 KB.
+const MAX_WIDTH: u32 = 1280;
 
 /// Luminance threshold for black frame rejection (0-255)
 const BLACK_THRESHOLD: u8 = 15;
 
 /// Maximum number of raw pixel bytes to sample for black-frame detection.
-/// 640×360×3 (RGB) = 691 200 — fits any thumbnail we generate.
+/// Black detection re-decodes the thumbnail to a 64px gray frame, so this
+/// only needs to comfortably exceed that.
 const BLACK_DETECT_MAX_BYTES: usize = 700_000;
 
 /// Image file extensions that need special thumbnail handling
@@ -69,11 +71,11 @@ pub fn extract_image_thumbnail(
             "-vframes",
             "1",
             "-vf",
-            &format!("scale={}:-1", MAX_WIDTH),
+            &format!("scale={}:-2", MAX_WIDTH),
             "-pix_fmt",
             "yuvj420p",
             "-q:v",
-            "6",
+            "3",
             "-y",
             output_path,
         ])
@@ -139,7 +141,7 @@ pub fn extract_thumbnail(
         None
     };
 
-    let scale_filter = format!("scale={}:-1", MAX_WIDTH);
+    let scale_filter = format!("scale={}:-2", MAX_WIDTH);
 
     let status = if let Some(res) = status {
         res?
@@ -159,7 +161,7 @@ pub fn extract_thumbnail(
                 "-i", input_path,
                 "-frames:v", "1",
                 "-vf", &scale_filter,
-                "-q:v", "5",
+                "-q:v", "3",
                 "-map", "0:v:0",
                 "-an", "-sn", "-dn",
                 "-y",
@@ -184,7 +186,7 @@ pub fn extract_thumbnail(
                     "-i", input_path,
                     "-frames:v", "1",
                     "-vf", &scale_filter,
-                    "-q:v", "5",
+                    "-q:v", "3",
                     "-an", "-sn", "-dn",
                     "-y",
                     output_path,
@@ -209,7 +211,7 @@ pub fn extract_thumbnail(
                         "-ss", &ts_str,
                         "-frames:v", "1",
                         "-vf", &scale_filter,
-                        "-q:v", "5",
+                        "-q:v", "3",
                         "-an", "-sn", "-dn",
                         "-y",
                         output_path,

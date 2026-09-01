@@ -1,4 +1,4 @@
-import { memo, useMemo } from "react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { Thumbnail } from "../types";
 import { DisplayedThumbnail, getThumbnailCacheValue } from "../utils/shotPlannerThumbnails";
 import { convertFileSrc } from "../utils/tauri";
@@ -62,6 +62,32 @@ export const FilmStrip = memo(function FilmStrip({
         [effectivePlaceholderCount, resolvedThumbnails]
     );
 
+    // Click a frame to open it large. Self-contained so every FilmStrip caller
+    // gets it for free.
+    const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+    const lightboxSrcs = useMemo(
+        () => visibleThumbnails.map((t) => getDisplayThumbnailSrc(t, projectLutHash, clipLutEnabled, lutRenderNonce)),
+        [visibleThumbnails, projectLutHash, clipLutEnabled, lutRenderNonce]
+    );
+    const closeLightbox = useCallback(() => setLightboxIndex(null), []);
+    const stepLightbox = useCallback((delta: number) => {
+        setLightboxIndex((cur) => {
+            if (cur == null || lightboxSrcs.length === 0) return cur;
+            return (cur + delta + lightboxSrcs.length) % lightboxSrcs.length;
+        });
+    }, [lightboxSrcs.length]);
+
+    useEffect(() => {
+        if (lightboxIndex == null) return;
+        const onKey = (e: KeyboardEvent) => {
+            if (e.key === "Escape") closeLightbox();
+            else if (e.key === "ArrowRight") stepLightbox(1);
+            else if (e.key === "ArrowLeft") stepLightbox(-1);
+        };
+        window.addEventListener("keydown", onKey);
+        return () => window.removeEventListener("keydown", onKey);
+    }, [lightboxIndex, closeLightbox, stepLightbox]);
+
     if (status === "fail") {
         return (
             <div
@@ -99,6 +125,7 @@ export const FilmStrip = memo(function FilmStrip({
     }
 
     return (
+      <>
         <div
             className={`film-strip filmstrip ${orientationClass} ${imageClass}`}
             onDoubleClick={(e) => { e.stopPropagation(); onDoubleClick?.(); }}
@@ -113,13 +140,21 @@ export const FilmStrip = memo(function FilmStrip({
                 if (src) {
                     return (
                         <div key={idx} className="film-strip-thumb">
-                            <img className="thumb" src={src} alt={`Frame ${idx + 1}`} onError={(e) => {
-                                if (thumb && projectLutHash && clipLutEnabled === 1) {
-                                    const img = e.target as HTMLImageElement;
-                                    img.onerror = null;
-                                    img.src = fallbackThumbnailSrc ?? getOriginalThumbnailSrc(thumb);
-                                }
-                            }} decoding="async" />
+                            <img
+                                className="thumb"
+                                src={src}
+                                alt={`Frame ${idx + 1}`}
+                                title="Click to enlarge"
+                                onClick={(e) => { e.stopPropagation(); setLightboxIndex(idx); }}
+                                onError={(e) => {
+                                    if (thumb && projectLutHash && clipLutEnabled === 1) {
+                                        const img = e.target as HTMLImageElement;
+                                        img.onerror = null;
+                                        img.src = fallbackThumbnailSrc ?? getOriginalThumbnailSrc(thumb);
+                                    }
+                                }}
+                                decoding="async"
+                            />
                             {!isImage && (
                                 <span className="thumb-time">
                                     {formatTimestamp(thumb?.timestamp_ms || 0)}
@@ -140,6 +175,32 @@ export const FilmStrip = memo(function FilmStrip({
                 );
             })}
         </div>
+
+        {lightboxIndex != null && lightboxSrcs[lightboxIndex] && (
+          <div
+            className="film-strip-lightbox"
+            onClick={closeLightbox}
+            onDoubleClick={(e) => e.stopPropagation()}
+          >
+            <button className="film-strip-lightbox-close" onClick={(e) => { e.stopPropagation(); closeLightbox(); }} aria-label="Close">×</button>
+            {lightboxSrcs.length > 1 && (
+              <button className="film-strip-lightbox-nav prev" onClick={(e) => { e.stopPropagation(); stepLightbox(-1); }} aria-label="Previous frame">‹</button>
+            )}
+            <figure className="film-strip-lightbox-figure" onClick={(e) => e.stopPropagation()}>
+              <img src={lightboxSrcs[lightboxIndex]} alt={`Frame ${lightboxIndex + 1}`} />
+              <figcaption>
+                Frame {lightboxIndex + 1} of {lightboxSrcs.length}
+                {!isImage && visibleThumbnails[lightboxIndex]
+                  ? ` · ${formatTimestamp(visibleThumbnails[lightboxIndex]?.timestamp_ms || 0)}`
+                  : ""}
+              </figcaption>
+            </figure>
+            {lightboxSrcs.length > 1 && (
+              <button className="film-strip-lightbox-nav next" onClick={(e) => { e.stopPropagation(); stepLightbox(1); }} aria-label="Next frame">›</button>
+            )}
+          </div>
+        )}
+      </>
     );
 });
 

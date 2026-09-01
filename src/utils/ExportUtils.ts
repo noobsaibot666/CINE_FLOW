@@ -228,18 +228,19 @@ export async function exportPdf(options: ExportOptions): Promise<boolean> {
         fpsValues.length === 1 ? `${fpsValues[0]}fps` : `${fpsValues.join("/")}fps`,
       ].join("  •  ");
 
-      pdf.setFontSize(5.4);
-      pdf.setTextColor(140);
-      pdf.text(statsLine, pageW / 2, margin + 7, { align: "center" });
+      pdf.setFontSize(6.4);
+      pdf.setTextColor(120);
+      pdf.text(statsLine, pageW / 2, margin + 7.5, { align: "center" });
 
-      const clipAreaTop = margin + 16;
+      const clipAreaTop = margin + 17;
       const clipAreaH = pageH - clipAreaTop - 12;
-      const clipRowH = clipAreaH / clipsPerPage;
+      const rowGap = 6;
+      const clipRowH = (clipAreaH - rowGap * (clipsPerPage - 1)) / clipsPerPage;
 
       for (let ci = 0; ci < pageClips.length; ci++) {
         const clip = pageClips[ci];
-        const rowY = clipAreaTop + ci * clipRowH;
-        const thumbStripH = clipRowH * 0.65;
+        const rowY = clipAreaTop + ci * (clipRowH + rowGap);
+        const thumbStripH = clipRowH * 0.7;
         const displayedThumbs = getDisplayedThumbsForClip({
           clipId: clip.id,
           thumbnails: thumbnailsByClipId[clip.id] ?? [],
@@ -250,7 +251,7 @@ export async function exportPdf(options: ExportOptions): Promise<boolean> {
         });
         const thumbW = usableW / Math.max(displayedThumbs.length, 1);
 
-        pdf.setFillColor(20, 20, 20);
+        pdf.setFillColor(243, 243, 243);
         pdf.rect(margin, rowY, usableW, thumbStripH, "F");
 
         for (let ti = 0; ti < displayedThumbs.length; ti++) {
@@ -281,8 +282,8 @@ export async function exportPdf(options: ExportOptions): Promise<boolean> {
           }
         }
 
-        pdf.setDrawColor(0);
-        pdf.setLineWidth(0.3);
+        pdf.setDrawColor(150);
+        pdf.setLineWidth(0.2);
         pdf.rect(margin, rowY, usableW, thumbStripH);
 
         const metaY = rowY + thumbStripH + 3.5;
@@ -311,18 +312,18 @@ export async function exportPdf(options: ExportOptions): Promise<boolean> {
 
         let rightX = margin + usableW;
         if (clip.flag !== "none") {
-          const flagText = clip.flag.toUpperCase();
+          const flagText = clip.flag === "pick" ? "[PICK]" : "[REJECT]";
           const flagW = pdf.getTextWidth(flagText) + 4;
-          pdf.setTextColor(clip.flag === "pick" ? 0 : 200, clip.flag === "pick" ? 180 : 60, clip.flag === "pick" ? 100 : 60);
+          pdf.setTextColor(clip.flag === "pick" ? 0 : 120);
           pdf.setFont("helvetica", "bold");
           pdf.text(flagText, rightX, metaY, { align: "right" });
           pdf.setFont("helvetica", "normal");
           rightX -= flagW + 2;
         }
         if (clip.rating > 0) {
-          pdf.setTextColor(0, 209, 255);
+          pdf.setTextColor(0);
           pdf.setFont("helvetica", "bold");
-          pdf.text("★".repeat(clip.rating), rightX, metaY, { align: "right" });
+          pdf.text("★".repeat(clip.rating) + "☆".repeat(Math.max(0, 5 - clip.rating)), rightX, metaY, { align: "right" });
           pdf.setFont("helvetica", "normal");
         }
       }
@@ -452,17 +453,17 @@ export async function exportImage(options: ExportOptions): Promise<boolean> {
           const x = marginX + ti * rowThumbW;
           const frameW = rowThumbW - 2;
           const fitted = getContainRect(img.width, img.height, x, rowY, frameW, thumbH);
-          ctx.fillStyle = "#111215";
+          ctx.fillStyle = "#f2f2f2";
           ctx.fillRect(x, rowY, frameW, thumbH);
           ctx.drawImage(img, fitted.x, fitted.y, fitted.width, fitted.height);
         } catch {
-          ctx.fillStyle = "#222";
+          ctx.fillStyle = "#e5e5e5";
           ctx.fillRect(marginX + ti * rowThumbW, rowY, rowThumbW - 2, thumbH);
         }
       }
 
-      ctx.strokeStyle = "#333";
-      ctx.lineWidth = 2;
+      ctx.strokeStyle = "#bdbdbd";
+      ctx.lineWidth = 1;
       ctx.strokeRect(marginX, rowY, stripW, thumbH);
 
       const line1Y = rowY + thumbH + 18;
@@ -495,15 +496,15 @@ export async function exportImage(options: ExportOptions): Promise<boolean> {
       let rx = rightEdge;
       if (clip.flag !== "none") {
         ctx.font = "bold 13px Inter, system-ui, sans-serif";
-        ctx.fillStyle = clip.flag === "pick" ? "#00b464" : "#e04040";
-        const flagText = clip.flag.toUpperCase();
+        ctx.fillStyle = clip.flag === "pick" ? "#000000" : "#777777";
+        const flagText = clip.flag === "pick" ? "[PICK]" : "[REJECT]";
         ctx.fillText(flagText, rx, line1Y);
         rx -= ctx.measureText(flagText).width + 10;
       }
       if (clip.rating > 0) {
         ctx.font = "bold 14px Inter, system-ui, sans-serif";
-        ctx.fillStyle = "#00a0cc";
-        ctx.fillText("★".repeat(clip.rating), rx, line1Y);
+        ctx.fillStyle = "#000000";
+        ctx.fillText("★".repeat(clip.rating) + "☆".repeat(Math.max(0, 5 - clip.rating)), rx, line1Y);
       }
       ctx.textAlign = "left";
     }

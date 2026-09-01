@@ -186,8 +186,8 @@ export async function drawHeader(
     doc.setFontSize(6.2);
     doc.setTextColor(140);
     doc.text(header.subline, pageWidth / 2, margin + 10.5, { align: "center" });
-    doc.setDrawColor(0, 209, 255);
-    doc.setLineWidth(0.3);
+    doc.setDrawColor(170);
+    doc.setLineWidth(0.2);
     doc.line(margin, margin + 12, pageWidth - margin, margin + 12);
     return;
   }
@@ -209,8 +209,8 @@ export async function drawHeader(
   ctx.fillStyle = "#777";
   ctx.textAlign = "center";
   ctx.fillText(header.subline, canvasWidth / 2, 88);
-  ctx.strokeStyle = "#00d1ff";
-  ctx.lineWidth = 2;
+  ctx.strokeStyle = "#cccccc";
+  ctx.lineWidth = 1;
   ctx.beginPath();
   ctx.moveTo(marginX, 98);
   ctx.lineTo(canvasWidth - marginX, 98);
