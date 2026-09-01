@@ -21,6 +21,9 @@ pub struct DecoderOverrides {
     pub red_sdk_dir: Option<String>,
     /// Path to a DaVinci Resolve application / executable.
     pub resolve_path: Option<String>,
+    /// Directory of an installed ARRI Reference Tool (contains `art-cmd`), or the
+    /// `art-cmd` binary itself.
+    pub art_cmd_dir: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -149,6 +152,24 @@ fn red_setup() -> DecoderSetup {
     }
 }
 
+fn art_setup() -> DecoderSetup {
+    DecoderSetup {
+        download_url: Some(
+            "https://www.arri.com/en/learn-help/learn-help-camera-system/tools/arri-reference-tool"
+                .into(),
+        ),
+        download_label: Some("Get the ARRI Reference Tool (free)".into()),
+        steps: vec![
+            "Install the ARRI Reference Tool (free) — its command-line tool `art-cmd` decodes ARRIRAW and ARRIRAW MXF natively, no DaVinci Resolve needed.".into(),
+            "Or press Locate… and pick the ARRI Reference Tool app (or a folder containing `art-cmd`).".into(),
+            "Press Re-check.".into(),
+        ],
+        locate_key: Some("art_cmd_dir".into()),
+        locate_kind: Some("app".into()),
+        locate_hint: Some("Pick 'ARRI Reference Tool.app', or a folder that contains the `art-cmd` binary.".into()),
+    }
+}
+
 fn braw_setup() -> DecoderSetup {
     DecoderSetup {
         download_url: Some("https://www.blackmagicdesign.com/developer/products/braw".into()),
@@ -200,7 +221,7 @@ pub fn probe_all_decoders(app_data_dir: &Path, resource_dir: Option<&Path>) -> V
         probe_red(&overrides, resolve.as_deref()),
         probe_via_resolve_or_proxy("CANON_CINEMA_RAW", "Canon Cinema RAW Light", resolve.as_deref()),
         probe_via_resolve_or_proxy("SONY_XOCN", "Sony X-OCN", resolve.as_deref()),
-        probe_via_resolve_or_proxy("ARRIRAW", "ARRIRAW", resolve.as_deref()),
+        probe_arri(&overrides, resolve.as_deref()),
         probe_prores_raw(),
         probe_resolve(resolve.as_deref()),
     ]
@@ -219,7 +240,7 @@ pub fn probe_decoder_for_family(
         "RED_R3D" | "NIKON_NRAW" => Some(probe_red(&overrides, resolve.as_deref())),
         "CANON_CINEMA_RAW" => Some(probe_via_resolve_or_proxy(family, "Canon Cinema RAW Light", resolve.as_deref())),
         "SONY_XOCN" => Some(probe_via_resolve_or_proxy(family, "Sony X-OCN", resolve.as_deref())),
-        "ARRIRAW" => Some(probe_via_resolve_or_proxy(family, "ARRIRAW", resolve.as_deref())),
+        "ARRIRAW" => Some(probe_arri(&overrides, resolve.as_deref())),
         "PRORES_RAW" => Some(probe_prores_raw()),
         _ => None,
     }
@@ -390,6 +411,49 @@ fn probe_via_resolve_or_proxy(family: &str, label: &str, resolve: Option<&str>) 
     decide_resolve_or_proxy(family, label, resolve)
 }
 
+const ARRI_LABEL: &str = "ARRIRAW / ARRIRAW MXF";
+
+/// Pure decision for the ARRIRAW family: prefer ARRI's own `art-cmd` (native,
+/// no Resolve), fall back to DaVinci Resolve, else guide the user to install
+/// the free ARRI Reference Tool.
+fn decide_arri(art_cmd: Option<String>, resolve: Option<&str>) -> DecoderStatus {
+    if let Some(path) = art_cmd {
+        let mut s = available(
+            "ARRIRAW",
+            ARRI_LABEL,
+            "arri_art",
+            "ARRI Reference Tool (art-cmd) detected — ARRIRAW and ARRIRAW MXF decode directly.",
+        );
+        s.path = Some(path);
+        s.setup = Some(art_setup());
+        return s;
+    }
+    if let Some(resolve_path) = resolve {
+        let mut s = available(
+            "ARRIRAW",
+            ARRI_LABEL,
+            "resolve",
+            "No ARRI Reference Tool, but DaVinci Resolve is installed and can build the analysis proxy — keep it open.",
+        );
+        s.path = Some(resolve_path.to_string());
+        s.setup = Some(art_setup());
+        return s;
+    }
+    needs_setup(
+        "ARRIRAW",
+        ARRI_LABEL,
+        "Needs the free ARRI Reference Tool (art-cmd), or an installed DaVinci Resolve.",
+        art_setup(),
+    )
+}
+
+fn probe_arri(overrides: &DecoderOverrides, resolve: Option<&str>) -> DecoderStatus {
+    decide_arri(
+        crate::production_match_lab::locate_art_cmd(overrides.art_cmd_dir.as_deref()),
+        resolve,
+    )
+}
+
 fn probe_prores_raw() -> DecoderStatus {
     match ffmpeg_major_version() {
         Some(v) if v >= 8 => {
@@ -488,5 +552,39 @@ mod tests {
         assert_eq!(with.state, "available");
         let without = decide_resolve_or_proxy("CANON_CINEMA_RAW", "Canon Cinema RAW Light", None);
         assert_eq!(without.state, "needs_setup");
+    }
+
+    #[test]
+    fn arri_prefers_art_cmd_over_resolve() {
+        let s = decide_arri(Some("/opt/art-cmd".into()), Some("/Applications/DaVinci Resolve/DaVinci Resolve.app"));
+        assert_eq!(s.state, "available");
+        assert_eq!(s.provider.as_deref(), Some("arri_art"));
+    }
+
+    #[test]
+    fn arri_falls_back_to_resolve() {
+        let s = decide_arri(None, Some("/Applications/DaVinci Resolve/DaVinci Resolve.app"));
+        assert_eq!(s.state, "available");
+        assert_eq!(s.provider.as_deref(), Some("resolve"));
+    }
+
+    #[test]
+    fn arri_needs_setup_with_nothing_available() {
+        let s = decide_arri(None, None);
+        assert_eq!(s.state, "needs_setup");
+        assert!(s.setup.unwrap().download_url.unwrap().contains("arri.com"));
+    }
+
+    #[test]
+    fn overrides_round_trip_art_cmd_dir() {
+        let dir = std::env::temp_dir().join(format!("cineflow_dec_art_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let o = DecoderOverrides { art_cmd_dir: Some("/Applications/ARRI Reference Tool.app".into()), ..Default::default() };
+        save_overrides(&dir, &o).unwrap();
+        assert_eq!(
+            load_overrides(&dir).art_cmd_dir.as_deref(),
+            Some("/Applications/ARRI Reference Tool.app")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

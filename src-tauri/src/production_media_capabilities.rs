@@ -87,6 +87,11 @@ pub fn classify_media_source_with_libraw(
             "Sony Catalyst Prepare / Catalyst Browse",
             "Sony X-OCN sources need an operator-created analysis proxy until native decode is integrated.",
         ),
+        Some("ari") | Some("arx") => vendor_decoded(
+            source_path,
+            "ARRIRAW",
+            "ARRI Reference Tool (art-cmd) / DaVinci Resolve",
+        ),
         Some("mxf") => direct_original(
             source_path,
             "MXF",
@@ -219,6 +224,8 @@ mod tests {
             "CANON_CINEMA_RAW"
         );
         assert_eq!(classify_media_source("/clip/A001.mxf").format_family, "MXF");
+        assert_eq!(classify_media_source("/clip/A001.ari").format_family, "ARRIRAW");
+        assert_eq!(classify_media_source("/clip/A001.arx").format_family, "ARRIRAW");
         assert_eq!(
             classify_media_source("/clip/A001.mov").format_family,
             "QUICKTIME"

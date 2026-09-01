@@ -1218,13 +1218,18 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
     const clipPath = clipsBySlot[slot];
     if (!clipPath) return;
     const decoder = capabilityBySlot[slot]?.decoder_status;
-    const provider = decoder?.provider;
+    // An ARRIRAW MXF classifies as "MXF" with no decoder_status, so fall back to
+    // the ARRIRAW family status for the provider.
+    const arriProvider = decoderStatuses.find((d) => d.family === "ARRIRAW" && d.state === "available")?.provider;
+    const provider = decoder?.provider ?? (isArriMxfContainer(clipPath) ? arriProvider : undefined);
     const fileName = getFileName(clipPath);
-    const viaResolve = provider === "resolve" || isArriMxfContainer(clipPath);
 
-    const message = viaResolve
-      ? `Camera ${slot}: decode "${fileName}" with DaVinci Resolve?\n\nDaVinci Resolve must be installed AND open — the free edition only responds while it is running. This can take several minutes; watch the Jobs panel for progress.`
-      : `Camera ${slot}: generate an analysis proxy from "${fileName}"?\n\nCineFlow will decode it with ${provider === "red_sdk" ? "REDline / the RED SDK" : "the bundled decoder"}. This runs as a background job and can take a few minutes — watch the Jobs panel.`;
+    const message =
+      provider === "arri_art"
+        ? `Camera ${slot}: decode "${fileName}" with the ARRI Reference Tool (art-cmd)?\n\nThis runs as a background job and can take a few minutes — watch the Jobs panel.`
+      : provider === "resolve"
+        ? `Camera ${slot}: decode "${fileName}" with DaVinci Resolve?\n\nDaVinci Resolve must be installed AND open — the free edition only responds while it is running. This can take several minutes; watch the Jobs panel for progress.`
+        : `Camera ${slot}: generate an analysis proxy from "${fileName}"?\n\nCineFlow will decode it with ${provider === "red_sdk" ? "REDline / the RED SDK" : "the bundled decoder"}. This runs as a background job and can take a few minutes — watch the Jobs panel.`;
     const ok = await confirm(message, { title: "Generate analysis proxy", kind: "info" });
     if (!ok) return;
 
@@ -1541,7 +1546,14 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
               const generatedProxy = generatedProxyForSlot(slot);
               const generatingProxy = Boolean(generatingProxySlots[slot]);
               const proxyProgress = proxyProgressBySlot[slot];
-              const resolveAvailable = decoderStatuses.some((d) => d.family === "RESOLVE" && d.state === "available");
+              const arriStatus = decoderStatuses.find((d) => d.family === "ARRIRAW");
+              const arriProvider = arriStatus?.state === "available" ? arriStatus.provider : undefined;
+              const arriDecoderReady = Boolean(arriProvider);
+              const arriProxyButtonLabel = arriProvider === "arri_art"
+                ? "Generate proxy (ARRI Reference Tool)"
+                : arriProvider === "resolve"
+                  ? "Generate proxy (DaVinci Resolve)"
+                  : "Generate proxy";
               const sourceWorkflow = clipPath
                 ? describeSourceWorkflow(clipPath, capability, rawAnalysis, Boolean(slotProxy))
                 : null;
@@ -1824,13 +1836,13 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                         ) : isBrawClip(clipPath || "") || isProxyOnlyRawClip(clipPath || "") || isDecodeFailureError(slotError, slotErrorDetail) ? (
                           <div style={errorActionsStyle}>
                             {isArriMxfContainer(clipPath || "") && isDecodeFailureError(slotError, slotErrorDetail) ? (
-                              resolveAvailable ? (
+                              arriDecoderReady ? (
                                 <button type="button" className="btn btn-secondary btn-sm" onClick={() => void generateProxy(slot)} disabled={generatingProxy}>
-                                  <RefreshCw size={14} /> {generatingProxy ? "Generating proxy…" : "Generate proxy (DaVinci Resolve)"}
+                                  <RefreshCw size={14} /> {generatingProxy ? "Generating proxy…" : arriProxyButtonLabel}
                                 </button>
                               ) : (
                                 <span style={errorSupportTextStyle}>
-                                  This is ARRIRAW MXF — open DaVinci Resolve (free) to decode it, or attach an MP4/MOV proxy.
+                                  This is ARRIRAW MXF — install the free ARRI Reference Tool or open DaVinci Resolve to decode it, or attach an MP4/MOV proxy.
                                 </span>
                               )
                             ) : null}

@@ -465,10 +465,15 @@ pub fn is_resolve_backed_path(clip_path: &str) -> bool {
 
 /// `.mxf` — usually a directly decodable container (ProRes / XAVC / DNxHD) but
 /// also the wrapper for ARRIRAW, which ffmpeg cannot read. We only route it
-/// through Resolve when direct frame extraction has failed, so the operator gets
-/// a "Generate proxy" path instead of a dead end.
+/// through Resolve / ARRI ART when direct frame extraction has failed, so the
+/// operator gets a "Generate proxy" path instead of a dead end.
 pub fn is_arri_mxf_container_path(clip_path: &str) -> bool {
     lower_ext(clip_path) == "mxf"
+}
+
+/// Single-frame / stream ARRIRAW. Decoded by ARRI's `art-cmd` or DaVinci Resolve.
+pub fn is_arriraw_path(clip_path: &str) -> bool {
+    matches!(lower_ext(clip_path).as_str(), "ari" | "arx")
 }
 
 /// Any camera-RAW source that needs a decode provider before analysis.
@@ -544,6 +549,75 @@ pub fn locate_redline(red_sdk_dir: Option<&str>) -> Option<String> {
     None
 }
 
+/// Locate ARRI's `art-cmd` CLI (part of the free ARRI Reference Tool). Mirrors
+/// `locate_redline`: an operator-configured install dir / app / binary first,
+/// then the standard install locations, then PATH.
+pub fn locate_art_cmd(art_cmd_dir: Option<&str>) -> Option<String> {
+    let names: &[&str] = &["art-cmd", "art_cmd", "ART-CMD", "art-cmd.exe"];
+
+    // 1. Operator-configured location — a folder, an app bundle, or the binary.
+    if let Some(dir) = art_cmd_dir {
+        let p = Path::new(dir);
+        if p.is_file() {
+            return Some(dir.to_string());
+        }
+        for name in names {
+            for sub in [
+                "",
+                "bin",
+                "Contents/MacOS",
+                "Contents/Resources",
+                "Contents/Resources/bin",
+            ] {
+                let candidate = if sub.is_empty() {
+                    p.join(name)
+                } else {
+                    p.join(sub).join(name)
+                };
+                if candidate.exists() {
+                    return Some(candidate.to_string_lossy().to_string());
+                }
+            }
+        }
+    }
+
+    // 2. Standard install locations.
+    #[cfg(target_os = "macos")]
+    for path in [
+        "/Applications/ARRI Reference Tool.app/Contents/MacOS/art-cmd",
+        "/Applications/ARRI/ARRI Reference Tool.app/Contents/MacOS/art-cmd",
+        "/Applications/ARRI Reference Tool CMD/art-cmd",
+        "/usr/local/bin/art-cmd",
+        "/opt/homebrew/bin/art-cmd",
+    ] {
+        if Path::new(path).exists() {
+            return Some(path.to_string());
+        }
+    }
+    #[cfg(target_os = "windows")]
+    for path in [
+        "C:\\Program Files\\ARRI\\ARRI Reference Tool\\art-cmd.exe",
+        "C:\\Program Files\\ARRI Reference Tool\\art-cmd.exe",
+    ] {
+        if Path::new(path).exists() {
+            return Some(path.to_string());
+        }
+    }
+
+    // 3. PATH.
+    #[cfg(not(target_os = "windows"))]
+    if let Ok(out) = std::process::Command::new("which").arg("art-cmd").output() {
+        if out.status.success() {
+            let found = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !found.is_empty() && Path::new(&found).exists() {
+                return Some(found);
+            }
+        }
+    }
+
+    None
+}
+
 /// Decode a RED source to an analysis proxy: REDline debayers at quarter-res to
 /// a scaled ProRes .mov, then ffmpeg re-encodes to the standard H.264 proxy so
 /// the rest of the pipeline is format-agnostic.
@@ -613,6 +687,80 @@ pub fn create_red_proxy_via_redline(
         })?;
 
     encode_analysis_proxy(&decoded_mov, output_path)?;
+    let _ = std::fs::remove_dir_all(decoded_dir);
+    Ok(())
+}
+
+/// Decode an ARRIRAW source (`.ari`/`.arx` or ARRIRAW MXF) to an analysis proxy
+/// with ARRI's `art-cmd` (`process` mode → Apple ProRes), then re-encode to the
+/// shared H.264 proxy. No DaVinci Resolve needed.
+///
+/// `art-cmd process --input <src> --video-codec prores422 --output <dir>/art_decode.mov`
+/// — flag set verified against the published art-cmd v1.0 manual; re-check
+/// against the installed ART version if output is missing.
+pub fn create_arri_proxy_via_art_cmd(
+    art_cmd_path: &str,
+    input_path: &str,
+    decoded_dir: &Path,
+    output_path: &Path,
+) -> Result<(), String> {
+    validate_proxy_output_path(input_path, output_path)?;
+    if decoded_dir.exists() {
+        let _ = std::fs::remove_dir_all(decoded_dir);
+    }
+    std::fs::create_dir_all(decoded_dir)
+        .map_err(|e| format!("Failed to prepare ARRI decode scratch: {e}"))?;
+    let decoded_mov_path = decoded_dir.join("art_decode.mov");
+
+    let mut cmd = crate::tools::create_command(art_cmd_path);
+    cmd.args([
+        "process",
+        "--input",
+        input_path,
+        "--video-codec",
+        "prores422",
+        "--output",
+        &decoded_mov_path.to_string_lossy(),
+    ]);
+    let out = cmd
+        .output()
+        .map_err(|e| format!("Failed to start ARRI Reference Tool ({art_cmd_path}): {e}"))?;
+    if !out.status.success() {
+        let code = out.status.code();
+        let hint = "\nOpen Decoder Setup to check the ARRI Reference Tool install, or export an MP4/ProRes proxy and use 'Select Existing Proxy'.";
+        return Err(format!(
+            "ARRI Reference Tool (art-cmd) decode failed.\nInput: {}\nExit code: {}\n{}{}",
+            input_path,
+            code.map(|v| v.to_string()).unwrap_or_else(|| "signal".to_string()),
+            tail_lines(&String::from_utf8_lossy(&out.stderr), 20),
+            hint,
+        ));
+    }
+
+    // art-cmd may write exactly the named file, or a variant name in the same
+    // directory (batch/sub-dir behaviour) — accept the first .mov/.mxf it left.
+    let decoded = if decoded_mov_path.exists() {
+        decoded_mov_path
+    } else {
+        std::fs::read_dir(decoded_dir)
+            .map_err(|e| format!("Cannot read ARRI decode output: {e}"))?
+            .flatten()
+            .map(|entry| entry.path())
+            .find(|path| {
+                path.extension()
+                    .and_then(|x| x.to_str())
+                    .map(|x| x.eq_ignore_ascii_case("mov") || x.eq_ignore_ascii_case("mxf"))
+                    .unwrap_or(false)
+            })
+            .ok_or_else(|| {
+                format!(
+                    "ARRI Reference Tool produced no ProRes output in {}. Check the ART install in Decoder Setup.",
+                    decoded_dir.display()
+                )
+            })?
+    };
+
+    encode_analysis_proxy(&decoded, output_path)?;
     let _ = std::fs::remove_dir_all(decoded_dir);
     Ok(())
 }
@@ -2252,10 +2400,27 @@ mod tests {
         assert!(super::is_redline_backed_path("/x/A001.nev"));
         assert!(super::is_resolve_backed_path("/x/A001.crm"));
         assert!(super::is_resolve_backed_path("/x/A001.xocn"));
+        assert!(super::is_arriraw_path("/x/A001.ari"));
+        assert!(super::is_arriraw_path("/x/A001.ARX"));
+        assert!(super::is_arri_mxf_container_path("/x/A001.mxf"));
+        assert!(!super::is_arri_mxf_container_path("/x/A001.mov"));
         assert!(super::is_decoder_backed_raw_path("/x/A001.r3d"));
         assert!(super::is_decoder_backed_raw_path("/x/A001.CRM"));
+        assert!(super::is_decoder_backed_raw_path("/x/A001.ari"));
         assert!(!super::is_decoder_backed_raw_path("/x/A001.mov"));
         assert!(!super::is_redline_backed_path("/x/A001.braw"));
+    }
+
+    #[test]
+    fn locate_art_cmd_finds_binary_in_override_dir() {
+        let dir = std::env::temp_dir().join(format!("cineflow_art_{}", std::process::id()));
+        let bin_dir = dir.join("Contents").join("MacOS");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        let bin = bin_dir.join("art-cmd");
+        std::fs::write(&bin, "#!/bin/sh\n").unwrap();
+        let found = super::locate_art_cmd(Some(&dir.to_string_lossy()));
+        assert_eq!(found.as_deref(), Some(bin.to_string_lossy().as_ref()));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

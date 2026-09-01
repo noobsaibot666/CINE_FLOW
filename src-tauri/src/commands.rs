@@ -5978,6 +5978,8 @@ enum RawProxyPlan {
     Braw(Box<BrawDecoderCaps>),
     /// REDline / RED-SDK CLI path.
     Redline(String),
+    /// ARRI Reference Tool `art-cmd` path (ARRIRAW / ARRIRAW MXF).
+    ArriArt(String),
     /// Headless DaVinci Resolve render — carries the detected Resolve app/exe path.
     Resolve(String),
     /// No provider is set up — carries user-facing guidance.
@@ -6135,14 +6137,25 @@ async fn ensure_matchlab_proxy_inner(
                 ),
             },
         }
-    } else if crate::production_match_lab::is_resolve_backed_path(source_path)
-        || mxf_container_fallback
-    {
+    } else if crate::production_match_lab::is_arriraw_path(source_path) || mxf_container_fallback {
+        // ARRIRAW (.ari/.arx) and ARRIRAW MXF: prefer ARRI's own art-cmd
+        // (native, no Resolve), fall back to a running DaVinci Resolve.
+        let overrides = crate::production_decoder_status::load_overrides(&state.app_data_dir);
+        match crate::production_match_lab::locate_art_cmd(overrides.art_cmd_dir.as_deref()) {
+            Some(path) => RawProxyPlan::ArriArt(path),
+            None => match crate::production_decoder_status::detect_resolve(&overrides) {
+                Some(resolve) => RawProxyPlan::Resolve(resolve),
+                None => RawProxyPlan::Unavailable(
+                    "ARRIRAW needs the free ARRI Reference Tool (art-cmd), or a running DaVinci Resolve. Set one up in Decoder Setup — or attach an MP4/ProRes proxy for this slot.".to_string(),
+                ),
+            },
+        }
+    } else if crate::production_match_lab::is_resolve_backed_path(source_path) {
         let overrides = crate::production_decoder_status::load_overrides(&state.app_data_dir);
         match crate::production_decoder_status::detect_resolve(&overrides) {
             Some(resolve) => RawProxyPlan::Resolve(resolve),
             None => RawProxyPlan::Unavailable(
-                "This source decodes through DaVinci Resolve (ARRIRAW / Canon RAW / X-OCN). Install it (free) and keep it open — Decoder Setup has the link — or attach an MP4/ProRes proxy for this slot.".to_string(),
+                "This source decodes through DaVinci Resolve (Canon RAW / X-OCN). Install it (free) and keep it open — Decoder Setup has the link — or attach an MP4/ProRes proxy for this slot.".to_string(),
             ),
         }
     } else {
@@ -6198,6 +6211,7 @@ async fn ensure_matchlab_proxy_inner(
         let tmp_for_task = tmp_path.clone();
         let decoded_for_task = build_proxy_decode_path(&proxy_root);
         let red_scratch_for_task = proxy_root.join("red_scratch");
+        let art_scratch_for_task = proxy_root.join("art_scratch");
         let plan_for_task = proxy_plan;
         let proxy_strategy = tokio::time::timeout(
             std::time::Duration::from_secs(1800),
@@ -6233,6 +6247,15 @@ async fn ensure_matchlab_proxy_inner(
                         &tmp_for_task,
                     )?;
                     Ok(("redline-decode".to_string(), Some(redline_path)))
+                }
+                RawProxyPlan::ArriArt(art_cmd_path) => {
+                    crate::production_match_lab::create_arri_proxy_via_art_cmd(
+                        &art_cmd_path,
+                        &source_for_task,
+                        &art_scratch_for_task,
+                        &tmp_for_task,
+                    )?;
+                    Ok(("arri-art-decode".to_string(), Some(art_cmd_path)))
                 }
                 RawProxyPlan::Resolve(resolve_path) => {
                     crate::production_resolve_decode::create_proxy_via_resolve(
@@ -8123,6 +8146,7 @@ pub async fn production_set_decoder_path(
         "braw_sdk_dir" => overrides.braw_sdk_dir = Some(path),
         "red_sdk_dir" => overrides.red_sdk_dir = Some(path),
         "resolve_path" => overrides.resolve_path = Some(path),
+        "art_cmd_dir" => overrides.art_cmd_dir = Some(path),
         other => return Err(format!("Unknown decoder path key: {other}")),
     }
     crate::production_decoder_status::save_overrides(&state.app_data_dir, &overrides)
@@ -8154,6 +8178,7 @@ pub async fn production_clear_decoder_path(
         "braw_sdk_dir" => overrides.braw_sdk_dir = None,
         "red_sdk_dir" => overrides.red_sdk_dir = None,
         "resolve_path" => overrides.resolve_path = None,
+        "art_cmd_dir" => overrides.art_cmd_dir = None,
         other => return Err(format!("Unknown decoder path key: {other}")),
     }
     crate::production_decoder_status::save_overrides(&state.app_data_dir, &overrides)

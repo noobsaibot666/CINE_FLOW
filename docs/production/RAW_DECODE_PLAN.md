@@ -14,7 +14,8 @@ the build. The user should never have to abandon the analysis.
 | `.nev` | Nikon N-RAW | `vendor_decoded` → "REDline / RED R3D SDK" (label only) | Same — no bridge. (Now decodable via the RED SDK since Nikon acquired RED.) |
 | `.crm` / `.rmf` | Canon Cinema RAW Light | `operator_proxy` (manual proxy only) | No decoder integrated. |
 | `.xocn` | Sony X-OCN | `operator_proxy` | No decoder integrated. |
-| `.ari` / RAW-in-MXF | ARRIRAW | `direct_original` for `.mxf` (optimistic) | FFmpeg has no ARRIRAW decoder; only ARRI's SDK or an NLE. |
+| `.ari` / `.arx` | ARRIRAW | `vendor_decoded` → ARRI ART / Resolve | FFmpeg has no ARRIRAW decoder. Decoded by `art-cmd` (free ARRI Reference Tool) or Resolve. |
+| ARRIRAW `.mxf` | MXF (reactive) | `direct_original` until frame extraction fails | Then escalates to the ARRI ART / Resolve proxy path (`is_arri_mxf_container_path`). |
 
 ## 2. What is actually available (GitHub / SDK research)
 
@@ -56,9 +57,19 @@ the build. The user should never have to abandon the analysis.
 - **Action:** same — "provider: Resolve or operator proxy".
 
 ### ARRIRAW
-- ARRI SDK or an NLE. `.ari` and RAW-in-MXF.
-- **Action:** same — "provider: Resolve or operator proxy". Also stop
-  classifying every `.mxf` as `direct_original`; probe the codec first.
+- ARRI SDK or an NLE. `.ari`/`.arx` and ARRIRAW MXF.
+- **Done (ARRI ART provider):** `art-cmd`, the CLI of the free **ARRI Reference
+  Tool**, decodes ARRIRAW and ARRIRAW MXF natively — no Resolve needed. It's the
+  ARRI analogue of REDline: `locate_art_cmd` finds an install (operator-set
+  `art_cmd_dir`, the standard `/Applications/ARRI Reference Tool.app`, or PATH),
+  `create_arri_proxy_via_art_cmd` runs
+  `art-cmd process --input <src> --video-codec prores422 --output <mov>` and
+  ffmpeg re-encodes to the shared proxy. Decoder Setup family `ARRIRAW`,
+  provider `arri_art`, falls back to Resolve, then guides to the free download.
+  Not bundled — user-installed, same model as REDCINE-X PRO for R3D.
+- ARRIRAW **MXF** still classifies as `MXF` / direct until ffmpeg fails to pull a
+  frame (`codec_name=unknown`, 0×0), then the slot escalates to the ART/Resolve
+  proxy path (`is_arri_mxf_container_path`).
 
 ### DaVinci Resolve — **the universal fallback for the ones we can't bundle**
 - The **free** DaVinci Resolve decodes R3D, BRAW, CRM, X-OCN, ARRIRAW and N-RAW
@@ -171,12 +182,13 @@ A review of the wiring turned up and fixed:
 - **Resolve runner** — prefers Resolve's own `fuscript` (Python + modules
   preloaded, no env/`python3` needed); falls back to system `python3` with
   `RESOLVE_SCRIPT_*`; errors clearly if neither exists.
-- **ARRIRAW** — `.ari`/`.arx` are back on the Resolve route (single-frame
-  ARRIRAW). ARRIRAW **MXF** stays a "direct" source until ffmpeg fails to
-  extract a frame from it (`codec_name=unknown`, 0×0), then the slot escalates:
+- **ARRIRAW** — new **ARRI ART** decode provider (`art-cmd`, native, no Resolve).
+  `.ari`/`.arx` route through it directly; ARRIRAW **MXF** stays "direct" until
+  ffmpeg fails to extract a frame (`codec_name=unknown`, 0×0), then
   `is_arri_mxf_container_path` lets `production_matchlab_ensure_proxy` route it
-  through Resolve, and the error card shows **Generate proxy (DaVinci Resolve)**
-  when Resolve is available, else a "open Resolve / attach a proxy" hint.
+  through ART (preferred) or a running Resolve. The error card shows **Generate
+  proxy (ARRI Reference Tool / DaVinci Resolve)** when one is available, else an
+  install/attach-a-proxy hint. `art-cmd` is user-installed, not bundled.
 
 ### Known caveats still open
 
@@ -202,6 +214,13 @@ A review of the wiring turned up and fixed:
   `locate_redline` finds the `/usr/local/bin/REDline` symlink it drops.
 - The Resolve render preset (`SetCurrentRenderFormatAndCodec("mp4", "H264")`)
   is still unverified against every Resolve version.
+- **ARRI `art-cmd` flags unverified against a live install.** The invocation
+  (`process --input … --video-codec prores422 --output …`) is taken from ARRI's
+  published `art-cmd` v1.0 manual, not tested here (ART wasn't installed on the
+  dev machine). `create_arri_proxy_via_art_cmd` accepts the named output file
+  *or* any `.mov`/`.mxf` art-cmd leaves in the scratch dir, and surfaces
+  stderr + a Decoder Setup hint on failure. Verify the flag set and whether ART
+  needs activation when a real install is available.
 
 ### Explicit proxy generation (operator control)
 
