@@ -1610,8 +1610,8 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                       </button>
                     ) : null}
                     {isDecoderBackedRawClip(clipPath || "") && !slotProxy && capability?.decoder_status?.provider === "resolve" ? (
-                      <div style={{ ...sourceMetaInlineStyle, marginTop: 6, color: "rgba(253,224,71,0.9)" }}>
-                        Decodes via DaVinci Resolve — it must be installed <strong>and open</strong> before you press Generate proxy.
+                      <div style={{ ...sourceMetaInlineStyle, marginTop: 6 }}>
+                        This format decodes through DaVinci Resolve. Please open DaVinci Resolve (or install it — it's free) before Generate proxy, or attach an MP4/MOV proxy instead.
                       </div>
                     ) : null}
                     {clipPath ? (

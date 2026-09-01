@@ -274,6 +274,50 @@ fn locate_red_binary() -> Option<String> {
     None
 }
 
+/// Is `path` an arm64 (or universal) Mach-O? The bundled REDline is Intel-only.
+fn macho_is_arm64_or_universal(path: &str) -> bool {
+    use std::io::Read;
+    let mut header = [0u8; 8];
+    if std::fs::File::open(path)
+        .and_then(|mut f| f.read_exact(&mut header))
+        .is_err()
+    {
+        return false;
+    }
+    let magic = u32::from_le_bytes([header[0], header[1], header[2], header[3]]);
+    // Fat/universal binary — assume it carries an arm64 slice.
+    if magic == 0xCAFE_BABE || magic == 0xBEBA_FECA {
+        return true;
+    }
+    let cputype = u32::from_le_bytes([header[4], header[5], header[6], header[7]]);
+    magic == 0xFEED_FACF && cputype == 0x0100_000C // MH_MAGIC_64 + CPU_TYPE_ARM64
+}
+
+fn rosetta_available() -> bool {
+    #[cfg(target_arch = "aarch64")]
+    {
+        Path::new("/Library/Apple/usr/libexec/oah/libRosettaRuntime").exists()
+    }
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        true
+    }
+}
+
+/// Can this REDline actually execute on the host? On Apple Silicon an Intel
+/// REDline needs Rosetta 2.
+fn red_binary_runnable(path: &str) -> bool {
+    #[cfg(target_arch = "aarch64")]
+    {
+        macho_is_arm64_or_universal(path) || rosetta_available()
+    }
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        let _ = path;
+        true
+    }
+}
+
 /// Pure decision so it can be unit-tested without touching PATH.
 fn decide_red(
     bridge_path: Option<String>,
@@ -282,6 +326,14 @@ fn decide_red(
     resolve: Option<&str>,
 ) -> DecoderStatus {
     if let Some(path) = bridge_path {
+        if !red_binary_runnable(&path) {
+            return needs_setup(
+                "RED_R3D",
+                RED_LABEL,
+                "The bundled REDline is an Intel binary and Rosetta 2 is missing. In Terminal run `softwareupdate --install-rosetta --agree-to-license`, or install REDCINE-X PRO (native Apple Silicon), then Re-check.",
+                red_setup(),
+            );
+        }
         let mut s = available("RED_R3D", RED_LABEL, "red_sdk", "RED decoder detected — .r3d and .nev analyse directly.");
         s.path = Some(path);
         return s;
@@ -327,13 +379,13 @@ fn decide_resolve_or_proxy(family: &str, label: &str, resolve: Option<&str>) -> 
             family,
             label,
             "resolve",
-            "DaVinci Resolve is installed and can build the analysis proxy for this format.",
+            "This format decodes through DaVinci Resolve. Make sure Resolve is open before you press Generate proxy — or attach an MP4/ProRes proxy instead.",
         );
     }
     needs_setup(
         family,
         label,
-        "No bundled decoder. Install DaVinci Resolve (free) to decode this, or attach an MP4/ProRes proxy.",
+        "This format decodes through DaVinci Resolve. Install it (free) and keep it open for this operation, or attach an MP4/ProRes proxy.",
         resolve_setup(),
     )
 }
