@@ -443,8 +443,127 @@ pub fn is_braw_path(clip_path: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn lower_ext(clip_path: &str) -> String {
+    Path::new(clip_path)
+        .extension()
+        .and_then(|v| v.to_str())
+        .map(|v| v.to_ascii_lowercase())
+        .unwrap_or_default()
+}
+
+/// RED family (R3D / R3D NE / Nikon N-RAW) — decoded with REDline / the RED SDK.
+pub fn is_redline_backed_path(clip_path: &str) -> bool {
+    matches!(lower_ext(clip_path).as_str(), "r3d" | "nev")
+}
+
+/// Formats with no bundled decoder that DaVinci Resolve can decode headless.
+pub fn is_resolve_backed_path(clip_path: &str) -> bool {
+    matches!(lower_ext(clip_path).as_str(), "crm" | "rmf" | "xocn" | "ari")
+}
+
+/// Any camera-RAW source that needs a decode provider before analysis.
 pub fn is_decoder_backed_raw_path(clip_path: &str) -> bool {
-    is_braw_path(clip_path)
+    is_braw_path(clip_path) || is_redline_backed_path(clip_path) || is_resolve_backed_path(clip_path)
+}
+
+/// Locate a REDline / RED-SDK CLI. `red_sdk_dir` is a user-configured install
+/// folder (see `production_decoder_status`).
+pub fn locate_redline(red_sdk_dir: Option<&str>) -> Option<String> {
+    for name in ["red_bridge", "REDline", "redline"] {
+        let path = crate::tools::find_executable(name);
+        if path != name && Path::new(&path).exists() {
+            return Some(path);
+        }
+    }
+    let dir = red_sdk_dir?;
+    for name in ["REDline", "redline", "REDline.exe", "REDLine"] {
+        for sub in ["", "bin", "Redistributable", "Redistributable/mac", "Redistributable/win", "Redistributable/linux"] {
+            let candidate = if sub.is_empty() {
+                Path::new(dir).join(name)
+            } else {
+                Path::new(dir).join(sub).join(name)
+            };
+            if candidate.exists() {
+                return Some(candidate.to_string_lossy().to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Decode a RED source to an analysis proxy: REDline debayers at quarter-res to
+/// a scaled ProRes .mov, then ffmpeg re-encodes to the standard H.264 proxy so
+/// the rest of the pipeline is format-agnostic.
+pub fn create_red_proxy_via_redline(
+    redline_path: &str,
+    input_path: &str,
+    decoded_dir: &Path,
+    output_path: &Path,
+) -> Result<(), String> {
+    validate_proxy_output_path(input_path, output_path)?;
+    if decoded_dir.exists() {
+        let _ = std::fs::remove_dir_all(decoded_dir);
+    }
+    std::fs::create_dir_all(decoded_dir)
+        .map_err(|e| format!("Failed to prepare RED decode scratch: {e}"))?;
+    let base = decoded_dir.join("red_decode");
+
+    let mut cmd = crate::tools::create_command(redline_path);
+    cmd.args([
+        "--i", input_path,
+        "--o", &base.to_string_lossy(),
+        "--format", "3",         // Apple ProRes
+        "--proResEncoding", "0", // Proxy
+        "--decodeRes", "2",      // quarter-res debayer — fast, enough for signal analysis
+        "--resizeX", "1920",
+    ]);
+    let out = cmd
+        .output()
+        .map_err(|e| format!("Failed to start REDline ({redline_path}): {e}"))?;
+    if !out.status.success() {
+        let code = out.status.code();
+        let hint = "\nOpen Decoder Setup to check the RED SDK, or export an MP4/ProRes proxy from REDCINE-X PRO and use 'Select Existing Proxy'.";
+        return Err(format!(
+            "REDline decode failed.\nInput: {}\nExit code: {}\n{}{}",
+            input_path,
+            code.map(|v| v.to_string()).unwrap_or_else(|| "signal".to_string()),
+            tail_lines(&String::from_utf8_lossy(&out.stderr), 20),
+            hint,
+        ));
+    }
+
+    let decoded_mov = std::fs::read_dir(decoded_dir)
+        .map_err(|e| format!("Cannot read RED decode output: {e}"))?
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.extension()
+                .and_then(|x| x.to_str())
+                .map(|x| x.eq_ignore_ascii_case("mov"))
+                .unwrap_or(false)
+        })
+        .ok_or_else(|| {
+            format!(
+                "REDline produced no .mov output in {}. The RED R3D SDK may be missing — open Decoder Setup.",
+                decoded_dir.display()
+            )
+        })?;
+
+    let ff = crate::tools::create_command("ffmpeg")
+        .args(["-nostdin", "-hide_banner", "-y", "-i", &decoded_mov.to_string_lossy()])
+        .args(proxy_ffmpeg_args(output_path))
+        .output()
+        .map_err(|e| format!("Failed to run ffmpeg for RED proxy encode: {e}"))?;
+    if !ff.status.success() {
+        return Err(format!(
+            "ffmpeg failed encoding the RED proxy.\nInput: {}\nOutput: {}\n{}",
+            decoded_mov.display(),
+            output_path.display(),
+            tail_lines(&String::from_utf8_lossy(&ff.stderr), 20),
+        ));
+    }
+    let _ = std::fs::remove_dir_all(decoded_dir);
+    Ok(())
 }
 
 pub fn classify_source_format(clip_path: &str) -> String {
@@ -1999,5 +2118,31 @@ mod tests {
         let mut missing_trust = baseline_input();
         missing_trust.metrics_trusted = None;
         assert!(compute_production_match_confidence(&missing_trust) < 90);
+    }
+
+    #[test]
+    fn raw_provider_routing_by_extension() {
+        assert!(super::is_braw_path("/x/A001.braw"));
+        assert!(super::is_redline_backed_path("/x/A001.R3D"));
+        assert!(super::is_redline_backed_path("/x/A001.nev"));
+        assert!(super::is_resolve_backed_path("/x/A001.crm"));
+        assert!(super::is_resolve_backed_path("/x/A001.xocn"));
+        assert!(super::is_decoder_backed_raw_path("/x/A001.r3d"));
+        assert!(super::is_decoder_backed_raw_path("/x/A001.CRM"));
+        assert!(!super::is_decoder_backed_raw_path("/x/A001.mov"));
+        assert!(!super::is_redline_backed_path("/x/A001.braw"));
+    }
+
+    #[test]
+    fn locate_redline_finds_binary_in_override_dir() {
+        let dir = std::env::temp_dir().join(format!("cineflow_red_{}", std::process::id()));
+        let bin_dir = dir.join("bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        let bin = bin_dir.join("REDline");
+        std::fs::write(&bin, "#!/bin/sh\n").unwrap();
+        let found = super::locate_redline(Some(&dir.to_string_lossy()));
+        // A real REDline on PATH would be picked first; otherwise our fixture wins.
+        assert!(found.is_some());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

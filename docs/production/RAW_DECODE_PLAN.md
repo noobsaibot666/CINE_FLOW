@@ -115,6 +115,33 @@ priority order:
 The Analyze button stays enabled; slots that still can't decode are marked
 `provisional` in the run (already modelled) rather than aborting the batch.
 
+## Status (implemented)
+
+- **Phase 1 done** — `verify_macos_v12_runtime.mjs` now requires
+  `BlackmagicRawAPI.framework`; `locate_braw_decoder` also accepts the
+  Windows `.dll` / Linux `.so`.
+- **Phase 2 done** — `production_decoder_status` module + commands + the
+  `decoder_status` field on the capability report.
+- **Phase 4 done** — Decoder Setup panel + blocked-slot UX in Camera Match Lab.
+- **Phase 5 done** — `create_red_proxy_via_redline` (REDline: quarter-res
+  ProRes → ffmpeg proxy) covers `.r3d` / `.r3d` NE / `.nev`. `locate_redline`
+  finds `red_bridge` / `REDline` on PATH or in the configured RED SDK folder.
+  *Caveat:* REDline flag set (`--decodeRes 2 --proResEncoding 0 --resizeX 1920`)
+  is tuned for current REDline; verify against the installed SDK version.
+- **Phase 3 done (best-effort)** — `production_resolve_decode` drives a
+  running DaVinci Resolve via a Python script to render an mp4 proxy for
+  `.crm` / `.rmf` / `.xocn` / `.ari`. *Caveats:* Resolve must be **open**
+  (free edition only scripts a live instance); needs `python3` with the
+  `DaVinciResolveScript` module reachable via `RESOLVE_SCRIPT_API` /
+  `RESOLVE_SCRIPT_LIB` (defaults set per-OS, overridable by env). Every
+  failure returns an actionable message and the attach-proxy fallback still
+  applies.
+- **Phase 6 (FFmpeg 8 / ProRes RAW)** — not started.
+
+`ensure_matchlab_proxy_internal` now picks a `RawProxyPlan`
+(Braw / Redline / Resolve / Unavailable) up front; `Unavailable` fails with
+guidance instead of a generic error, and never blocks the Analyze batch.
+
 ## 4. Phased plan
 
 1. **Unblock BRAW (build fix).** Ensure `braw_bridge` + `BlackmagicRawAPI.framework`

@@ -5754,6 +5754,17 @@ async fn camera_match_analyze_clip_internal(
     result
 }
 
+/// Which decode provider will service a camera-RAW source for proxy generation.
+enum RawProxyPlan {
+    Braw(Box<BrawDecoderCaps>),
+    /// REDline / RED-SDK CLI path.
+    Redline(String),
+    /// Headless DaVinci Resolve render.
+    Resolve,
+    /// No provider is set up — carries user-facing guidance.
+    Unavailable(String),
+}
+
 async fn ensure_matchlab_proxy_internal(
     project_id: &str,
     slot: &str,
@@ -5860,24 +5871,50 @@ async fn ensure_matchlab_proxy_internal(
     emit_job_state(app, &state.job_manager, &job_id);
 
     let final_string = final_path.to_string_lossy().to_string();
-    let is_braw_source = is_braw_path(source_path);
-    let braw_decoder_caps = if is_braw_source {
-        Some(get_cached_braw_decoder_caps(&state, app))
-    } else {
-        None
-    };
-    if let Some(decoder_caps) = braw_decoder_caps.as_ref() {
-        if !decoder_caps.found {
-            mark_proxy_attempt_failure(&state, &proxy_key, None);
-            return Err(format_matchlab_proxy_error(
-                "Proxy generation failed",
-                "BRAW decoder not available — install Blackmagic RAW Player or use an MP4 proxy.",
-                &format!(
-                    "File: {}\n\nTo decode BRAW files, install one of:\n  • Blackmagic RAW Player (free) — blackmagicdesign.com/support\n  • DaVinci Resolve (free edition)\n\nAlternatively, export an MP4 or ProRes proxy from your camera software, then use 'Select Existing Proxy' in Camera Match Lab.",
-                    source_path
-                ),
-            ));
+
+    // Decide which decode provider services this source before spawning the
+    // blocking task. Unavailable providers fail here with actionable guidance —
+    // the slot still has the "attach a proxy" fallback and Decoder Setup.
+    let proxy_plan: RawProxyPlan = if is_braw_path(source_path) {
+        let caps = get_cached_braw_decoder_caps(&state, app);
+        if caps.found {
+            RawProxyPlan::Braw(Box::new(caps))
+        } else {
+            RawProxyPlan::Unavailable(
+                "The Blackmagic RAW SDK isn't available in this build. Open Decoder Setup to install it (free) or point CineFlow at it — or attach an MP4/ProRes proxy for this slot.".to_string(),
+            )
         }
+    } else if crate::production_match_lab::is_redline_backed_path(source_path) {
+        let overrides = crate::production_decoder_status::load_overrides(&state.app_data_dir);
+        match crate::production_match_lab::locate_redline(overrides.red_sdk_dir.as_deref()) {
+            Some(path) => RawProxyPlan::Redline(path),
+            None if crate::production_decoder_status::detect_resolve(&overrides).is_some() => {
+                RawProxyPlan::Resolve
+            }
+            None => RawProxyPlan::Unavailable(
+                "No RED decoder found. Open Decoder Setup to install the free RED R3D SDK (or DaVinci Resolve) — or export an MP4/ProRes proxy from REDCINE-X PRO and use 'Select Existing Proxy'.".to_string(),
+            ),
+        }
+    } else if crate::production_match_lab::is_resolve_backed_path(source_path) {
+        let overrides = crate::production_decoder_status::load_overrides(&state.app_data_dir);
+        if crate::production_decoder_status::detect_resolve(&overrides).is_some() {
+            RawProxyPlan::Resolve
+        } else {
+            RawProxyPlan::Unavailable(
+                "This format has no bundled decoder. Install DaVinci Resolve (free) — Decoder Setup has the link — or attach an MP4/ProRes proxy for this slot.".to_string(),
+            )
+        }
+    } else {
+        RawProxyPlan::Unavailable("No decode provider is available for this source.".to_string())
+    };
+
+    if let RawProxyPlan::Unavailable(detail) = &proxy_plan {
+        mark_proxy_attempt_failure(&state, &proxy_key, None);
+        return Err(format_matchlab_proxy_error(
+            "Proxy generation failed",
+            "This camera RAW format needs a decoder that isn't set up yet.",
+            &format!("File: {}\n\n{}", source_path, detail),
+        ));
     }
 
     // Activate any security-scoped bookmark for the source file's volume before
@@ -5915,37 +5952,51 @@ async fn ensure_matchlab_proxy_internal(
         let source_for_task = source_path.to_string();
         let tmp_for_task = tmp_path.clone();
         let decoded_for_task = build_proxy_decode_path(&proxy_root);
+        let red_scratch_for_task = proxy_root.join("red_scratch");
+        let plan_for_task = proxy_plan;
         let proxy_strategy = tokio::time::timeout(
-            std::time::Duration::from_secs(300),
-            tokio::task::spawn_blocking(move || {
-                if let Some(decoder_caps_for_task) = braw_decoder_caps {
-                    if decoder_caps_for_task.supports_stdout {
-                        create_braw_proxy_via_stdout(
-                            &decoder_caps_for_task,
-                            &source_for_task,
-                            &tmp_for_task,
-                        )?;
-                        return Ok(("decoder-stdout-pipe".to_string(), decoder_caps_for_task.executable_path.clone()));
+            std::time::Duration::from_secs(1800),
+            tokio::task::spawn_blocking(move || match plan_for_task {
+                RawProxyPlan::Braw(caps) => {
+                    if caps.supports_stdout {
+                        create_braw_proxy_via_stdout(&caps, &source_for_task, &tmp_for_task)?;
+                        return Ok(("decoder-stdout-pipe".to_string(), caps.executable_path.clone()));
                     }
-                    if decoder_caps_for_task.supports_output_flag {
+                    if caps.supports_output_flag {
                         create_braw_proxy_via_file(
-                            &decoder_caps_for_task,
+                            &caps,
                             &source_for_task,
                             &decoded_for_task,
                             &tmp_for_task,
                         )?;
-                        return Ok(("decoder-file-output".to_string(), decoder_caps_for_task.executable_path.clone()));
+                        return Ok(("decoder-file-output".to_string(), caps.executable_path.clone()));
                     }
-                    return Err(format_matchlab_proxy_error(
+                    Err(format_matchlab_proxy_error(
                         "Proxy generation failed",
                         "BRAW decoder found but no output method available — use an MP4 proxy.",
                         &format!(
                             "File: {}\n\nThe BRAW decoder was detected but does not support stdout or file output on this system.\nAlternatively, export an MP4 or ProRes proxy and use 'Select Existing Proxy' in Camera Match Lab.",
                             source_for_task
                         ),
-                    ));
+                    ))
                 }
-                Err("No decoder available for this raw source.".to_string())
+                RawProxyPlan::Redline(redline_path) => {
+                    crate::production_match_lab::create_red_proxy_via_redline(
+                        &redline_path,
+                        &source_for_task,
+                        &red_scratch_for_task,
+                        &tmp_for_task,
+                    )?;
+                    Ok(("redline-decode".to_string(), Some(redline_path)))
+                }
+                RawProxyPlan::Resolve => {
+                    crate::production_resolve_decode::create_proxy_via_resolve(
+                        &source_for_task,
+                        &tmp_for_task,
+                    )?;
+                    Ok(("resolve-render".to_string(), None))
+                }
+                RawProxyPlan::Unavailable(detail) => Err(detail),
             }),
         )
         .await

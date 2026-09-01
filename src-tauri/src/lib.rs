@@ -25,6 +25,7 @@ pub mod production_libraw;
 mod production_match_lab;
 pub mod production_media_capabilities;
 pub mod production_decoder_status;
+pub mod production_resolve_decode;
 pub mod production_raw_ingest;
 pub mod production_v12_readiness;
 mod review_core;

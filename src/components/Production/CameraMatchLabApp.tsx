@@ -3582,22 +3582,24 @@ function describeSourceWorkflow(
     };
   }
 
-  if (hasExtension(path, VENDOR_RAW_EXTENSIONS)) {
+  if (hasExtension(path, VENDOR_RAW_EXTENSIONS) || hasExtension(path, PROXY_GUIDED_RAW_EXTENSIONS)) {
+    const decoder = report?.decoder_status;
+    if (decoder?.state === "available") {
+      const via = decoder.provider === "resolve" ? "DaVinci Resolve" : decoder.provider === "red_sdk" ? "the RED SDK / REDline" : "a bundled decoder";
+      return {
+        tone: "good",
+        badge: getProxyOnlyFormatBadge(path),
+        status: `Decoder ready`,
+        body: `CineFlow will build the analysis proxy for this clip with ${via} when you press Analyze. You can still attach your own MP4/ProRes proxy to skip that step.`,
+      };
+    }
     return {
       tone: "warning",
       badge: getProxyOnlyFormatBadge(path),
-      status: "Vendor decoder required",
-      body: "This cinema RAW source is recognized, but reliable frame data depends on a vendor SDK/toolchain. Use an operator-approved MP4/MOV proxy until that adapter is available.",
-      action: "proxy",
-    };
-  }
-
-  if (hasExtension(path, PROXY_GUIDED_RAW_EXTENSIONS)) {
-    return {
-      tone: "warning",
-      badge: getProxyOnlyFormatBadge(path),
-      status: "Proxy-guided analysis",
-      body: "This proprietary RAW format is trackable in the project, but the app should analyze a proxy exported from the same source, with the intended log or ACES transform preserved.",
+      status: "Decoder not set up",
+      body: decoder?.detail
+        ? `${decoder.detail} Open Decoder Setup, or attach an MP4/MOV proxy exported from the same source.`
+        : "This cinema RAW source needs a decode provider. Open Decoder Setup, or attach an MP4/MOV proxy exported from the same source.",
       action: "proxy",
     };
   }
