@@ -309,8 +309,10 @@ pub fn compute_production_match_confidence(input: &ProductionMatchConfidenceInpu
 
     match input.chart_detected {
         Some(true) => {}
+        // A chart in frame that could not be read is a real problem; simply not
+        // shooting a chart is a legitimate field workflow and penalised less.
         Some(false) => score -= 28,
-        None => score -= 16,
+        None => score -= 10,
     }
 
     if let Some(quality) = input.calibration_quality_score {
@@ -329,6 +331,21 @@ pub fn compute_production_match_confidence(input: &ProductionMatchConfidenceInpu
         score -= 18;
     } else if input.frame_count < 5 {
         score -= 8;
+    }
+
+    // Evidence floor: a chartless result is still trustworthy when every other
+    // pillar is solid — original decode, an applied color transform, trusted
+    // metrics, no clipped patches, and a healthy frame sample. Don't let the
+    // chart-absent penalty alone drag that case below "trustworthy".
+    let strongly_corroborated = matches!(
+        input.decode_path_kind,
+        Some("direct_original") | Some("vendor_decoded")
+    ) && input.color_transform_status == Some("transform_applied")
+        && input.metrics_trusted == Some(true)
+        && input.clipped_patch_count == 0
+        && input.frame_count >= 8;
+    if strongly_corroborated {
+        score = score.max(78);
     }
 
     score.clamp(0, 100) as u8
@@ -766,6 +783,12 @@ pub fn analyze_frame(
     let mut midtone_pixels = 0u64;
     let mut shadow_pixels = 0u64;
 
+    // "In the highlights" band — bright but not necessarily clipped. Hard clipping
+    // is tracked separately by build_measurement_bundle from the 248/255 bins of
+    // this same luma histogram.
+    const HIGHLIGHT_LUMA: f64 = 0.90;
+    const SHADOW_LUMA: f64 = 0.18;
+
     for pixel in image.pixels() {
         let red = pixel[0] as usize;
         let green = pixel[1] as usize;
@@ -780,7 +803,7 @@ pub fn analyze_frame(
         green_histogram[green] += 1;
         blue_histogram[blue] += 1;
 
-        if luma_normalized > 0.95 {
+        if luma_normalized >= HIGHLIGHT_LUMA {
             highlight_pixels += 1;
         }
         if (0.4..=0.7).contains(&luma_normalized) {
@@ -792,13 +815,24 @@ pub fn analyze_frame(
             midtone_green_histogram[green] += 1;
             midtone_blue_histogram[blue] += 1;
         }
-        if (0.45..=0.64).contains(&luma_normalized) {
+        // Skin sampling: a mid-luma window AND a warm-chroma gate, so grey walls,
+        // sky and pavement don't pollute the skin-tone medians that drive the
+        // skin white-balance delta. Warm ordering (R >= G >= B), a minimum
+        // red-over-blue warmth, and a moderate saturation window.
+        let max_c = red.max(green).max(blue) as f64;
+        let min_c = red.min(green).min(blue) as f64;
+        let saturation = if max_c > 0.0 { (max_c - min_c) / max_c } else { 0.0 };
+        let is_skin_chroma = red >= green
+            && green >= blue
+            && (red as i32 - blue as i32) >= 6
+            && (0.08..=0.55).contains(&saturation);
+        if (0.35..=0.72).contains(&luma_normalized) && is_skin_chroma {
             skin_luma_histogram[luma] += 1;
             skin_red_histogram[red] += 1;
             skin_green_histogram[green] += 1;
             skin_blue_histogram[blue] += 1;
         }
-        if luma_normalized < 0.18 {
+        if luma_normalized < SHADOW_LUMA {
             shadow_pixels += 1;
         }
     }
@@ -1892,6 +1926,40 @@ mod tests {
         let mut missing_profile = baseline_input();
         missing_profile.source_profile_id = None;
         assert!(compute_production_match_confidence(&missing_profile) < 85);
+    }
+
+    #[test]
+    fn confidence_not_attempted_chart_beats_failed_chart() {
+        let mut not_attempted = baseline_input();
+        not_attempted.chart_detected = None;
+        not_attempted.calibration_quality_score = None;
+
+        let mut failed = baseline_input();
+        failed.chart_detected = Some(false);
+
+        assert!(
+            compute_production_match_confidence(&not_attempted)
+                > compute_production_match_confidence(&failed)
+        );
+    }
+
+    #[test]
+    fn confidence_has_evidence_floor_for_chartless_but_solid_analysis() {
+        // Chartless, but original decode + applied transform + trusted metrics +
+        // a healthy frame sample: still trustworthy.
+        let mut solid = baseline_input();
+        solid.chart_detected = None;
+        solid.calibration_quality_score = None;
+        solid.frame_count = 12;
+        assert!(compute_production_match_confidence(&solid) >= 78);
+
+        // The floor must not paper over a genuinely weak analysis.
+        let mut weak = baseline_input();
+        weak.chart_detected = None;
+        weak.calibration_quality_score = None;
+        weak.frame_count = 12;
+        weak.decode_path_kind = Some("operator_proxy");
+        assert!(compute_production_match_confidence(&weak) < 78);
     }
 
     #[test]
