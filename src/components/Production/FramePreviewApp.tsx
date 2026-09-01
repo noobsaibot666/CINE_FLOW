@@ -19,6 +19,7 @@ import {
   PanelBottomOpen
 } from 'lucide-react';
 import { open, save } from '@tauri-apps/plugin-dialog';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useFramePreview } from './framePreviewLogic';
 import { RatioType, FramePreviewMedia, RATIO_VALUES, INITIAL_TRANSFORM } from '../../types/framePreview';
 import { ProductionProject } from '../../types';
@@ -646,6 +647,7 @@ export const FramePreviewApp: React.FC<FramePreviewAppProps> = ({ project, onBac
   const [compositionMenuOpen, setCompositionMenuOpen] = useState(false);
   const [socialMenuOpen, setSocialMenuOpen] = useState(false);
   const [thumbnailsHidden, setThumbnailsHidden] = useState(false);
+  const [isDropActive, setIsDropActive] = useState(false);
   const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
   const dragStartRef = useRef<{ x: number; y: number; offX: number; offY: number; ratio: RatioType } | null>(null);
   const frameDragStartRef = useRef<{ x: number; y: number; startX: number; startY: number; ratio: RatioType } | null>(null);
@@ -750,6 +752,20 @@ export const FramePreviewApp: React.FC<FramePreviewAppProps> = ({ project, onBac
     };
   }, [ensureStillPreviewPath, readImageMetadata, readVideoMetadata]);
 
+  const mediaListRef = useRef(state.mediaList);
+  useEffect(() => { mediaListRef.current = state.mediaList; }, [state.mediaList]);
+
+  const addMediaFromPaths = useCallback(async (paths: string[]) => {
+    const allowed = new Set(FRAME_PREVIEW_SOURCE_EXTENSIONS.map((ext) => ext.toLowerCase()));
+    const media = paths.filter((path) => {
+      const ext = path.split('.').pop()?.toLowerCase() ?? '';
+      return allowed.has(ext);
+    });
+    if (media.length === 0) return;
+    const entries = await Promise.all(media.map((path) => buildMediaEntry(path)));
+    setMediaList([...mediaListRef.current, ...entries]);
+  }, [buildMediaEntry, setMediaList]);
+
   const handleAddMedia = async () => {
     const selected = await open({
       multiple: true,
@@ -759,13 +775,26 @@ export const FramePreviewApp: React.FC<FramePreviewAppProps> = ({ project, onBac
         extensions: [...FRAME_PREVIEW_SOURCE_EXTENSIONS]
       }]
     });
-
-    if (!selected || !Array.isArray(selected)) return;
-
-    const newMedia: FramePreviewMedia[] = await Promise.all(selected.map((path) => buildMediaEntry(path)));
-
-    setMediaList([...state.mediaList, ...newMedia]);
+    if (!selected) return;
+    await addMediaFromPaths(Array.isArray(selected) ? selected : [selected]);
   };
+
+  // Drag media in from Finder / Explorer, anywhere on the Frame Preview surface.
+  useEffect(() => {
+    const win = getCurrentWindow();
+    const unlisteners = [
+      win.listen<{ paths: string[] }>('tauri://drag-drop', (event) => {
+        setIsDropActive(false);
+        void addMediaFromPaths(event.payload?.paths ?? []);
+      }),
+      win.listen('tauri://drag-enter', () => setIsDropActive(true)),
+      win.listen('tauri://drag-over', () => setIsDropActive(true)),
+      win.listen('tauri://drag-leave', () => setIsDropActive(false)),
+    ];
+    return () => {
+      unlisteners.forEach((p) => p.then((fn) => fn()));
+    };
+  }, [addMediaFromPaths]);
 
   const activeMediaState = activeMedia ? state.mediaStates[activeMedia.id] : undefined;
   const currentTransform = activeMediaState?.transforms[state.activeRatio] || INITIAL_TRANSFORM;
@@ -1394,7 +1423,13 @@ export const FramePreviewApp: React.FC<FramePreviewAppProps> = ({ project, onBac
       </header>
 
       {/* MAIN VIEWPORT */}
-      <main className="frame-preview-main-viewport">
+      <main className={`frame-preview-main-viewport ${isDropActive ? 'drop-active' : ''}`}>
+        {isDropActive && (
+          <div className="frame-preview-drop-overlay">
+            <FolderOpen size={40} />
+            <span>Drop media to add it</span>
+          </div>
+        )}
         <div className="frame-preview-canvas-stage" ref={canvasStageRef}>
             {activeMedia && state.visibleRatios.length > 0 ? (
                 <div className="frame-preview-canvas-surface">
@@ -1514,13 +1549,15 @@ export const FramePreviewApp: React.FC<FramePreviewAppProps> = ({ project, onBac
                     })}
                 </div>
             ) : (
-                <div className="frame-preview-empty-state">
-                    <LayoutGrid size={48} className="muted" />
-                    <h2>{activeMedia ? 'No ratios visible' : 'No media loaded'}</h2>
-                    <p>{activeMedia ? 'Click a ratio chip to add a new preview frame.' : 'Load images or videos to begin reframing for delivery.'}</p>
+                <div className={`frame-preview-empty-state ${activeMedia ? '' : 'is-dropzone'}`}>
+                    <LayoutGrid size={44} className="muted" />
+                    <h2>{activeMedia ? 'No ratios visible' : 'Add media to start reframing'}</h2>
+                    <p>{activeMedia
+                      ? 'Turn on a ratio chip in the toolbar to add a preview frame.'
+                      : 'Drag videos or images anywhere on this window, or browse for files.'}</p>
                     {!activeMedia ? (
-                      <button className="btn btn-secondary" onClick={handleAddMedia}>
-                          <FolderOpen size={16} /> <span>Load Media</span>
+                      <button className="btn btn-primary" onClick={handleAddMedia}>
+                          <FolderOpen size={16} /> <span>Browse for media</span>
                       </button>
                     ) : null}
                 </div>
@@ -1540,8 +1577,9 @@ export const FramePreviewApp: React.FC<FramePreviewAppProps> = ({ project, onBac
           </button>
           <div className="frame-preview-filmstrip-scroll">
               <div className="frame-preview-filmstrip-inner">
-                <button className="frame-preview-filmstrip-card add-btn" onClick={handleAddMedia}>
-                    <Plus size={20} />
+                <button className="frame-preview-filmstrip-card add-btn" onClick={handleAddMedia} title="Add media (or drag files onto the window)">
+                    <Plus size={22} />
+                    <span>Add media</span>
                 </button>
 
                 {state.mediaList.map(media => {
@@ -1575,6 +1613,7 @@ export const FramePreviewApp: React.FC<FramePreviewAppProps> = ({ project, onBac
                                     <div className="frame-preview-thumb-size">{formatMediaSize(media.width, media.height)}</div>
 	                                {isSelected && <div className="frame-preview-selection-indicator"><ChevronDown size={14} /></div>}
 	                            </div>
+                            <div className="frame-preview-card-name" title={media.filename}>{media.filename}</div>
                         </div>
                     );
                 })}
