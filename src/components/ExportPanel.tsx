@@ -266,20 +266,20 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({
           </div>
         </div>
         {(!deliveryType || !scope) && (
-          <div className="mb-4 text-xs text-amber-300">
-            {!deliveryType ? "Step 1 missing: choose Resolve FCPXML or Director Pack." : "Step 2 missing: choose the export scope."}
+          <div className="export-panel-hint">
+            {!deliveryType ? "Pick a delivery format above." : "Pick the export scope above."}
           </div>
         )}
 
         {result && (
-          <div className={`mb-6 p-4 rounded-xl flex items-center gap-3 ${result.success ? "bg-green-500/10 text-green-400 border border-green-500/20" : "bg-red-500/10 text-red-400 border border-red-500/20"}`}>
-            {result.success ? <CheckCircle size={20} /> : <X size={20} />}
-            <span className="text-sm">{result.message}</span>
+          <div className={`export-panel-result ${result.success ? "is-success" : "is-error"}`}>
+            {result.success ? <CheckCircle size={18} /> : <X size={18} />}
+            <span>{result.message}</span>
           </div>
         )}
         {lastOutputPath && (
-          <div className="mb-4 text-xs text-white/70 flex items-center justify-between gap-3">
-            <span>Saved to: {lastOutputPath}</span>
+          <div className="export-panel-saved">
+            <span title={lastOutputPath}>Saved to {lastOutputPath}</span>
             <button
               className="btn btn-secondary btn-sm"
               onClick={async () => {
@@ -291,37 +291,30 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({
                 }
               }}
             >
-              Copy Path
+              Copy path
             </button>
           </div>
         )}
 
         <div className="export-panel-footer">
-          <button onClick={onClose} className="btn btn-secondary">
-            Cancel
+          <button onClick={onClose} className="btn btn-secondary">Cancel</button>
+          <button
+            onClick={deliveryType === "director_pack" ? handleDirectorPack : handleExport}
+            disabled={isExporting || !deliveryType || !scope}
+            className="btn btn-primary"
+            title={!deliveryType ? "Choose a delivery format first." : !scope ? "Choose a scope first." : undefined}
+          >
+            <span className={isExporting ? "shimmer-text" : ""}>
+              {isExporting
+                ? "Exporting…"
+                : deliveryType === "director_pack"
+                  ? "Export Director Pack"
+                  : deliveryType === "resolve"
+                    ? "Export FCPXML"
+                    : "Export"}
+            </span>
+            {!isExporting && (deliveryType === "director_pack" ? <Package size={18} /> : <FileDown size={18} />)}
           </button>
-          <div style={{ display: 'flex', gap: 12 }}>
-            <button
-              onClick={handleDirectorPack}
-              disabled={isExporting || !deliveryType || !scope || deliveryType !== "director_pack"}
-              className={`btn btn-accent btn-glow ${deliveryType === "director_pack" ? "" : "opacity-30"}`}
-              title={!deliveryType ? "Choose a delivery format first." : !scope ? "Choose a scope first." : undefined}
-            >
-              Step 3: Export Director Pack
-              <Package size={18} />
-            </button>
-            <button
-              onClick={handleExport}
-              disabled={isExporting || !deliveryType || !scope || deliveryType !== "resolve"}
-              className={`btn btn-primary ${deliveryType === "resolve" ? "" : "opacity-30"}`}
-              title={!deliveryType ? "Choose a delivery format first." : !scope ? "Choose a scope first." : undefined}
-            >
-              <span className={isExporting ? "shimmer-text" : ""}>
-                {isExporting ? "Exporting..." : "Step 3: Export FCPXML"}
-              </span>
-              {!isExporting && <FileDown size={18} />}
-            </button>
-          </div>
         </div>
       </div>
     </div>

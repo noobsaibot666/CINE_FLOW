@@ -10,12 +10,6 @@ struct Rational {
 }
 
 impl Rational {
-    fn from_seconds(seconds: f64) -> Self {
-        let den = 1_000_000;
-        let num = (seconds * den as f64) as i64;
-        Self { num, den }
-    }
-
     fn from_ms(ms: u64) -> Self {
         Self {
             num: ms as i64,
@@ -26,6 +20,55 @@ impl Rational {
     fn as_fcpxml(&self) -> String {
         format!("{}/{}s", self.num, self.den)
     }
+}
+
+/// FCP is strict about `frameDuration` — it must be a standard timebase, not an
+/// arbitrary 1/fps rational, or the format (and every clip on it) is rejected.
+fn fcpxml_frame_duration(fps: f64) -> String {
+    const STANDARD: &[(f64, &str)] = &[
+        (23.976, "1001/24000s"),
+        (24.0, "1/24s"),
+        (25.0, "1/25s"),
+        (29.97, "1001/30000s"),
+        (30.0, "1/30s"),
+        (47.952, "1001/48000s"),
+        (48.0, "1/48s"),
+        (50.0, "1/50s"),
+        (59.94, "1001/60000s"),
+        (60.0, "1/60s"),
+        (23.98, "1001/24000s"),
+        (29.976, "1001/30000s"),
+    ];
+    for (rate, value) in STANDARD {
+        if (fps - rate).abs() < 0.03 {
+            return (*value).to_string();
+        }
+    }
+    if fps > 0.0 {
+        format!("100/{}s", (fps * 100.0).round() as i64)
+    } else {
+        "1/30s".to_string()
+    }
+}
+
+/// Turn an absolute filesystem path into a `file://` URI that FCP / Resolve can
+/// actually relink — everything outside the unreserved set is percent-encoded,
+/// path separators are kept.
+fn path_to_file_uri(path: &str) -> String {
+    let normalized = path.replace('\\', "/");
+    let mut out = String::from("file://");
+    if !normalized.starts_with('/') {
+        out.push('/');
+    }
+    for byte in normalized.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' => {
+                out.push(*byte as char)
+            }
+            _ => out.push_str(&format!("%{:02X}", byte)),
+        }
+    }
+    out
 }
 
 pub fn generate_fcpxml_structured(
@@ -54,11 +97,7 @@ pub fn generate_fcpxml_structured(
         } else {
             let fid = format!("f{}", format_counter);
             format_counter += 1;
-            let frame_duration = if clip.fps > 0.0 {
-                Rational::from_seconds(1.0 / clip.fps).as_fcpxml()
-            } else {
-                "100/3000s".to_string()
-            };
+            let frame_duration = fcpxml_frame_duration(clip.fps);
             let _ = write!(
                 xml,
                 "    <format id=\"{}\" name=\"{}\" frameDuration=\"{}\" width=\"{}\" height=\"{}\" />\n",
@@ -72,25 +111,38 @@ pub fn generate_fcpxml_structured(
         asset_ref_map.insert(clip.id.clone(), asset_id.clone());
         let duration = Rational::from_ms(clip.duration_ms).as_fcpxml();
 
+        // FCPXML 1.9+ requires the source URI inside a <media-rep>, not as a
+        // bare src= attribute on <asset> (which makes FCP reject the file).
+        // Percent-encode the path so spaces / unicode don't break relinking.
         let src = if let Some(bp) = base_path {
-            // Attempt to make it relative to the FCPXML location (bp)
-            if let Ok(rel) = Path::new(&clip.file_path).strip_prefix(bp) {
-                rel.to_string_lossy().to_string()
-            } else {
-                format!("file://localhost{}", clip.file_path)
+            match Path::new(&clip.file_path).strip_prefix(bp) {
+                Ok(rel) => {
+                    // Relative URI resolved against the .fcpxml location.
+                    let rel = rel.to_string_lossy().replace('\\', "/");
+                    rel.as_bytes()
+                        .iter()
+                        .map(|b| match b {
+                            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' => {
+                                (*b as char).to_string()
+                            }
+                            _ => format!("%{:02X}", b),
+                        })
+                        .collect::<String>()
+                }
+                Err(_) => path_to_file_uri(&clip.file_path),
             }
         } else {
-            format!("file://localhost{}", clip.file_path)
+            path_to_file_uri(&clip.file_path)
         };
 
         let _ = write!(
             xml,
-            "    <asset id=\"{}\" name=\"{}\" src=\"{}\" start=\"0s\" duration=\"{}\" hasVideo=\"1\" hasAudio=\"1\" format=\"{}\" />\n",
+            "    <asset id=\"{}\" name=\"{}\" start=\"0s\" duration=\"{}\" hasVideo=\"1\" hasAudio=\"1\" format=\"{}\">\n      <media-rep kind=\"original-media\" src=\"{}\" />\n    </asset>\n",
             asset_id,
             escape_xml(&clip.filename),
-            escape_xml(&src),
             duration,
-            format_id
+            format_id,
+            escape_xml(&src)
         );
     }
 
@@ -250,6 +302,9 @@ fn write_project_sequence(
         if let Some(asset_ref) = asset_ref_map.get(&clip.id) {
             let duration = Rational::from_ms(clip.duration_ms).as_fcpxml();
             let offset = Rational::from_ms(offset_ms).as_fcpxml();
+            // Markers must carry a duration on the clip's timebase, not a fixed
+            // 1/30s that isn't a whole frame at 24/25p.
+            let mk = fcpxml_frame_duration(clip.fps);
             let _ = write!(
                 xml,
                 "            <asset-clip name=\"{}\" ref=\"{}\" offset=\"{}\" duration=\"{}\" start=\"0s\">\n",
@@ -261,28 +316,29 @@ fn write_project_sequence(
             if clip.flag == "pick" {
                 let _ = write!(
                     xml,
-                    "              <keyword start=\"0s\" duration=\"{}\" value=\"Pick\" />\n              <marker start=\"0s\" duration=\"100/3000s\" value=\"PICK\" completed=\"1\" />\n",
-                    duration
+                    "              <keyword start=\"0s\" duration=\"{}\" value=\"Pick\" />\n              <marker start=\"0s\" duration=\"{}\" value=\"PICK\" completed=\"1\" />\n",
+                    duration, mk
                 );
             } else if clip.flag == "reject" {
                 let _ = write!(
                     xml,
-                    "              <keyword start=\"0s\" duration=\"{}\" value=\"Reject\" />\n              <marker start=\"0s\" duration=\"100/3000s\" value=\"REJECT\" completed=\"1\" />\n",
-                    duration
+                    "              <keyword start=\"0s\" duration=\"{}\" value=\"Reject\" />\n              <marker start=\"0s\" duration=\"{}\" value=\"REJECT\" completed=\"1\" />\n",
+                    duration, mk
                 );
             }
             if clip.rating > 0 {
                 let _ = write!(
                     xml,
-                    "              <keyword start=\"0s\" duration=\"{}\" value=\"Rating {}\" />\n              <marker start=\"0s\" duration=\"100/3000s\" value=\"★{}\" completed=\"1\" />\n",
-                    duration, clip.rating, clip.rating
+                    "              <keyword start=\"0s\" duration=\"{}\" value=\"Rating {}\" />\n              <marker start=\"0s\" duration=\"{}\" value=\"Rating {}\" completed=\"1\" />\n",
+                    duration, clip.rating, mk, clip.rating
                 );
             }
             if let Some(notes) = &clip.notes {
                 if !notes.is_empty() {
                     let _ = write!(
                         xml,
-                        "              <marker start=\"0s\" duration=\"100/3000s\" value=\"{}\" />\n",
+                        "              <marker start=\"0s\" duration=\"{}\" value=\"{}\" />\n",
+                        mk,
                         escape_xml(notes)
                     );
                 }
@@ -412,6 +468,26 @@ mod tests {
         assert!(xml.contains("A&amp;B &lt;test&gt;.mov"));
         assert!(xml.contains("Proj &amp; Test"));
         assert!(xml.contains("&quot;ok&quot;"));
+    }
+
+    #[test]
+    fn asset_uses_media_rep_with_encoded_uri() {
+        let mut c = clip("1", "A001 C001.mov", "2026-01-01 10:00:00");
+        c.file_path = "/Volumes/CARD 01/A001 C001.mov".to_string();
+        c.fps = 23.976;
+        let xml = generate_fcpxml_structured(&[c], "Proj", true, None);
+        assert!(xml.contains("<media-rep kind=\"original-media\""));
+        assert!(!xml.contains(" src=\"file://localhost"));
+        assert!(xml.contains("file:///Volumes/CARD%2001/A001%20C001.mov"));
+        assert!(xml.contains("frameDuration=\"1001/24000s\""));
+    }
+
+    #[test]
+    fn frame_duration_snaps_to_standard_timebases() {
+        assert_eq!(fcpxml_frame_duration(23.976), "1001/24000s");
+        assert_eq!(fcpxml_frame_duration(25.0), "1/25s");
+        assert_eq!(fcpxml_frame_duration(29.97), "1001/30000s");
+        assert_eq!(fcpxml_frame_duration(59.94), "1001/60000s");
     }
 
     #[test]

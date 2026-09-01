@@ -6707,11 +6707,10 @@ body {
   flex-direction: column;
   position: relative;
   padding: 24px;
-  background: var(--inspector-bg);
-  border: 1px solid var(--inspector-border);
-  box-shadow: var(--shadow-lg);
+  background: #17171b;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55);
   border-radius: var(--radius-lg);
-  backdrop-filter: blur(20px);
 }
 
 .export-scroll-area {
@@ -6802,11 +6801,11 @@ body {
 }
 
 .btn-delivery {
-  padding: 10px 14px;
-  background: var(--bg-surface);
-  border: 1px solid var(--inspector-border);
+  padding: 12px 14px;
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: var(--radius-md);
-  color: var(--text-secondary);
+  color: var(--text-primary);
   font-size: var(--font-size-sm);
   font-weight: 600;
   display: flex;
@@ -6845,9 +6844,9 @@ body {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 10px 14px;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.05);
+  padding: 11px 14px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.11);
   border-radius: 10px;
   cursor: pointer;
   transition: all 0.2s ease;
@@ -6855,8 +6854,8 @@ body {
 }
 
 .scope-item-compact:hover {
-  background: rgba(255, 255, 255, 0.06);
-  border-color: rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.09);
+  border-color: rgba(255, 255, 255, 0.24);
 }
 
 .scope-item-compact.active {
@@ -6910,12 +6909,57 @@ body {
 }
 
 .export-panel-footer {
-  display: grid;
-  grid-template-columns: 1fr 1.5fr 1.5fr;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
   gap: 12px;
-  margin-top: 36px;
-  padding-top: 28px;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  margin-top: 28px;
+  padding-top: 22px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+.export-panel-footer .btn-primary {
+  min-width: 210px;
+  justify-content: center;
+}
+
+.export-panel-hint {
+  margin: 4px 0 0;
+  font-size: 0.78rem;
+  color: #fcd34d;
+}
+.export-panel-result {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  font-size: 0.84rem;
+  border: 1px solid transparent;
+}
+.export-panel-result.is-success {
+  background: rgba(34, 197, 94, 0.1);
+  border-color: rgba(34, 197, 94, 0.24);
+  color: #86efac;
+}
+.export-panel-result.is-error {
+  background: rgba(248, 113, 113, 0.1);
+  border-color: rgba(248, 113, 113, 0.24);
+  color: #fca5a5;
+}
+.export-panel-saved {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 10px;
+  font-size: 0.76rem;
+  color: var(--text-secondary);
+}
+.export-panel-saved span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ─── Safe Copy Reference Redesign ─── */
