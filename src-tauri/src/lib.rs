@@ -323,6 +323,7 @@ pub fn run() {
             commands::create_folder_structure,
             commands::import_folder_structure,
             commands::scan_duplicates,
+            commands::cancel_duplicate_scan,
             commands::delete_duplicate_file,
             commands::purge_cache,
             commands::review_core_ingest_files,

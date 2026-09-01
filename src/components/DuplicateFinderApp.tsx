@@ -39,6 +39,7 @@ interface ScanProgress {
   phase: string;
   count: number;
   current_path?: string;
+  detail?: string;
 }
 
 interface ScanResult {
@@ -59,6 +60,7 @@ function formatSize(bytes: number) {
 export function DuplicateFinderApp() {
   const [folders, setFolders] = useState<string[]>([]);
   const [isScanning, setIsScanning] = useState(false);
+  const [isCancelling, setIsCancelling] = useState(false);
   const [progress, setProgress] = useState<ScanProgress | null>(null);
   const [results, setResults] = useState<DuplicateGroup[]>([]);
   const [errors, setErrors] = useState<string[]>([]);
@@ -116,6 +118,7 @@ export function DuplicateFinderApp() {
   const resetDuplicateFinder = useCallback(() => {
     setFolders([]);
     setIsScanning(false);
+    setIsCancelling(false);
     setProgress(null);
     setResults([]);
     setErrors([]);
@@ -125,14 +128,15 @@ export function DuplicateFinderApp() {
 
   const startScan = async () => {
     if (folders.length === 0) return;
-    
+
     setIsScanning(true);
+    setIsCancelling(false);
     setUiError(null);
     setErrors([]);
     setResults([]);
     setProgress({ phase: "Initializing...", count: 0 });
     const startTime = Date.now();
-    
+
     // Listen for progress events
     const unlisten = await listen<ScanProgress>("duplicate-scan-progress", (event) => {
       setProgress(event.payload);
@@ -148,10 +152,20 @@ export function DuplicateFinderApp() {
       setUiError(String(err));
     } finally {
       setIsScanning(false);
+      setIsCancelling(false);
       setProgress(null);
       unlisten();
     }
   };
+
+  const stopScan = useCallback(async () => {
+    setIsCancelling(true);
+    try {
+      await invoke("cancel_duplicate_scan");
+    } catch (err) {
+      console.error(err);
+    }
+  }, []);
 
   const deleteFile = async (filePath: string, groupHash: string) => {
     const fileName = filePath.split(/[\\/]/).pop();
@@ -301,14 +315,23 @@ export function DuplicateFinderApp() {
           <button className="btn btn-secondary btn-glass" onClick={addFolder} disabled={isScanning}>
             <Plus size={16} /> Add Folders
           </button>
-          <button 
-            className="btn btn-primary btn-glow" 
-            onClick={startScan} 
+          <button
+            className="btn btn-primary btn-glow"
+            onClick={startScan}
             disabled={isScanning || folders.length === 0}
           >
             {isScanning ? <div className="spinner" /> : <Scan size={16} />}
             <span>{isScanning ? "Scanning Content..." : "Start Scan"}</span>
           </button>
+          {isScanning && (
+            <button
+              className="btn btn-secondary btn-glass"
+              onClick={stopScan}
+              disabled={isCancelling}
+            >
+              <X size={16} /> {isCancelling ? "Stopping..." : "Stop"}
+            </button>
+          )}
           {results.length > 0 && (
             <button className="btn btn-secondary btn-glass" onClick={exportPDF}>
               <Download size={16} /> Export PDF
@@ -401,19 +424,36 @@ export function DuplicateFinderApp() {
           </div>
           <div className="results-list premium-scroll">
             {isScanning ? (
-              <div className="loading-state">
-                <div className="spinner large" />
-                <p>{progress?.phase || "Analyzing file signatures..."}</p>
-                {progress && (
-                  <div className="progress-details">
-                    <span className="count-badge">{progress.count} items processed</span>
-                    {progress.current_path && <span className="current-path">{progress.current_path}</span>}
+              (() => {
+                const isVerifying = progress?.phase === "verifying content";
+                const pct = isVerifying ? Math.min(100, Math.max(0, progress?.count ?? 0)) : null;
+                return (
+                  <div className="loading-state">
+                    <div className="spinner large" />
+                    <p style={{ textTransform: "capitalize" }}>
+                      {isCancelling ? "Stopping scan..." : (progress?.phase || "Analyzing file signatures...")}
+                    </p>
+                    {progress && (
+                      <div className="progress-details">
+                        <span className="count-badge">
+                          {isVerifying
+                            ? `${pct}%`
+                            : progress.phase === "indexing"
+                              ? `${progress.count.toLocaleString()} files indexed`
+                              : `${progress.count.toLocaleString()} candidates`}
+                        </span>
+                        {progress.detail && <span className="current-path">{progress.detail}</span>}
+                        {progress.current_path && <span className="current-path">{progress.current_path}</span>}
+                      </div>
+                    )}
+                    <div className="progress-bar-container">
+                      {pct !== null
+                        ? <div className="progress-bar-fill" style={{ width: `${pct}%` }} />
+                        : <div className="progress-bar-indeterminate" />}
+                    </div>
                   </div>
-                )}
-                <div className="progress-bar-container">
-                  <div className="progress-bar-indeterminate" />
-                </div>
-              </div>
+                );
+              })()
             ) : results.length === 0 ? (
               <div className="empty-state-large">
                 <div className="icon-circle"><CheckCircle2 size={32} /></div>
@@ -891,6 +931,13 @@ export function DuplicateFinderApp() {
           height: 100%;
           background: var(--phase-preproduction);
           animation: progressIndeterminate 1.5s infinite linear;
+        }
+
+        .progress-bar-fill {
+          height: 100%;
+          background: var(--phase-preproduction);
+          border-radius: 10px;
+          transition: width 0.2s ease;
         }
 
         @keyframes progressIndeterminate {

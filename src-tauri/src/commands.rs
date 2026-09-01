@@ -6628,12 +6628,30 @@ pub struct DuplicateScanProgress {
     pub phase: String,
     pub count: usize,
     pub current_path: Option<String>,
+    /// Optional human-readable detail (e.g. "12.3 GB / 40.0 GB hashed").
+    #[serde(default)]
+    pub detail: Option<String>,
 }
 
 #[derive(serde::Serialize)]
 pub struct DuplicateScanResult {
     pub groups: Vec<DuplicateGroup>,
     pub errors: Vec<String>,
+}
+
+/// Cooperative cancellation for the Duplicate Finder. Only one scan runs at a
+/// time (the UI disables the button while scanning), so one module-level flag
+/// is sufficient.
+static DUPLICATE_SCAN_CANCEL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+fn duplicate_scan_cancelled() -> bool {
+    DUPLICATE_SCAN_CANCEL.load(Ordering::Relaxed)
+}
+
+#[tauri::command]
+pub fn cancel_duplicate_scan() {
+    DUPLICATE_SCAN_CANCEL.store(true, Ordering::Relaxed);
 }
 
 #[tauri::command]
@@ -6646,6 +6664,138 @@ pub async fn import_folder_structure(folder_path: String) -> Result<Vec<crate::f
     crate::folders::scan_disk_to_structure(path)
 }
 
+/// One indexed file plus the metadata we already paid a `stat` for during the
+/// walk, so later stages never re-`stat` (S6).
+#[derive(Clone)]
+struct IndexedFile {
+    path: std::path::PathBuf,
+    modified: String,
+}
+
+const DUP_SIGNATURE_SAMPLE_BYTES: usize = 16 * 1024;
+const DUP_STREAM_BUF_BYTES: usize = 256 * 1024;
+/// Files at least this large are hashed with a memory-mapped, multi-threaded
+/// BLAKE3 so a single big camera-card file isn't stuck on one core (S4).
+const DUP_MMAP_RAYON_THRESHOLD: u64 = 16 * 1024 * 1024;
+
+fn dup_format_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{} {}", bytes, UNITS[unit])
+    } else {
+        format!("{:.1} {}", value, UNITS[unit])
+    }
+}
+
+fn dup_format_mtime(md: &std::fs::Metadata) -> String {
+    md.modified()
+        .ok()
+        .map(|t| {
+            let dt: chrono::DateTime<chrono::Utc> = t.into();
+            dt.to_rfc3339()
+        })
+        .unwrap_or_default()
+}
+
+/// Read exactly `amount` bytes (or up to EOF) into the hasher, tolerating short
+/// reads — a single `File::read` can return fewer bytes than requested on
+/// network filesystems even when more data is available (C2).
+fn dup_hash_n(file: &mut std::fs::File, hasher: &mut blake3::Hasher, amount: usize) -> std::io::Result<()> {
+    use std::io::Read;
+    let mut buf = [0u8; DUP_SIGNATURE_SAMPLE_BYTES];
+    let mut remaining = amount;
+    while remaining > 0 {
+        let take = remaining.min(buf.len());
+        let n = file.read(&mut buf[..take])?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+        remaining -= n;
+    }
+    Ok(())
+}
+
+/// Cheap discriminating signature: BLAKE3 over a head sample plus a tail sample.
+/// The tail is highly selective for media wrappers (MXF/MOV/BRAW) that share
+/// large identical headers (A1). Files no bigger than two samples are hashed
+/// whole.
+fn read_partial_hash(path: &std::path::Path, size: u64) -> std::io::Result<[u8; 32]> {
+    use std::io::{Seek, SeekFrom};
+    let mut file = std::fs::File::open(path)?;
+    let mut hasher = blake3::Hasher::new();
+    let sample = DUP_SIGNATURE_SAMPLE_BYTES as u64;
+
+    if size <= sample * 2 {
+        dup_hash_n(&mut file, &mut hasher, size as usize)?;
+    } else {
+        dup_hash_n(&mut file, &mut hasher, DUP_SIGNATURE_SAMPLE_BYTES)?;
+        file.seek(SeekFrom::Start(size - sample))?;
+        dup_hash_n(&mut file, &mut hasher, DUP_SIGNATURE_SAMPLE_BYTES)?;
+    }
+    Ok(*hasher.finalize().as_bytes())
+}
+
+fn compute_full_hash(path: &std::path::Path, size: u64) -> std::io::Result<[u8; 32]> {
+    let mut hasher = blake3::Hasher::new();
+    if size >= DUP_MMAP_RAYON_THRESHOLD {
+        hasher.update_mmap_rayon(path)?;
+    } else {
+        use std::io::Read;
+        let mut file = std::fs::File::open(path)?;
+        let mut buf = vec![0u8; DUP_STREAM_BUF_BYTES];
+        loop {
+            let n = file.read(&mut buf)?;
+            if n == 0 {
+                break;
+            }
+            hasher.update(&buf[..n]);
+        }
+    }
+    Ok(*hasher.finalize().as_bytes())
+}
+
+/// Streaming byte-equality for a two-file group (S3): avoids a separate hashing
+/// pass when the pair differs early (the common case). On a full match it
+/// returns the BLAKE3 digest it accumulated while reading, so the caller never
+/// re-reads the file just to label the group.
+fn dup_files_equal(a: &std::path::Path, b: &std::path::Path) -> std::io::Result<Option<[u8; 32]>> {
+    let mut fa = BufReader::with_capacity(DUP_STREAM_BUF_BYTES, std::fs::File::open(a)?);
+    let mut fb = BufReader::with_capacity(DUP_STREAM_BUF_BYTES, std::fs::File::open(b)?);
+    let mut ba = [0u8; 8192];
+    let mut bb = [0u8; 8192];
+    let mut hasher = blake3::Hasher::new();
+    loop {
+        let na = dup_fill(&mut fa, &mut ba)?;
+        let nb = dup_fill(&mut fb, &mut bb)?;
+        if na != nb || ba[..na] != bb[..nb] {
+            return Ok(None);
+        }
+        if na == 0 {
+            return Ok(Some(*hasher.finalize().as_bytes()));
+        }
+        hasher.update(&ba[..na]);
+    }
+}
+
+fn dup_fill<R: std::io::Read>(reader: &mut R, buf: &mut [u8]) -> std::io::Result<usize> {
+    let mut filled = 0;
+    while filled < buf.len() {
+        let n = reader.read(&mut buf[filled..])?;
+        if n == 0 {
+            break;
+        }
+        filled += n;
+    }
+    Ok(filled)
+}
+
 #[tauri::command]
 pub async fn scan_duplicates(
     paths: Vec<String>,
@@ -6653,148 +6803,296 @@ pub async fn scan_duplicates(
 ) -> Result<DuplicateScanResult, String> {
     use rayon::prelude::*;
     use std::collections::HashMap;
-    use std::fs;
     use std::path::PathBuf;
-    use walkdir::WalkDir;
+    use std::sync::atomic::AtomicU64;
+    use std::time::{Duration, Instant};
     use tauri::Emitter;
 
-    let mut errors = Vec::new();
+    const PROGRESS_INTERVAL: Duration = Duration::from_millis(150);
 
-    // 1. Collect all files with their sizes
+    DUPLICATE_SCAN_CANCEL.store(false, Ordering::Relaxed);
+    let mut errors: Vec<String> = Vec::new();
+
+    // Canonicalize roots and drop any that nest inside another, so an overlapping
+    // selection can't walk the same file twice and report it as its own
+    // duplicate (C1).
+    let mut roots: Vec<PathBuf> = Vec::new();
+    for raw in paths {
+        match std::fs::canonicalize(&raw) {
+            Ok(canon) => roots.push(canon),
+            Err(e) => errors.push(format!("Cannot access {}: {}", raw, e)),
+        }
+    }
+    roots.sort();
+    roots.dedup();
+    let mut scan_roots: Vec<PathBuf> = Vec::new();
+    for root in roots {
+        if scan_roots.iter().any(|base| root.starts_with(base)) {
+            continue;
+        }
+        scan_roots.push(root);
+    }
+    if scan_roots.is_empty() {
+        return Ok(DuplicateScanResult { groups: vec![], errors });
+    }
+
+    // ── 1. Index every file, bucketed by size ────────────────────────────────
     app.emit("duplicate-scan-progress", DuplicateScanProgress {
         phase: "indexing".to_string(),
         count: 0,
         current_path: None,
+        detail: None,
     }).ok();
 
-    let mut files_by_size: HashMap<u64, Vec<PathBuf>> = HashMap::new();
-    let mut file_count = 0;
-    
-    for root in paths {
-        for entry in WalkDir::new(root)
-            .follow_links(false)
-            .into_iter()
-            .filter_entry(|e| !e.file_name().to_string_lossy().starts_with('.')) 
-        {
-            match entry {
-                Ok(entry) => {
-                    if entry.file_type().is_file() {
-                        if let Ok(metadata) = entry.metadata() {
-                            let size = metadata.len();
-                            if size > 0 {
-                                files_by_size.entry(size).or_default().push(entry.path().to_path_buf());
-                                file_count += 1;
-                                
-                                if file_count % 500 == 0 {
-                                    app.emit("duplicate-scan-progress", DuplicateScanProgress {
-                                        phase: "indexing".to_string(),
-                                        count: file_count,
-                                        current_path: Some(entry.path().to_string_lossy().to_string()),
-                                    }).ok();
-                                }
-                            }
-                        }
-                    }
-                },
+    let mut files_by_size: HashMap<u64, Vec<IndexedFile>> = HashMap::new();
+    #[cfg(unix)]
+    let mut seen_inodes: std::collections::HashSet<(u64, u64)> = std::collections::HashSet::new();
+    let mut file_count = 0usize;
+    let mut last_emit = Instant::now();
+
+    for root in &scan_roots {
+        for entry in jwalk::WalkDir::new(root).skip_hidden(true).follow_links(false) {
+            if duplicate_scan_cancelled() {
+                errors.push("Scan cancelled.".to_string());
+                return Ok(DuplicateScanResult { groups: vec![], errors });
+            }
+            let entry = match entry {
+                Ok(e) => e,
                 Err(e) => {
                     errors.push(format!("Access error: {}", e));
+                    continue;
                 }
+            };
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let path = entry.path();
+            let md = match std::fs::symlink_metadata(&path) {
+                Ok(m) => m,
+                Err(e) => {
+                    errors.push(format!("Cannot read {}: {}", path.display(), e));
+                    continue;
+                }
+            };
+            let size = md.len();
+            if size == 0 {
+                continue;
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                // Skip additional hard links to an inode we've already indexed —
+                // they aren't independent copies (C4).
+                if !seen_inodes.insert((md.dev(), md.ino())) {
+                    continue;
+                }
+            }
+            files_by_size.entry(size).or_default().push(IndexedFile {
+                path: path.clone(),
+                modified: dup_format_mtime(&md),
+            });
+            file_count += 1;
+            if last_emit.elapsed() >= PROGRESS_INTERVAL {
+                app.emit("duplicate-scan-progress", DuplicateScanProgress {
+                    phase: "indexing".to_string(),
+                    count: file_count,
+                    current_path: Some(path.to_string_lossy().to_string()),
+                    detail: None,
+                }).ok();
+                last_emit = Instant::now();
             }
         }
     }
 
-    // Filter out files with unique sizes
-    let candidates: Vec<(u64, Vec<PathBuf>)> = files_by_size
+    let size_candidates: Vec<(u64, Vec<IndexedFile>)> = files_by_size
         .into_iter()
-        .filter(|(_, paths)| paths.len() > 1)
+        .filter(|(_, files)| files.len() > 1)
         .collect();
-
-    if candidates.is_empty() {
+    if size_candidates.is_empty() {
+        return Ok(DuplicateScanResult { groups: vec![], errors });
+    }
+    if duplicate_scan_cancelled() {
+        errors.push("Scan cancelled.".to_string());
         return Ok(DuplicateScanResult { groups: vec![], errors });
     }
 
-    // 2. Compute partial hashes (first 8KB) for candidates with same size
+    // ── 2. Head+tail signature, in parallel across every candidate file (S1) ──
     app.emit("duplicate-scan-progress", DuplicateScanProgress {
         phase: "analyzing signatures".to_string(),
-        count: candidates.len(),
+        count: size_candidates.iter().map(|(_, f)| f.len()).sum(),
         current_path: None,
+        detail: None,
     }).ok();
 
-    let mut partial_hash_groups: HashMap<(u64, String), Vec<PathBuf>> = HashMap::new();
-    
-    for (size, paths) in candidates {
-        for path in paths {
-            if let Ok(partial_hash) = read_partial_hash(&path) {
-                partial_hash_groups.entry((size, partial_hash)).or_default().push(path);
-            }
-        }
-    }
-
-    // Filter out unique partial hashes
-    let full_scan_candidates: Vec<((u64, String), Vec<PathBuf>)> = partial_hash_groups
-        .into_iter()
-        .filter(|(_, paths)| paths.len() > 1)
-        .collect();
-
-    if full_scan_candidates.is_empty() {
-        return Ok(DuplicateScanResult { groups: vec![], errors });
-    }
-
-    // 3. Compute full hashes in parallel for remaining candidates
-    app.emit("duplicate-scan-progress", DuplicateScanProgress {
-        phase: "calculating hashes".to_string(),
-        count: full_scan_candidates.len(),
-        current_path: None,
-    }).ok();
-
-    let groups: Vec<DuplicateGroup> = full_scan_candidates
+    let sig_pairs: Vec<((u64, [u8; 32]), IndexedFile, Vec<String>)> = size_candidates
         .into_par_iter()
-        .filter_map(|((size, _), paths)| {
-            let mut hash_to_files: HashMap<String, Vec<DuplicateFile>> = HashMap::new();
-            
-            for path in paths {
-                if let Ok(hash) = compute_full_hash(&path) {
-                    if let Ok(metadata) = fs::metadata(&path) {
-                        let modified = metadata.modified()
-                            .ok()
-                            .and_then(|t| {
-                                let dt: chrono::DateTime<chrono::Utc> = t.into();
-                                Some(dt.to_rfc3339())
-                            })
-                            .unwrap_or_default();
-
-                        hash_to_files.entry(hash).or_default().push(DuplicateFile {
-                            path: path.to_string_lossy().to_string(),
-                            filename: path.file_name()
-                                .map(|n| n.to_string_lossy().to_string())
-                                .unwrap_or_default(),
-                            size,
-                            modified,
-                        });
-                    }
+        .flat_map_iter(|(size, files)| {
+            files.into_iter().map(move |file| {
+                if duplicate_scan_cancelled() {
+                    return None;
                 }
-            }
-
-            let mut final_groups = Vec::new();
-            for (hash, files) in hash_to_files {
-                if files.len() > 1 {
-                    final_groups.push(DuplicateGroup {
-                        hash,
-                        size,
-                        files,
-                    });
+                match read_partial_hash(&file.path, size) {
+                    Ok(sig) => Some(((size, sig), file, Vec::new())),
+                    Err(e) => Some((
+                        (size, [0u8; 32]),
+                        file.clone(),
+                        vec![format!("Skipped {} (signature failed: {})", file.path.display(), e)],
+                    )),
                 }
-            }
-            
-            if final_groups.is_empty() { None } else { Some(final_groups) }
+            })
         })
         .flatten()
         .collect();
+
+    if duplicate_scan_cancelled() {
+        errors.push("Scan cancelled.".to_string());
+        return Ok(DuplicateScanResult { groups: vec![], errors });
+    }
+
+    let mut sig_groups: HashMap<(u64, [u8; 32]), Vec<IndexedFile>> = HashMap::new();
+    for (key, file, file_errs) in sig_pairs {
+        errors.extend(file_errs);
+        if key.1 == [0u8; 32] {
+            continue; // signature failed; already reported
+        }
+        sig_groups.entry(key).or_default().push(file);
+    }
+
+    let mut full_scan_candidates: Vec<(u64, Vec<IndexedFile>)> = sig_groups
+        .into_iter()
+        .filter(|(_, files)| files.len() > 1)
+        .map(|((size, _), files)| (size, files))
+        .collect();
+    if full_scan_candidates.is_empty() {
+        return Ok(DuplicateScanResult { groups: vec![], errors });
+    }
+    // Biggest groups first so a lone huge file doesn't strand one core at the end (S5).
+    full_scan_candidates.sort_by(|a, b| (b.0 * b.1.len() as u64).cmp(&(a.0 * a.1.len() as u64)));
+
+    // ── 3. Confirm matches: byte-compare pairs, full-hash larger groups ──────
+    let total_bytes: u64 = full_scan_candidates
+        .iter()
+        .map(|(size, files)| size * files.len() as u64)
+        .sum();
+    app.emit("duplicate-scan-progress", DuplicateScanProgress {
+        phase: "verifying content".to_string(),
+        count: 0,
+        current_path: None,
+        detail: Some(format!("0 B / {}", dup_format_bytes(total_bytes))),
+    }).ok();
+
+    let bytes_done = AtomicU64::new(0);
+    let last_emit_ms = AtomicU64::new(0);
+    let scan_start = Instant::now();
+
+    let per_group: Vec<(Vec<DuplicateGroup>, Vec<String>)> = full_scan_candidates
+        .into_par_iter()
+        .map(|(size, files)| {
+            let mut local_errors: Vec<String> = Vec::new();
+            let mut out: Vec<DuplicateGroup> = Vec::new();
+
+            if duplicate_scan_cancelled() {
+                return (out, local_errors);
+            }
+
+            let confirmed: Vec<([u8; 32], Vec<IndexedFile>)> = if files.len() == 2 {
+                match dup_files_equal(&files[0].path, &files[1].path) {
+                    Ok(Some(digest)) => vec![(digest, files.clone())],
+                    Ok(None) => vec![],
+                    Err(e) => {
+                        local_errors.push(format!(
+                            "Could not compare {} and {}: {}",
+                            files[0].path.display(),
+                            files[1].path.display(),
+                            e
+                        ));
+                        vec![]
+                    }
+                }
+            } else {
+                let mut by_hash: HashMap<[u8; 32], Vec<IndexedFile>> = HashMap::new();
+                for file in &files {
+                    match compute_full_hash(&file.path, size) {
+                        Ok(hash) => by_hash.entry(hash).or_default().push(file.clone()),
+                        Err(e) => local_errors.push(format!(
+                            "Skipped {} (hash failed: {})",
+                            file.path.display(),
+                            e
+                        )),
+                    }
+                }
+                by_hash.into_iter().filter(|(_, g)| g.len() > 1).collect()
+            };
+
+            for (digest, group_files) in confirmed {
+                let hash_hex = digest.iter().map(|b| format!("{:02x}", b)).collect::<String>();
+                out.push(DuplicateGroup {
+                    hash: hash_hex,
+                    size,
+                    files: group_files
+                        .into_iter()
+                        .map(|f| DuplicateFile {
+                            filename: f
+                                .path
+                                .file_name()
+                                .map(|n| n.to_string_lossy().to_string())
+                                .unwrap_or_default(),
+                            path: f.path.to_string_lossy().to_string(),
+                            size,
+                            modified: f.modified,
+                        })
+                        .collect(),
+                });
+            }
+
+            let done = bytes_done.fetch_add(size * files.len() as u64, Ordering::Relaxed)
+                + size * files.len() as u64;
+            let now_ms = scan_start.elapsed().as_millis() as u64;
+            let prev = last_emit_ms.load(Ordering::Relaxed);
+            if now_ms.saturating_sub(prev) >= PROGRESS_INTERVAL.as_millis() as u64
+                && last_emit_ms
+                    .compare_exchange(prev, now_ms, Ordering::Relaxed, Ordering::Relaxed)
+                    .is_ok()
+            {
+                let pct = if total_bytes > 0 {
+                    ((done as f64 / total_bytes as f64) * 100.0) as usize
+                } else {
+                    100
+                };
+                app.emit("duplicate-scan-progress", DuplicateScanProgress {
+                    phase: "verifying content".to_string(),
+                    count: pct,
+                    current_path: None,
+                    detail: Some(format!(
+                        "{} / {}",
+                        dup_format_bytes(done),
+                        dup_format_bytes(total_bytes)
+                    )),
+                }).ok();
+            }
+
+            (out, local_errors)
+        })
+        .collect();
+
+    let mut groups: Vec<DuplicateGroup> = Vec::new();
+    for (mut g, mut e) in per_group {
+        groups.append(&mut g);
+        errors.append(&mut e);
+    }
+    groups.sort_by(|a, b| {
+        (b.size * (b.files.len() as u64 - 1)).cmp(&(a.size * (a.files.len() as u64 - 1)))
+    });
+
+    if duplicate_scan_cancelled() {
+        errors.push("Scan cancelled — results may be incomplete.".to_string());
+    }
 
     app.emit("duplicate-scan-progress", DuplicateScanProgress {
         phase: "complete".to_string(),
         count: groups.len(),
         current_path: None,
+        detail: None,
     }).ok();
 
     Ok(DuplicateScanResult { groups, errors })
@@ -6899,27 +7197,6 @@ fn unique_duplicate_trash_path(
     }
 
     trash_dir.join(format!("{} {}", file_name.to_string_lossy(), uuid::Uuid::new_v4()))
-}
-
-fn read_partial_hash(path: &std::path::Path) -> Result<String, std::io::Error> {
-    use std::io::Read;
-    let mut file = std::fs::File::open(path)?;
-    let mut buffer = [0; 8192];
-    let n = file.read(&mut buffer)?;
-    let hash = blake3::hash(&buffer[..n]);
-    Ok(hash.to_hex().to_string())
-}
-
-fn compute_full_hash(path: &std::path::Path) -> Result<String, std::io::Error> {
-    let mut hasher = blake3::Hasher::new();
-    let mut file = std::fs::File::open(path)?;
-    let mut buffer = [0; 65536];
-    loop {
-        let n = std::io::Read::read(&mut file, &mut buffer)?;
-        if n == 0 { break; }
-        hasher.update(&buffer[..n]);
-    }
-    Ok(hasher.finalize().to_hex().to_string())
 }
 
 #[tauri::command]
