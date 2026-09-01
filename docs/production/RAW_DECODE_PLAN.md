@@ -52,9 +52,28 @@ the build. The user should never have to abandon the analysis.
   library or an NLE. No redistributable free SDK.
 - **Action:** treat as "provider: Resolve or operator proxy" (below).
 
-### Sony X-OCN (`.xocn` / X-OCN-in-MXF)
-- No FFmpeg decoder. Sony Catalyst / RAW Viewer only.
-- **Action:** same — "provider: Resolve or operator proxy".
+### Sony X-OCN (`.xocn` / X-OCN-in-MXF) + legacy Sony RAW
+- No FFmpeg decoder, and **no free standalone CLI** (unlike REDline / art-cmd).
+  Researched Sep 2026:
+  - **Sony RAW Viewer** (free GUI) — transcodes X-OCN + Sony RAW to ProRes/DPX,
+    has a batch queue but **no CLI / scripting / headless mode**.
+  - **Catalyst Browse** (free) / **Prepare** (~$99) — GUI transcode, X-OCN →
+    ProRes (macOS only for ProRes export). No CLI.
+  - **DaVinci Resolve** — decodes X-OCN natively (libSMDK up to family G) plus
+    ships `libSonyRawDev.dylib` (Sony RAW Development SDK) which covers newer
+    families (e.g. FX5 "family H"). Free, needs Resolve installed + open. This
+    is our provider.
+  - **`libSonyRawDev.dylib`** — some tools link it via rpath from an *installed*
+    (not running) Resolve to pull Bayer planes from X-OCN MXF. Undocumented
+    private API, macOS-only, unconfirmed whether the *free* edition ships it.
+    A real C-harness spike, not a drop-in.
+  - Sony's 3rd-party decode licence (Adobe / Avid nablet / FCP Calibrated{Q} /
+    Baselight) is paid + NDA, plugin form. Not viable for a small ISV.
+  - Open source: `github.com/Dec18studios/fx5-xocn-tools` (MIT) — MXF parse +
+    subband tables + DNG writer done, **entropy coder missing**; FX5-only,
+    outputs CinemaDNG. Not usable yet. Worth watching.
+- **Action:** stays "provider: DaVinci Resolve or operator proxy". No CLI to add.
+  Optional later: a `libSonyRawDev` harness spike if X-OCN turns out common.
 
 ### ARRIRAW
 - ARRI SDK or an NLE. `.ari`/`.arx` and ARRIRAW MXF.
@@ -173,12 +192,26 @@ A review of the wiring turned up and fixed:
   `--useMeta` (apply the clip's RMD/embedded look) and `--resizeX 1920` (small
   intermediate). Verified against REDline Build 65. ffmpeg still does the final
   encode via the shared `encode_analysis_proxy`.
-- **BRAW pipe dimensions** — `build_braw_ffmpeg_input_args` took the frame size
-  from **ffprobe** (container/sensor size, e.g. 6176×3472) while `braw_bridge`
-  decodes to the SDK active-image size (e.g. 6144×3456). The mismatch mis-framed
-  every raw frame → ffmpeg "No filtered frames" → empty output → SIGPIPE made
-  braw_bridge look crashed. It now reads dimensions from `braw_bridge --info`
-  and only falls back to ffprobe.
+- **BRAW — the framework was never bundled.** The build shipped the *Windows*
+  `BlackmagicRawAPI.dll` to `Contents/Resources/` but not the macOS
+  `BlackmagicRawAPI.framework`, so the bundled `braw_bridge` SIGSEGV'd on every
+  call (it `dlopen`s `./Libraries/BlackmagicRawAPI.framework` relative to its
+  cwd and doesn't null-check). Worse, `sdk_present_at` matched the useless
+  Windows `.dll` and handed `braw_bridge` a cwd with no framework. Fixes:
+  - `Frameworks/BlackmagicRawAPI.framework` added to `bundle.macOS.frameworks`
+    (copied into `src-tauri/Frameworks/`, tracked in git like the Qt frameworks)
+    → lands in `Contents/Frameworks/`.
+  - `braw_sdk_working_dir()` builds a symlink shim
+    (`<cache>/braw_sdk/Libraries/BlackmagicRawAPI.framework` → the real one) so
+    `braw_bridge` gets the `./Libraries/…` layout it needs. Real framework is
+    searched: `Contents/Frameworks` → `Contents/Resources` → `/Library/Frameworks`
+    (Blackmagic RAW installer) → `~/Library/Frameworks`.
+  - `sdk_present_at`'s `.dll` / `.so` checks gated to Windows / Linux.
+- **BRAW pipe dimensions** — separately, `build_braw_ffmpeg_input_args` took the
+  frame size from **ffprobe** (container size, e.g. 6176×3472) while `braw_bridge`
+  decodes to the SDK active-image size (6144×3456); the mismatch mis-framed
+  every raw frame. It now asks `braw_bridge -f` (its canonical ffmpeg-args
+  string), then `--info`, then ffprobe.
 - **Resolve runner** — prefers Resolve's own `fuscript` (Python + modules
   preloaded, no env/`python3` needed); falls back to system `python3` with
   `RESOLVE_SCRIPT_*`; errors clearly if neither exists.

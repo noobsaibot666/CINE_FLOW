@@ -1719,19 +1719,39 @@ pub fn build_braw_ffmpeg_input_args(caps: &BrawDecoderCaps, input_path: &str) ->
     build_braw_ffmpeg_input_args_via_ffprobe(input_path)
 }
 
-/// Parse `braw_bridge --info` ("Resolution: WxH", "Framerate: N") into ffmpeg
-/// raw-pipe input args. Returns None if the probe can't be run or parsed.
+/// Ask `braw_bridge` for the exact ffmpeg raw-pipe input args. Prefer its
+/// purpose-built `-f`/`--ff-format` string; fall back to parsing `--info`
+/// ("Resolution: WxH", "Framerate: N"). Returns None if neither can be run.
 fn braw_bridge_input_args(executable: &str, working_dir: Option<&str>, input_path: &str) -> Option<String> {
-    let mut cmd = crate::tools::create_command(executable);
-    cmd.args(["--info", input_path]);
-    if let Some(dir) = working_dir {
-        cmd.current_dir(dir);
+    let run = |args: &[&str]| -> Option<String> {
+        let mut cmd = crate::tools::create_command(executable);
+        cmd.args(args);
+        if let Some(dir) = working_dir {
+            cmd.current_dir(dir);
+        }
+        let out = cmd.output().ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        Some(String::from_utf8_lossy(&out.stdout).to_string())
+    };
+
+    // 1. `braw_bridge -f <input>` prints e.g.
+    //    "-f rawvideo -pixel_format rgba -s 6144x3456 -r 24.000000 -i pipe:0"
+    if let Some(text) = run(&["-f", input_path]) {
+        let line = text.lines().find(|l| l.contains("-f rawvideo") && l.contains("pipe:0"));
+        if let Some(line) = line {
+            let normalized = line
+                .trim()
+                .replace("-r 24.000000", "-r 24")
+                .replace("-r 25.000000", "-r 25")
+                .replace("-r 30.000000", "-r 30");
+            return Some(normalized);
+        }
     }
-    let out = cmd.output().ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let text = String::from_utf8_lossy(&out.stdout);
+
+    // 2. Parse `--info`.
+    let text = run(&["--info", input_path])?;
     let mut width = 0u32;
     let mut height = 0u32;
     let mut fps = String::from("24");
@@ -2002,35 +2022,89 @@ fn tail_lines(value: &str, limit: usize) -> String {
     lines[start..].join("\n")
 }
 
+/// A directory whose `BlackmagicRawAPI.framework` (macOS) / `BlackmagicRawAPI.dll`
+/// (Windows) / `libBlackmagicRawAPI.so` (Linux) is directly present, OR — on
+/// macOS — a symlink shim we build in the cache dir that points a
+/// `Libraries/BlackmagicRawAPI.framework` name at a real framework found in the
+/// app bundle (`Contents/Frameworks`), `/Library/Frameworks`, or the user's
+/// `~/Library/Frameworks`. `braw_bridge` dlopens `./Libraries/BlackmagicRawAPI.framework`
+/// relative to its cwd, so this is the cwd we must give it.
+fn braw_sdk_working_dir(bin_parent: Option<&Path>, resource_dir: Option<&Path>) -> Option<String> {
+    let lib_layout = Path::new("Libraries").join("BlackmagicRawAPI.framework");
+
+    // A) A ready-made `Libraries/…` layout next to the binary or in resources
+    //    (dev: src-tauri/bin/Libraries/, or a future prod layout).
+    for dir in [bin_parent, resource_dir].into_iter().flatten() {
+        if dir.join(&lib_layout).exists() {
+            return Some(dir.to_string_lossy().to_string());
+        }
+        #[cfg(target_os = "windows")]
+        if dir.join("BlackmagicRawAPI.dll").exists() {
+            return Some(dir.to_string_lossy().to_string());
+        }
+        #[cfg(target_os = "linux")]
+        if dir.join("libBlackmagicRawAPI.so").exists() {
+            return Some(dir.to_string_lossy().to_string());
+        }
+    }
+
+    // B) macOS: a bare `BlackmagicRawAPI.framework` somewhere — build a cache-dir
+    //    shim with the `Libraries/…` layout the bridge expects.
+    #[cfg(target_os = "macos")]
+    {
+        let name = "BlackmagicRawAPI.framework";
+        let mut bare: Vec<PathBuf> = Vec::new();
+        if let Some(p) = bin_parent {
+            bare.push(p.join("..").join("Frameworks").join(name)); // Contents/Frameworks
+            bare.push(p.join(name));
+        }
+        if let Some(r) = resource_dir {
+            bare.push(r.join(name));
+            bare.push(r.join("Frameworks").join(name));
+        }
+        bare.push(PathBuf::from("/Library/Frameworks").join(name));
+        if let Some(home) = dirs_next::home_dir() {
+            bare.push(home.join("Library").join("Frameworks").join(name));
+        }
+        if let Some(real) = bare.into_iter().find(|c| c.exists()) {
+            if let Some(root) = dirs_next::cache_dir() {
+                let root = root.join("cineflow-suite").join("braw_sdk");
+                let libs = root.join("Libraries");
+                let link = libs.join(name);
+                if std::fs::create_dir_all(&libs).is_ok() {
+                    let _ = std::fs::remove_file(&link);
+                    let _ = std::fs::remove_dir_all(&link);
+                    if std::os::unix::fs::symlink(&real, &link).is_ok() {
+                        return Some(root.to_string_lossy().to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
 /// Returns `(executable_path, working_dir)`.
 /// The binary loads `./Libraries/BlackmagicRawAPI.framework/` relative to its cwd,
 /// so we must set current_dir to a directory that has that folder adjacent.
 fn locate_braw_decoder(resource_dir: Option<&Path>) -> Option<(String, Option<String>)> {
-    let sdk_subpath = Path::new("Libraries").join("BlackmagicRawAPI.framework");
-
+    // Homebrew's `braw-decode` keg keeps its own SDK next to the binary.
     let sdk_present_at = |dir: &Path| {
-        // macOS: bundled framework in ./Libraries/. Windows: BlackmagicRawAPI.dll
-        // next to the bridge exe. Linux: the .so next to it.
-        dir.join(&sdk_subpath).exists()
+        dir.join("Libraries").join("BlackmagicRawAPI.framework").exists()
+            || dir.join("BlackmagicRawAPI.framework").exists()
             || dir.join("BlackmagicRawAPI.dll").exists()
             || dir.join("libBlackmagicRawAPI.so").exists()
     };
 
-    // 1. Bundled sidecar — preferred in production when SDK is adjacent (dev) or in resources
+    // 1. Bundled sidecar — preferred in production when the SDK framework is
+    //    reachable (dev-adjacent, bundled in Contents/Frameworks, or installed
+    //    system-wide in /Library/Frameworks by the Blackmagic RAW installer).
     let path = crate::tools::find_executable("braw_bridge");
     if path != "braw_bridge" && Path::new(&path).exists() {
-        // Check SDK next to binary (dev: src-tauri/bin/Libraries/, or prod: Contents/MacOS/Libraries/)
         let bin_parent = Path::new(&path).parent().map(|p| p.to_path_buf());
-        if let Some(ref parent) = bin_parent {
-            if sdk_present_at(parent) {
-                return Some((path, Some(parent.to_string_lossy().to_string())));
-            }
-        }
-        // Check SDK in Tauri resource dir (prod: Contents/Resources/Libraries/)
-        if let Some(res_dir) = resource_dir {
-            if sdk_present_at(res_dir) {
-                return Some((path, Some(res_dir.to_string_lossy().to_string())));
-            }
+        if let Some(dir) = braw_sdk_working_dir(bin_parent.as_deref(), resource_dir) {
+            return Some((path, Some(dir)));
         }
         // SDK not adjacent — fall through to Homebrew before giving up on bundled binary.
         // Homebrew wrapper script (bundles its own SDK, handles cwd via exec wrapper)
