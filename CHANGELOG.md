@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.0.8
+
+### Added
+- **Safe Copy** moved into Pre-Production so verified media offload runs before editorial.
+- **Duplicate Finder** scan options (minimum size, hidden files, extension and folder filters), a bulk-cleanup workflow (keep newest / oldest / shortest path, then verified move-to-Trash), and cancellable scans.
+- **Reference Board** (renamed from Shot Planner) with grid-mosaic contact walls exported from the same view; the standalone Grid Mosaic module was removed.
+- **Camera Match Lab**: expanded camera database across ARRI, Sony, Canon, Panasonic, Nikon, RED, Blackmagic, and Fujifilm, including recent cinema and hybrid bodies.
+- **Cinema RAW decode for analysis** — BRAW and Apple ProRes RAW directly; R3D / R3D NE / Nikon N-RAW via an installed RED SDK / REDline; Canon Cinema RAW Light / Sony X-OCN / ARRIRAW via DaVinci Resolve. A Decoder Setup panel reports readiness, links the free downloads, and accepts an existing install; an explicit "Generate proxy" step runs the decode as a visible job.
+- **Look Setup**: notes editor in a modal saved with the project; the results section is an on-set playbook with a readiness checklist.
+- **Frame Preview**: drag-and-drop media anywhere on the window; larger working canvas and media rail.
+- **Media Review**: click any filmstrip frame to enlarge and page through frames.
+- **Starter Setup** moved from Pre-Production to Production.
+
+### Improved
+- **Production page**: Project Manager opens from a header menu that shows the active project; first empty visit prompts to create one; Jobs button is compact; an open-project pill stays visible.
+- **On-Set Coach** and **Match & Normalize** restructured into numbered, higher-contrast workflows; Match & Normalize no longer repeats the generic method per camera.
+- Camera Match Lab analysis: chroma-gated skin sampling and an evidence-aware confidence score.
+- Contact-sheet PDF and image exports render in a clean black-and-white layout.
+- Thumbnails are extracted at higher resolution for a sharper filmstrip and enlarge view.
+
+### Fixed
+- **FCPXML timeline export** now imports cleanly into Final Cut Pro and DaVinci Resolve: media links are written as percent-encoded `file://` URIs inside a media-representation element, frame rates use standard broadcast timebases, and marker durations follow the clip timebase.
+- **Delivery & Export** dialog contrast: the panel no longer blends into the background, and the two conditional export buttons are one primary action.
+- The Blackmagic RAW runtime is now a hard requirement in the macOS build check, so the BRAW decode path ships intact.
+
 ## 1.0.0-rc.1 — macOS App Store Readiness
 
 ### Added

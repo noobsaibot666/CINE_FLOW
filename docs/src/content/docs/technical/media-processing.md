@@ -10,10 +10,10 @@ CineFlow media operations are deterministic and should avoid blocking the UI.
 ## Pipeline
 
 1. Accept input clip or image.
-2. Classify the source as original, vendor-decoded, operator proxy, proxy required, or unsupported.
+2. Classify the source as original, decoded RAW, operator proxy, proxy required, or unsupported.
 3. Capture the selected source profile and ACES analysis intent.
 4. Check OCIO configuration status.
-5. Generate or attach a proxy when required.
+5. Generate or attach a proxy when required, using the decode provider for the format (see below).
 6. Validate proxy metadata when analysis uses a proxy.
 7. Extract representative frames.
 8. Calculate metrics and source capability metadata.
@@ -66,19 +66,18 @@ The runtime bridge is discovered from `CINEFLOW_LIBRAW_BRIDGE`. Current LibRaw s
 - `metadata_available`: the runtime bridge is available and can be used as a source of RAW metadata.
 - `frame_decode_available`: the runtime bridge is available for decoded analysis frames; open RAW can move from native candidate to direct analysis.
 
-Vendor/proprietary cinema RAW formats such as BRAW, R3D, X-OCN, CRM, and RMF remain on their vendor decoder or operator proxy paths unless a legal decoder is available.
+## Cinema RAW Decode Providers
 
-## BRAW Handling
+Each cinema RAW family is serviced by a decode provider that builds an analysis proxy:
 
-Blackmagic RAW files require a decode path:
+- **BRAW** — the bundled Blackmagic RAW decode tooling.
+- **R3D, R3D NE, Nikon N-RAW** — an installed RED SDK / REDline, when present.
+- **Canon Cinema RAW Light, Sony X-OCN, ARRIRAW** — a running DaVinci Resolve, when present.
+- **Apple ProRes RAW** — decoded directly.
 
-1. Detect `.braw`.
-2. Use BRAW decode tooling.
-3. Pipe raw frames through FFmpeg.
-4. Produce a temporary proxy.
-5. Run analysis on the proxy.
+The Decoder Setup panel reports each provider as available or needs-setup, links the official free downloads, and lets an operator point the app at an existing install (persisted locally). A provider-backed source is not decoded until the operator presses **Generate proxy**, which runs as a background job. An operator-selected MP4/MOV proxy is always available as a fallback, and a source with no ready provider is marked provisional rather than blocking the run. Preferred analysis proxy codecs are H.264, H.265/HEVC, ProRes, and DNxHR.
 
-Fallback options include software decode, MP4 override proxies, and frame extraction fallback paths.
+Open still/camera RAW formats stay on the LibRaw adapter path described above.
 
 ## RAW Proxy Validation
 
