@@ -1543,7 +1543,6 @@ function AppContent() {
           <header className="app-header">
             <div className="app-header-left">
               <div className="app-logo tour-app-logo" onClick={() => { setActiveTab('home'); setActivePreproductionApp(null); setActiveMediaWorkspaceApp(null); }}>
-                <img src={appLogo} alt="Logo" className="app-logo-img" />
                 <span className="app-title">CineFlow Suite</span>
               </div>
               {projectName && (
