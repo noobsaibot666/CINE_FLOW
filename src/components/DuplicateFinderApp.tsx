@@ -12,7 +12,9 @@ import {
   FileSearch,
   Info,
   Eye,
-  RotateCcw
+  RotateCcw,
+  Trash2,
+  SlidersHorizontal
 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -67,6 +69,17 @@ export function DuplicateFinderApp() {
   const [uiError, setUiError] = useState<string | null>(null);
   const [scanStats, setScanStats] = useState<{ startTime: number; endTime: number } | null>(null);
   const [isDragTargetActive, setIsDragTargetActive] = useState(false);
+
+  // Scan options (phase 4)
+  const [minSizeMB, setMinSizeMB] = useState("0");
+  const [includeHidden, setIncludeHidden] = useState(false);
+  const [includeExts, setIncludeExts] = useState("");
+  const [excludeExts, setExcludeExts] = useState("");
+  const [excludeDirs, setExcludeDirs] = useState("node_modules, .git");
+
+  // Bulk selection of files marked for trash
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [isTrashing, setIsTrashing] = useState(false);
 
   const addFolder = useCallback(async () => {
     try {
@@ -124,7 +137,21 @@ export function DuplicateFinderApp() {
     setErrors([]);
     setUiError(null);
     setScanStats(null);
+    setSelected(new Set());
   }, []);
+
+  const buildScanOptions = useCallback(() => {
+    const parseExts = (s: string) =>
+      s.split(",").map(x => x.trim().replace(/^\./, "").toLowerCase()).filter(Boolean);
+    const mb = parseFloat(minSizeMB);
+    return {
+      minSize: Number.isFinite(mb) && mb > 0 ? Math.round(mb * 1024 * 1024) : 0,
+      includeHidden,
+      includeExts: parseExts(includeExts),
+      excludeExts: parseExts(excludeExts),
+      excludeDirs: excludeDirs.split(",").map(x => x.trim()).filter(Boolean),
+    };
+  }, [minSizeMB, includeHidden, includeExts, excludeExts, excludeDirs]);
 
   const startScan = async () => {
     if (folders.length === 0) return;
@@ -134,6 +161,7 @@ export function DuplicateFinderApp() {
     setUiError(null);
     setErrors([]);
     setResults([]);
+    setSelected(new Set());
     setProgress({ phase: "Initializing...", count: 0 });
     const startTime = Date.now();
 
@@ -143,7 +171,7 @@ export function DuplicateFinderApp() {
     });
 
     try {
-      const resp = await invoke("scan_duplicates", { paths: folders }) as ScanResult;
+      const resp = await invoke("scan_duplicates", { paths: folders, options: buildScanOptions() }) as ScanResult;
       setResults(resp.groups);
       setErrors(resp.errors);
       setScanStats({ startTime, endTime: Date.now() });
@@ -167,8 +195,21 @@ export function DuplicateFinderApp() {
     }
   }, []);
 
+  const dropFilesFromResults = useCallback((removed: Set<string>) => {
+    setResults(prev => prev
+      .map(group => ({ ...group, files: group.files.filter(f => !removed.has(f.path)) }))
+      .filter(group => group.files.length > 1));
+    setSelected(prev => {
+      const next = new Set(prev);
+      removed.forEach(p => next.delete(p));
+      return next;
+    });
+  }, []);
+
   const deleteFile = async (filePath: string, groupHash: string) => {
     const fileName = filePath.split(/[\\/]/).pop();
+    const group = results.find(g => g.hash === groupHash);
+    const keep = group?.files.find(f => f.path !== filePath)?.path;
     const confirmed = await confirm(
       `Are you sure you want to move "${fileName}" to the trash?`,
       { title: "Move to Trash", kind: 'warning' }
@@ -176,23 +217,72 @@ export function DuplicateFinderApp() {
 
     if (confirmed) {
       try {
-        await invoke("delete_duplicate_file", { path: filePath });
-        
-        // Update results locally
-        setResults(prev => prev.map(group => {
-          if (group.hash === groupHash) {
-            return {
-              ...group,
-              files: group.files.filter(f => f.path !== filePath)
-            };
-          }
-          return group;
-        }).filter(group => group.files.length > 1));
-        
+        await invoke("delete_duplicate_file", { path: filePath, verifyAgainst: keep });
+        dropFilesFromResults(new Set([filePath]));
         await message(`Successfully moved "${fileName}" to trash.`, { title: "File Removed", kind: 'info' });
       } catch (err) {
         console.error(err);
         setUiError(`Failed to delete file: ${err}`);
+      }
+    }
+  };
+
+  const toggleSelected = useCallback((path: string) => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  }, []);
+
+  const autoSelect = useCallback((keep: "newest" | "oldest" | "shortest-path") => {
+    setSelected(() => {
+      const next = new Set<string>();
+      for (const group of results) {
+        const sorted = [...group.files].sort((a, b) => {
+          if (keep === "shortest-path") return a.path.length - b.path.length;
+          const cmp = (a.modified || "").localeCompare(b.modified || "");
+          return keep === "newest" ? -cmp : cmp;
+        });
+        sorted.slice(1).forEach(f => next.add(f.path));
+      }
+      return next;
+    });
+  }, [results]);
+
+  const trashSelected = async () => {
+    if (selected.size === 0) return;
+    const confirmed = await confirm(
+      `Move ${selected.size} selected file${selected.size === 1 ? "" : "s"} to the trash? One copy is kept in every group.`,
+      { title: "Move to Trash", kind: "warning" }
+    );
+    if (!confirmed) return;
+
+    setIsTrashing(true);
+    const removed = new Set<string>();
+    const failures: string[] = [];
+    try {
+      for (const group of results) {
+        const keep = group.files.find(f => !selected.has(f.path))?.path;
+        for (const file of group.files) {
+          if (!selected.has(file.path)) continue;
+          try {
+            await invoke("delete_duplicate_file", { path: file.path, verifyAgainst: keep });
+            removed.add(file.path);
+          } catch (err) {
+            failures.push(`${file.path}: ${err}`);
+          }
+        }
+      }
+    } finally {
+      dropFilesFromResults(removed);
+      setIsTrashing(false);
+      if (failures.length > 0) {
+        setErrors(prev => [...prev, ...failures]);
+        setUiError(`${removed.size} moved to trash, ${failures.length} failed.`);
+      } else {
+        await message(`Moved ${removed.size} file${removed.size === 1 ? "" : "s"} to trash.`, { title: "Cleanup Complete", kind: "info" });
       }
     }
   };
@@ -393,6 +483,55 @@ export function DuplicateFinderApp() {
             </div>
           </div>
 
+          <div className="segment scan-options">
+            <div className="segment-header">
+              <SlidersHorizontal size={14} />
+              <span>SCAN OPTIONS</span>
+            </div>
+            <div className="options-body">
+              <label className="opt-row">
+                <span>Min file size (MB)</span>
+                <input
+                  type="number" min="0" step="1" value={minSizeMB}
+                  onChange={e => setMinSizeMB(e.target.value)}
+                  disabled={isScanning}
+                />
+              </label>
+              <label className="opt-row opt-check">
+                <input
+                  type="checkbox" checked={includeHidden}
+                  onChange={e => setIncludeHidden(e.target.checked)}
+                  disabled={isScanning}
+                />
+                <span>Include hidden files &amp; folders</span>
+              </label>
+              <label className="opt-row opt-stack">
+                <span>Only these extensions</span>
+                <input
+                  type="text" placeholder="e.g. mov, mp4, braw" value={includeExts}
+                  onChange={e => setIncludeExts(e.target.value)}
+                  disabled={isScanning}
+                />
+              </label>
+              <label className="opt-row opt-stack">
+                <span>Skip extensions</span>
+                <input
+                  type="text" placeholder="e.g. tmp, log" value={excludeExts}
+                  onChange={e => setExcludeExts(e.target.value)}
+                  disabled={isScanning}
+                />
+              </label>
+              <label className="opt-row opt-stack">
+                <span>Skip folders</span>
+                <input
+                  type="text" placeholder="e.g. node_modules, .git" value={excludeDirs}
+                  onChange={e => setExcludeDirs(e.target.value)}
+                  disabled={isScanning}
+                />
+              </label>
+            </div>
+          </div>
+
           <div className="segment summary-stats">
             <div className="segment-header">
               <Info size={14} />
@@ -421,6 +560,32 @@ export function DuplicateFinderApp() {
           <div className="segment-header">
             <FileSearch size={14} />
             <span>RESULTS {results.length > 0 && `(${results.length} Groups)`}</span>
+            {results.length > 0 && !isScanning && (
+              <div className="results-toolbar">
+                <select
+                  className="auto-select"
+                  defaultValue=""
+                  onChange={e => { if (e.target.value) { autoSelect(e.target.value as "newest" | "oldest" | "shortest-path"); e.target.value = ""; } }}
+                >
+                  <option value="" disabled>Auto-select…</option>
+                  <option value="newest">Keep newest, select rest</option>
+                  <option value="oldest">Keep oldest, select rest</option>
+                  <option value="shortest-path">Keep shortest path, select rest</option>
+                </select>
+                {selected.size > 0 && (
+                  <button className="btn btn-secondary btn-glass" onClick={() => setSelected(new Set())}>
+                    Clear ({selected.size})
+                  </button>
+                )}
+                <button
+                  className="btn btn-primary"
+                  onClick={trashSelected}
+                  disabled={selected.size === 0 || isTrashing}
+                >
+                  <Trash2 size={14} /> {isTrashing ? "Trashing…" : `Trash Selected (${selected.size})`}
+                </button>
+              </div>
+            )}
           </div>
           <div className="results-list premium-scroll">
             {isScanning ? (
@@ -475,7 +640,14 @@ export function DuplicateFinderApp() {
                   </div>
                   <div className="group-files">
                     {group.files.map((file, fIdx) => (
-                      <div key={fIdx} className="file-item">
+                      <div key={fIdx} className={`file-item ${selected.has(file.path) ? "file-item-selected" : ""}`}>
+                        <input
+                          type="checkbox"
+                          className="file-select"
+                          checked={selected.has(file.path)}
+                          onChange={() => toggleSelected(file.path)}
+                          title="Mark this copy for trash"
+                        />
                         <div className="file-icon"><FileText size={16} /></div>
                         <div className="file-details">
                           <div className="file-name">{file.filename}</div>
@@ -938,6 +1110,71 @@ export function DuplicateFinderApp() {
           background: var(--phase-preproduction);
           border-radius: 10px;
           transition: width 0.2s ease;
+        }
+
+        .scan-options .options-body {
+          padding: 12px 16px;
+          display: flex;
+          flex-direction: column;
+          gap: 10px;
+        }
+        .opt-row {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 10px;
+          font-size: 0.72rem;
+          color: var(--text-secondary);
+        }
+        .opt-row.opt-stack {
+          flex-direction: column;
+          align-items: stretch;
+          gap: 4px;
+        }
+        .opt-row.opt-check {
+          justify-content: flex-start;
+        }
+        .opt-row input[type="number"],
+        .opt-row input[type="text"] {
+          background: rgba(0, 0, 0, 0.25);
+          border: 1px solid rgba(255, 255, 255, 0.08);
+          border-radius: var(--radius-sm, 6px);
+          color: var(--text-primary);
+          padding: 6px 8px;
+          font-size: 0.72rem;
+          width: 100%;
+          max-width: 130px;
+        }
+        .opt-row.opt-stack input[type="text"] { max-width: none; }
+        .opt-row input:focus {
+          outline: none;
+          border-color: var(--phase-preproduction);
+        }
+        .opt-row.opt-check input { accent-color: var(--phase-preproduction); }
+
+        .results-toolbar {
+          margin-left: auto;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+        .auto-select {
+          background: rgba(0, 0, 0, 0.25);
+          border: 1px solid rgba(255, 255, 255, 0.08);
+          border-radius: var(--radius-sm, 6px);
+          color: var(--text-primary);
+          padding: 5px 8px;
+          font-size: 0.7rem;
+        }
+        .file-select {
+          flex-shrink: 0;
+          margin-right: 4px;
+          accent-color: var(--phase-preproduction);
+          cursor: pointer;
+        }
+        .file-item-selected {
+          background: rgba(255, 255, 255, 0.04);
+          border-color: var(--phase-preproduction);
         }
 
         @keyframes progressIndeterminate {

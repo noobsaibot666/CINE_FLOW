@@ -6639,6 +6639,22 @@ pub struct DuplicateScanResult {
     pub errors: Vec<String>,
 }
 
+#[derive(serde::Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct DuplicateScanOptions {
+    /// Ignore files smaller than this many bytes (0 = only the built-in
+    /// zero-byte skip).
+    pub min_size: u64,
+    /// Include dot-prefixed files and directories.
+    pub include_hidden: bool,
+    /// Lowercase extensions without the dot; when non-empty, only these match.
+    pub include_exts: Vec<String>,
+    /// Lowercase extensions without the dot to always skip.
+    pub exclude_exts: Vec<String>,
+    /// Path component names to prune (case-insensitive), e.g. "node_modules".
+    pub exclude_dirs: Vec<String>,
+}
+
 /// Cooperative cancellation for the Duplicate Finder. Only one scan runs at a
 /// time (the UI disables the button while scanning), so one module-level flag
 /// is sufficient.
@@ -6799,6 +6815,7 @@ fn dup_fill<R: std::io::Read>(reader: &mut R, buf: &mut [u8]) -> std::io::Result
 #[tauri::command]
 pub async fn scan_duplicates(
     paths: Vec<String>,
+    options: Option<DuplicateScanOptions>,
     app: tauri::AppHandle,
 ) -> Result<DuplicateScanResult, String> {
     use rayon::prelude::*;
@@ -6812,6 +6829,24 @@ pub async fn scan_duplicates(
 
     DUPLICATE_SCAN_CANCEL.store(false, Ordering::Relaxed);
     let mut errors: Vec<String> = Vec::new();
+
+    let opts = options.unwrap_or_default();
+    let norm = |list: &[String]| -> Vec<String> {
+        list.iter()
+            .map(|s| s.trim().trim_start_matches('.').to_lowercase())
+            .filter(|s| !s.is_empty())
+            .collect()
+    };
+    let include_exts = norm(&opts.include_exts);
+    let exclude_exts = norm(&opts.exclude_exts);
+    let exclude_dirs: Vec<String> = opts
+        .exclude_dirs
+        .iter()
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty())
+        .collect();
+    let min_size = opts.min_size;
+    let skip_hidden = !opts.include_hidden;
 
     // Canonicalize roots and drop any that nest inside another, so an overlapping
     // selection can't walk the same file twice and report it as its own
@@ -6851,7 +6886,7 @@ pub async fn scan_duplicates(
     let mut last_emit = Instant::now();
 
     for root in &scan_roots {
-        for entry in jwalk::WalkDir::new(root).skip_hidden(true).follow_links(false) {
+        for entry in jwalk::WalkDir::new(root).skip_hidden(skip_hidden).follow_links(false) {
             if duplicate_scan_cancelled() {
                 errors.push("Scan cancelled.".to_string());
                 return Ok(DuplicateScanResult { groups: vec![], errors });
@@ -6867,6 +6902,25 @@ pub async fn scan_duplicates(
                 continue;
             }
             let path = entry.path();
+
+            if !exclude_dirs.is_empty()
+                && path.components().any(|c| {
+                    exclude_dirs.contains(&c.as_os_str().to_string_lossy().to_lowercase())
+                })
+            {
+                continue;
+            }
+            let ext = path
+                .extension()
+                .map(|e| e.to_string_lossy().to_lowercase())
+                .unwrap_or_default();
+            if !include_exts.is_empty() && !include_exts.contains(&ext) {
+                continue;
+            }
+            if !exclude_exts.is_empty() && exclude_exts.contains(&ext) {
+                continue;
+            }
+
             let md = match std::fs::symlink_metadata(&path) {
                 Ok(m) => m,
                 Err(e) => {
@@ -6875,7 +6929,7 @@ pub async fn scan_duplicates(
                 }
             };
             let size = md.len();
-            if size == 0 {
+            if size == 0 || size < min_size {
                 continue;
             }
             #[cfg(unix)]
@@ -7099,8 +7153,38 @@ pub async fn scan_duplicates(
 }
 
 #[tauri::command]
-pub async fn delete_duplicate_file(path: String) -> Result<(), String> {
+pub async fn delete_duplicate_file(
+    path: String,
+    verify_against: Option<String>,
+) -> Result<(), String> {
     let path = std::path::PathBuf::from(path);
+
+    // Re-confirm the match right before trashing — a file can change on set
+    // between the scan and the click (A5).
+    if let Some(keep) = verify_against {
+        let keep = std::path::PathBuf::from(keep);
+        let doomed_md = std::fs::metadata(&path)
+            .map_err(|e| format!("Cannot read {}: {}", path.display(), e))?;
+        let keep_md = std::fs::metadata(&keep)
+            .map_err(|e| format!("Cannot read {}: {}", keep.display(), e))?;
+        if doomed_md.len() != keep_md.len() {
+            return Err(
+                "Safety check failed: the file to keep and the file to remove are no longer the same size — nothing was moved to trash."
+                    .into(),
+            );
+        }
+        let h_doomed = compute_full_hash(&path, doomed_md.len())
+            .map_err(|e| format!("Verify failed for {}: {}", path.display(), e))?;
+        let h_keep = compute_full_hash(&keep, keep_md.len())
+            .map_err(|e| format!("Verify failed for {}: {}", keep.display(), e))?;
+        if h_doomed != h_keep {
+            return Err(
+                "Safety check failed: the files no longer match — nothing was moved to trash."
+                    .into(),
+            );
+        }
+    }
+
     trash::delete(&path).or_else(|primary_error| {
         move_duplicate_to_trash_fallback(&path).map_err(|fallback_error| {
             format!(
