@@ -10057,14 +10057,22 @@ body {
 
 .shot-list-rows-column,
 .shot-list-equipment-column {
-  display: grid;
-  grid-template-rows: auto 1fr;
+  /* Flex column, not `grid-template-rows: auto 1fr` — with grid the section
+     picker landed in the `1fr` track when open and stretched to the full
+     column height, ballooning the preset buttons. */
+  display: flex;
+  flex-direction: column;
   gap: 16px;
   padding: 18px;
   border-radius: 28px;
   border: 1px solid rgba(255,255,255,0.08);
   background: #111113;
   overflow: visible;
+}
+
+.shot-list-equipment-column .shot-list-equipment-stack {
+  flex: 1;
+  min-height: 0;
 }
 
 .shot-list-section-heading {
@@ -10552,20 +10560,29 @@ body {
 .shot-list-section-picker {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-content: start;
   gap: 10px;
+  flex: none;
 }
 
 .shot-list-section-preset {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 10px;
-  padding: 12px;
+  min-height: 60px;
+  padding: 10px 12px;
   text-align: left;
-  border-radius: 16px;
+  border-radius: 14px;
   border: 1px solid rgba(255,255,255,0.08);
   background: rgba(255,255,255,0.03);
   color: inherit;
   cursor: pointer;
+  transition: background 150ms ease, border-color 150ms ease;
+}
+
+.shot-list-section-preset:hover {
+  background: rgba(255,255,255,0.06);
+  border-color: rgba(255,255,255,0.16);
 }
 
 .shot-list-section-preset-icon,

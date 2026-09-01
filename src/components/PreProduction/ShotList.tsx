@@ -1005,16 +1005,21 @@ export default function ShotList({ appVersion }: ShotListProps) {
     }
   };
 
-  const saveWrapDocument = async (targetPath?: string | null) => {
+  const saveWrapDocument = async (targetPath?: string | null, promptForPath = false) => {
     if (!bundle) return false;
-    const resolvedPath =
-      targetPath ||
-      wrapFilePath ||
-      (await save({
-        filters: [{ name: "Wrap Shot List", extensions: [SHOT_LIST_WRAP_EXTENSION] }],
-        defaultPath: `${sanitizeFileStem(bundle.project.title)}.${SHOT_LIST_WRAP_EXTENSION}`,
-        title: "Save Shot List",
-      }));
+    const resolvedPath = promptForPath
+      ? await save({
+          filters: [{ name: "Wrap Shot List", extensions: [SHOT_LIST_WRAP_EXTENSION] }],
+          defaultPath: `${sanitizeFileStem(bundle.project.title)}.${SHOT_LIST_WRAP_EXTENSION}`,
+          title: "Save Shot List As",
+        })
+      : targetPath ||
+        wrapFilePath ||
+        (await save({
+          filters: [{ name: "Wrap Shot List", extensions: [SHOT_LIST_WRAP_EXTENSION] }],
+          defaultPath: `${sanitizeFileStem(bundle.project.title)}.${SHOT_LIST_WRAP_EXTENSION}`,
+          title: "Save Shot List",
+        }));
     if (!resolvedPath) return false;
 
     const payload: ShotListWrapDocument = {
@@ -1040,7 +1045,7 @@ export default function ShotList({ appVersion }: ShotListProps) {
 
   const handleSaveWrap = async (saveAs = false) => {
     try {
-      await saveWrapDocument(saveAs ? null : wrapFilePath);
+      await saveWrapDocument(saveAs ? null : wrapFilePath, saveAs);
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "Failed to save Shot List file.");
     }
