@@ -1025,6 +1025,13 @@ export default function ShotList({ appVersion }: ShotListProps) {
       importedInventory,
     };
     await writeTextFile(resolvedPath, JSON.stringify(payload, null, 2));
+    // Give the saved .wrap file the CineFlow icon in Finder (like an image
+    // editor badging its own documents). Best-effort — never block the save.
+    try {
+      await invokeGuarded("set_document_file_icon", { path: resolvedPath });
+    } catch (iconError) {
+      console.warn("Could not set .wrap file icon", iconError);
+    }
     setWrapFilePath(resolvedPath);
     setSaveState("saved");
     setError(null);

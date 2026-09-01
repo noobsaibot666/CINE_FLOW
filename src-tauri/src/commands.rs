@@ -19,6 +19,8 @@ use crate::ffprobe;
 use crate::jobs::{JobInfo, JobStatus};
 #[cfg(target_os = "macos")]
 use crate::mac_bookmarks;
+#[cfg(target_os = "macos")]
+use crate::mac_file_icon;
 use crate::production::{self, CameraProfile, LookPreset};
 use crate::production_match_lab::{
     aggregate_frames, analysis_timeout, analyze_frame, build_cache_dir, build_frame_timestamps,
@@ -281,6 +283,21 @@ pub async fn add_project_root(
         .upsert_project_root(&root)
         .map_err(|e| format!("Failed to add project root: {}", e))?;
     Ok(root)
+}
+
+/// Stamp the CineFlow app icon onto a saved document so it shows a branded
+/// thumbnail in Finder (used for `.wrap` shot lists). No-op off macOS.
+#[tauri::command]
+pub fn set_document_file_icon(path: String) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        mac_file_icon::set_file_icon_to_app(&path)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = path;
+        Ok(())
+    }
 }
 
 #[tauri::command]

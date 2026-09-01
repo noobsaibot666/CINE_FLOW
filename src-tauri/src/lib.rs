@@ -37,6 +37,9 @@ mod verification;
 #[cfg(target_os = "macos")]
 pub(crate) mod mac_bookmarks;
 
+#[cfg(target_os = "macos")]
+pub(crate) mod mac_file_icon;
+
 use commands::AppState;
 use std::sync::Arc;
 #[cfg(target_os = "macos")]
@@ -278,6 +281,7 @@ pub fn run() {
             commands::generate_frame_preview_image_proxy,
             commands::read_audio_preview,
             commands::save_image_data_url,
+            commands::set_document_file_icon,
             commands::load_brand_profile,
             commands::read_brand_logo,
             commands::save_brand_profile,
