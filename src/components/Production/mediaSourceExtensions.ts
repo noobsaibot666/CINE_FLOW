@@ -38,6 +38,15 @@ export const PROXY_GUIDED_RAW_EXTENSIONS = [
   "xocn",
   "crm",
   "rmf",
+  "ari",
+  "arx",
+] as const;
+
+// Containers that are USUALLY directly decodable but can also wrap camera RAW
+// (ARRIRAW MXF). Treated as a direct source until frame extraction fails, then
+// escalated to the "generate a proxy" / "attach a proxy" recovery path.
+export const AMBIGUOUS_CONTAINER_EXTENSIONS = [
+  "mxf",
 ] as const;
 
 export const PRODUCTION_CAMERA_SOURCE_EXTENSIONS = [

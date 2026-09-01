@@ -6005,7 +6005,12 @@ async fn ensure_matchlab_proxy_inner(
     // retry now".
     user_initiated: bool,
 ) -> Result<ProductionMatchLabProxyResult, String> {
-    if !is_decoder_backed_raw_path(source_path) {
+    // `.mxf` is normally a direct source, but ARRIRAW MXF isn't decodable by
+    // ffmpeg — when the operator explicitly asks for a proxy on one, route it
+    // through Resolve rather than returning "use it directly".
+    let mxf_container_fallback =
+        crate::production_match_lab::is_arri_mxf_container_path(source_path);
+    if !is_decoder_backed_raw_path(source_path) && !mxf_container_fallback {
         return Ok(ProductionMatchLabProxyResult {
             proxy_path: source_path.to_string(),
             reused_proxy: true,
@@ -6130,12 +6135,14 @@ async fn ensure_matchlab_proxy_inner(
                 ),
             },
         }
-    } else if crate::production_match_lab::is_resolve_backed_path(source_path) {
+    } else if crate::production_match_lab::is_resolve_backed_path(source_path)
+        || mxf_container_fallback
+    {
         let overrides = crate::production_decoder_status::load_overrides(&state.app_data_dir);
         match crate::production_decoder_status::detect_resolve(&overrides) {
             Some(resolve) => RawProxyPlan::Resolve(resolve),
             None => RawProxyPlan::Unavailable(
-                "This format has no bundled decoder. Install DaVinci Resolve (free) — Decoder Setup has the link — or attach an MP4/ProRes proxy for this slot.".to_string(),
+                "This source decodes through DaVinci Resolve (ARRIRAW / Canon RAW / X-OCN). Install it (free) and keep it open — Decoder Setup has the link — or attach an MP4/ProRes proxy for this slot.".to_string(),
             ),
         }
     } else {

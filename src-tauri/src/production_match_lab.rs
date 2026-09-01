@@ -456,11 +456,19 @@ pub fn is_redline_backed_path(clip_path: &str) -> bool {
     matches!(lower_ext(clip_path).as_str(), "r3d" | "nev")
 }
 
-/// Formats with no bundled decoder that DaVinci Resolve can decode headless.
-/// (ARRIRAW is excluded — it normally arrives wrapped in MXF, which is
-/// classified as a direct source.)
+/// Formats with no bundled decoder that DaVinci Resolve can decode headless:
+/// Canon CRM/RMF, Sony X-OCN, and single-frame ARRIRAW (.ari/.arx). ARRIRAW
+/// wrapped in MXF is handled separately — see `is_arri_mxf_container_path`.
 pub fn is_resolve_backed_path(clip_path: &str) -> bool {
-    matches!(lower_ext(clip_path).as_str(), "crm" | "rmf" | "xocn")
+    matches!(lower_ext(clip_path).as_str(), "crm" | "rmf" | "xocn" | "ari" | "arx")
+}
+
+/// `.mxf` — usually a directly decodable container (ProRes / XAVC / DNxHD) but
+/// also the wrapper for ARRIRAW, which ffmpeg cannot read. We only route it
+/// through Resolve when direct frame extraction has failed, so the operator gets
+/// a "Generate proxy" path instead of a dead end.
+pub fn is_arri_mxf_container_path(clip_path: &str) -> bool {
+    lower_ext(clip_path) == "mxf"
 }
 
 /// Any camera-RAW source that needs a decode provider before analysis.
@@ -505,6 +513,8 @@ pub fn locate_redline(red_sdk_dir: Option<&str>) -> Option<String> {
     for path in [
         "/Applications/REDCINE-X PRO.app/Contents/MacOS/REDline",
         "/Applications/REDCINEX PRO.app/Contents/MacOS/REDline",
+        "/Applications/REDCINE-X Professional/REDCINE-X PRO.app/Contents/MacOS/REDline",
+        "/Applications/REDCINE-X Professional/REDCINEX PRO.app/Contents/MacOS/REDline",
         "/usr/local/bin/REDline",
         "/opt/homebrew/bin/REDline",
     ] {
@@ -551,13 +561,25 @@ pub fn create_red_proxy_via_redline(
         .map_err(|e| format!("Failed to prepare RED decode scratch: {e}"))?;
     let base = decoded_dir.join("red_decode");
 
-    // Minimal, version-stable REDline invocation: decode the clip to Apple
-    // ProRes; ffmpeg below does the downscale. Extra flags (--decodeRes,
-    // --resizeX, --proResEncoding) vary between REDline releases and can make an
-    // otherwise-fine SDK reject the whole command, so they are deliberately
-    // omitted here.
+    // REDline `--format` is an enum: 0=DPX, 1=TIFF, 2=OpenEXR, 3=JPEG, …,
+    // 201=Apple ProRes, 204=Avid DNx. `3` (used previously) writes a JPEG image
+    // sequence, never a .mov — which is exactly why this step used to report
+    // "REDline produced no .mov output". 201 writes `<base>.mov`.
+    // `--useMeta` applies the clip's own RMD/embedded look instead of REDline
+    // defaults; `--resizeX 1920` keeps the ProRes intermediate small — both are
+    // long-stable flags (verified against REDline Build 65).
     let mut cmd = crate::tools::create_command(redline_path);
-    cmd.args(["--i", input_path, "--o", &base.to_string_lossy(), "--format", "3"]);
+    cmd.args([
+        "--i",
+        input_path,
+        "--o",
+        &base.to_string_lossy(),
+        "--format",
+        "201",
+        "--useMeta",
+        "--resizeX",
+        "1920",
+    ]);
     let out = cmd
         .output()
         .map_err(|e| format!("Failed to start REDline ({redline_path}): {e}"))?;
@@ -1509,10 +1531,63 @@ pub fn probe_braw_decoder(resource_dir: Option<&Path>) -> BrawDecoderCaps {
     }
 }
 
-/// Build ffmpeg input arguments for a braw_bridge stdout pipe by probing the BRAW
-/// file with ffprobe.  This replaces the old `braw-decode -f` probe which tried to
-/// run an internal ffmpeg encode pipeline instead of just printing format args.
-pub fn build_braw_ffmpeg_input_args(input_path: &str) -> Result<String, String> {
+/// Build the ffmpeg `-f rawvideo …` input arguments for a braw_bridge stdout pipe.
+///
+/// The dimensions MUST come from braw_bridge itself: ffprobe reports the BRAW
+/// container / sensor size (e.g. 6176x3472), but braw_bridge decodes to the
+/// SDK's active image area (e.g. 6144x3456). Feeding ffmpeg the ffprobe size
+/// mis-frames every raw frame on the pipe — ffmpeg then emits "No filtered
+/// frames", writes an empty file, and the resulting SIGPIPE makes braw_bridge
+/// look like it crashed. We ask braw_bridge (`--info`) first and only fall back
+/// to ffprobe if that fails.
+pub fn build_braw_ffmpeg_input_args(caps: &BrawDecoderCaps, input_path: &str) -> Result<String, String> {
+    if let Some(exe) = caps.executable_path.as_deref() {
+        if let Some(args) = braw_bridge_input_args(exe, caps.working_dir.as_deref(), input_path) {
+            return Ok(args);
+        }
+    }
+    build_braw_ffmpeg_input_args_via_ffprobe(input_path)
+}
+
+/// Parse `braw_bridge --info` ("Resolution: WxH", "Framerate: N") into ffmpeg
+/// raw-pipe input args. Returns None if the probe can't be run or parsed.
+fn braw_bridge_input_args(executable: &str, working_dir: Option<&str>, input_path: &str) -> Option<String> {
+    let mut cmd = crate::tools::create_command(executable);
+    cmd.args(["--info", input_path]);
+    if let Some(dir) = working_dir {
+        cmd.current_dir(dir);
+    }
+    let out = cmd.output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut width = 0u32;
+    let mut height = 0u32;
+    let mut fps = String::from("24");
+    for line in text.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("Resolution:") {
+            let mut parts = rest.trim().split(['x', 'X']);
+            width = parts.next().and_then(|v| v.trim().parse().ok()).unwrap_or(0);
+            height = parts.next().and_then(|v| v.trim().parse().ok()).unwrap_or(0);
+        } else if let Some(rest) = line.strip_prefix("Framerate:") {
+            let raw = rest.trim();
+            if !raw.is_empty() {
+                fps = raw.to_string();
+            }
+        }
+    }
+    if width == 0 || height == 0 {
+        return None;
+    }
+    Some(format!(
+        "-f rawvideo -pixel_format rgba -s {}x{} -r {} -i pipe:0",
+        width, height, fps
+    ))
+}
+
+fn build_braw_ffmpeg_input_args_via_ffprobe(input_path: &str) -> Result<String, String> {
     #[derive(serde::Deserialize)]
     struct ProbeOut { streams: Option<Vec<ProbeStream>> }
     #[derive(serde::Deserialize)]
@@ -1583,7 +1658,7 @@ pub fn create_braw_proxy_via_stdout(
         .executable_path
         .as_ref()
         .ok_or("Decoder executable missing".to_string())?;
-    let fmt_args = build_braw_ffmpeg_input_args(input_path)?;
+    let fmt_args = build_braw_ffmpeg_input_args(caps, input_path)?;
     validate_proxy_output_path(input_path, output_path)?;
 
     let mut braw_decode_cmd = crate::tools::create_command(executable);

@@ -1,5 +1,5 @@
 import React, { startTransition, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, BarChart3, ChevronDown, HelpCircle, Download, FolderOpen, Gauge, ImageIcon, Info, Maximize2, Palette, Pipette, RefreshCw, Trash2, Waves, X } from "lucide-react";
+import { AlertTriangle, BarChart3, ChevronDown, HelpCircle, Download, FolderOpen, Gauge, ImageIcon, Info, Maximize2, Palette, Pipette, RefreshCw, Trash2, Waves } from "lucide-react";
 import { open, save, confirm } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { listen } from "@tauri-apps/api/event";
@@ -24,6 +24,7 @@ import {
 import { exportProductionMatchSheetImage, exportProductionMatchSheetPdf } from "../../utils/ProductionExport";
 import { invokeGuarded } from "../../utils/tauri";
 import {
+  AMBIGUOUS_CONTAINER_EXTENSIONS,
   DECODER_BACKED_RAW_EXTENSIONS,
   OPEN_CAMERA_RAW_EXTENSIONS,
   PRODUCTION_CAMERA_SOURCE_EXTENSIONS,
@@ -1219,8 +1220,9 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
     const decoder = capabilityBySlot[slot]?.decoder_status;
     const provider = decoder?.provider;
     const fileName = getFileName(clipPath);
+    const viaResolve = provider === "resolve" || isArriMxfContainer(clipPath);
 
-    const message = provider === "resolve"
+    const message = viaResolve
       ? `Camera ${slot}: decode "${fileName}" with DaVinci Resolve?\n\nDaVinci Resolve must be installed AND open — the free edition only responds while it is running. This can take several minutes; watch the Jobs panel for progress.`
       : `Camera ${slot}: generate an analysis proxy from "${fileName}"?\n\nCineFlow will decode it with ${provider === "red_sdk" ? "REDline / the RED SDK" : "the bundled decoder"}. This runs as a background job and can take a few minutes — watch the Jobs panel.`;
     const ok = await confirm(message, { title: "Generate analysis proxy", kind: "info" });
@@ -1539,6 +1541,7 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
               const generatedProxy = generatedProxyForSlot(slot);
               const generatingProxy = Boolean(generatingProxySlots[slot]);
               const proxyProgress = proxyProgressBySlot[slot];
+              const resolveAvailable = decoderStatuses.some((d) => d.family === "RESOLVE" && d.state === "available");
               const sourceWorkflow = clipPath
                 ? describeSourceWorkflow(clipPath, capability, rawAnalysis, Boolean(slotProxy))
                 : null;
@@ -1820,6 +1823,17 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                           </>
                         ) : isBrawClip(clipPath || "") || isProxyOnlyRawClip(clipPath || "") || isDecodeFailureError(slotError, slotErrorDetail) ? (
                           <div style={errorActionsStyle}>
+                            {isArriMxfContainer(clipPath || "") && isDecodeFailureError(slotError, slotErrorDetail) ? (
+                              resolveAvailable ? (
+                                <button type="button" className="btn btn-secondary btn-sm" onClick={() => void generateProxy(slot)} disabled={generatingProxy}>
+                                  <RefreshCw size={14} /> {generatingProxy ? "Generating proxy…" : "Generate proxy (DaVinci Resolve)"}
+                                </button>
+                              ) : (
+                                <span style={errorSupportTextStyle}>
+                                  This is ARRIRAW MXF — open DaVinci Resolve (free) to decode it, or attach an MP4/MOV proxy.
+                                </span>
+                              )
+                            ) : null}
                             <button type="button" className="btn btn-ghost btn-sm" onClick={() => void pickExistingProxy(slot)} disabled={active}>
                               <FolderOpen size={14} /> Use existing MP4/MOV proxy…
                             </button>
@@ -2614,6 +2628,13 @@ function isDecodeFailureError(slotError?: string, details?: string) {
   );
 }
 
+// `.mxf` is usually directly decodable, but ARRIRAW MXF is not — when direct
+// analysis of one fails we route it through DaVinci Resolve like other cinema
+// RAW. Must stay in sync with Rust `is_arri_mxf_container_path`.
+function isArriMxfContainer(path: string) {
+  return hasExtension(path, AMBIGUOUS_CONTAINER_EXTENSIONS);
+}
+
 function buildCalibrationRecoveryActions(slot: string, details: string) {
   const items: Array<{ label: string; reason: string }> = [];
   const detailText = details.toLowerCase();
@@ -3150,20 +3171,20 @@ function SourceSupportStrip({
   decoderStatuses: ProductionDecoderStatus[];
   onOpenDecoderSetup: () => void;
 }) {
-  const [dismissed, setDismissed] = useState(false);
   const needsSetup = decoderStatuses.filter((d) => d.state === "needs_setup").length;
-  if (dismissed) return null;
   return (
-    <aside className="production-source-support" style={sourceSupportStripStyle} role="status" aria-label="Camera source import">
+    <section className="production-source-support" style={sourceSupportStripStyle} aria-label="Supported camera sources">
       <div style={sourceSupportIntroStyle}>
-        <Info size={14} style={{ flexShrink: 0 }} />
-        <div style={sourceSupportTitleStyle}>Camera source import</div>
-        <button type="button" aria-label="Dismiss" style={sourceNoticeCloseStyle} onClick={() => setDismissed(true)}>
-          <X size={13} />
+        <Info size={15} style={{ flexShrink: 0 }} />
+        <div style={sourceSupportTextBlockStyle}>
+          <div style={sourceSupportTitleStyle}>Camera source import</div>
+          <div style={sourceSupportBodyStyle}>
+            Drop video, BRAW, vendor RAW, or open camera RAW into any slot. Formats without a bundled decoder fall back to an attached proxy.
+          </div>
+        </div>
+        <button type="button" className="btn btn-ghost btn-sm" style={{ flexShrink: 0 }} onClick={onOpenDecoderSetup}>
+          <Gauge size={14} /> Decoder Setup{needsSetup > 0 ? ` · ${needsSetup} to set up` : ""}
         </button>
-      </div>
-      <div style={sourceSupportBodyStyle}>
-        Drop video, BRAW, vendor RAW, or open camera RAW into any slot. Unresolved formats fall back to an attached proxy.
       </div>
       <div style={sourceSupportGroupsStyle}>
         <SourceSupportGroup label="Direct video" value="MOV, MP4, MXF, MKV, AVI, ProRes RAW" tone="good" />
@@ -3171,10 +3192,7 @@ function SourceSupportStrip({
         <SourceSupportGroup label="Open RAW" value="DNG, ARW, CR2/CR3, NEF, RAF, RW2, ORF, IIQ" tone="warning" />
         <SourceSupportGroup label="Resolve path" value="X-OCN, Canon RAW, ARRIRAW" tone="warning" />
       </div>
-      <button type="button" className="btn btn-ghost btn-sm" style={{ alignSelf: "flex-start" }} onClick={onOpenDecoderSetup}>
-        <Gauge size={14} /> Decoder Setup{needsSetup > 0 ? ` · ${needsSetup} to set up` : ""}
-      </button>
-    </aside>
+    </section>
   );
 }
 
@@ -4318,16 +4336,16 @@ const modalBodyStyle: React.CSSProperties = { color: "var(--text-secondary)", li
 const modalMetaStyle: React.CSSProperties = { marginTop: 10, color: "var(--text-muted)", fontSize: "0.82rem" };
 const modalActionsStyle: React.CSSProperties = { display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 18 };
 const subtleStyle: React.CSSProperties = { margin: 0, color: "var(--text-muted)", maxWidth: 760, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", textAlign: "left" };
-const sourceSupportStripStyle: React.CSSProperties = { position: "fixed", top: 88, right: 24, zIndex: 30, width: 300, maxWidth: "calc(100vw - 48px)", maxHeight: "calc(100vh - 120px)", overflowY: "auto", display: "flex", flexDirection: "column", gap: 10, padding: 14, borderRadius: 14, border: "1px solid rgba(255,255,255,0.1)", background: "#101116", boxShadow: "0 16px 40px rgba(0,0,0,0.45)", minWidth: 0 };
-const sourceSupportIntroStyle: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8, minWidth: 0, color: "rgba(216,212,223,0.92)" };
-const sourceNoticeCloseStyle: React.CSSProperties = { marginLeft: "auto", flexShrink: 0, display: "inline-flex", alignItems: "center", justifyContent: "center", width: 22, height: 22, borderRadius: 6, border: "none", background: "transparent", color: "var(--text-muted)", cursor: "pointer" };
+const sourceSupportStripStyle: React.CSSProperties = { display: "grid", gridTemplateColumns: "minmax(240px, 1.1fr) minmax(0, 1.9fr)", gap: 12, marginBottom: 14, padding: 14, borderRadius: 16, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.025)", minWidth: 0 };
+const sourceSupportIntroStyle: React.CSSProperties = { display: "flex", alignItems: "flex-start", gap: 10, minWidth: 0, color: "rgba(216,212,223,0.92)" };
+const sourceSupportTextBlockStyle: React.CSSProperties = { display: "grid", gap: 4, minWidth: 0 };
 const decoderPanelBackdropStyle: React.CSSProperties = { position: "fixed", inset: 0, zIndex: 4000, background: "rgba(0,0,0,0.72)", backdropFilter: "blur(2px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 };
 const decoderPanelCardStyle: React.CSSProperties = { width: "min(720px, 100%)", maxHeight: "82vh", display: "flex", flexDirection: "column", gap: 16, padding: 22, borderRadius: 18, border: "1px solid rgba(255,255,255,0.1)", background: "#101116", boxShadow: "0 24px 64px rgba(0,0,0,0.5)" };
 const decoderPanelHeadStyle: React.CSSProperties = { display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16 };
 const decoderRowStyle: React.CSSProperties = { display: "grid", gap: 3, padding: "12px 14px", borderRadius: 12, border: "1px solid rgba(255,255,255,0.07)", background: "rgba(255,255,255,0.02)" };
 const sourceSupportTitleStyle: React.CSSProperties = { color: "var(--text-primary)", fontSize: "0.82rem", fontWeight: 800, lineHeight: 1.2 };
 const sourceSupportBodyStyle: React.CSSProperties = { color: "var(--text-secondary)", fontSize: "0.74rem", lineHeight: 1.45 };
-const sourceSupportGroupsStyle: React.CSSProperties = { display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 8, minWidth: 0 };
+const sourceSupportGroupsStyle: React.CSSProperties = { display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 8, minWidth: 0 };
 const sourceSupportGroupStyle: React.CSSProperties = { display: "grid", alignContent: "start", gap: 4, minWidth: 0, padding: "9px 10px", borderRadius: 12, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.02)" };
 const sourceSupportGroupLabelStyle: React.CSSProperties = { color: "var(--text-muted)", fontSize: "0.58rem", fontWeight: 800, letterSpacing: "0.08em", lineHeight: 1.15, textTransform: "uppercase" };
 const sourceSupportGroupValueStyle: React.CSSProperties = { color: "var(--text-primary)", fontSize: "0.72rem", fontWeight: 800, lineHeight: 1.3, whiteSpace: "normal", wordBreak: "break-word" };

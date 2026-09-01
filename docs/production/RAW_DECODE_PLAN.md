@@ -156,14 +156,27 @@ A review of the wiring turned up and fixed:
 - **Post-failure cooldown** — the 120 s "proxy recently failed" lock blocked
   the intended "open Resolve and retry" loop; an explicit
   `production_matchlab_ensure_proxy` call now bypasses it.
-- **REDline flags** — dropped `--decodeRes/--resizeX/--proResEncoding` (vary by
-  SDK version and can make REDline reject the whole command); it now just
-  `--format 3` decodes to ProRes and ffmpeg does the downscale via the shared
-  `encode_analysis_proxy`, which every provider now uses.
+- **REDline flags** — `--format` is an enum: `3` is **JPEG**, not ProRes, so the
+  old command produced a `.jpg` sequence and the step reported "REDline produced
+  no .mov output". Fixed to `--format 201` (Apple ProRes → `<base>.mov`), plus
+  `--useMeta` (apply the clip's RMD/embedded look) and `--resizeX 1920` (small
+  intermediate). Verified against REDline Build 65. ffmpeg still does the final
+  encode via the shared `encode_analysis_proxy`.
+- **BRAW pipe dimensions** — `build_braw_ffmpeg_input_args` took the frame size
+  from **ffprobe** (container/sensor size, e.g. 6176×3472) while `braw_bridge`
+  decodes to the SDK active-image size (e.g. 6144×3456). The mismatch mis-framed
+  every raw frame → ffmpeg "No filtered frames" → empty output → SIGPIPE made
+  braw_bridge look crashed. It now reads dimensions from `braw_bridge --info`
+  and only falls back to ffprobe.
 - **Resolve runner** — prefers Resolve's own `fuscript` (Python + modules
   preloaded, no env/`python3` needed); falls back to system `python3` with
   `RESOLVE_SCRIPT_*`; errors clearly if neither exists.
-- **`.ari`** dropped from the Resolve route (ARRIRAW arrives as MXF → direct).
+- **ARRIRAW** — `.ari`/`.arx` are back on the Resolve route (single-frame
+  ARRIRAW). ARRIRAW **MXF** stays a "direct" source until ffmpeg fails to
+  extract a frame from it (`codec_name=unknown`, 0×0), then the slot escalates:
+  `is_arri_mxf_container_path` lets `production_matchlab_ensure_proxy` route it
+  through Resolve, and the error card shows **Generate proxy (DaVinci Resolve)**
+  when Resolve is available, else a "open Resolve / attach a proxy" hint.
 
 ### Known caveats still open
 
@@ -181,9 +194,14 @@ A review of the wiring turned up and fixed:
   REDCINE-X PRO (free, native) as the primary route, the R3D SDK as the
   alternative, and Resolve as the no-install path. `verify_macos_v12_runtime.mjs`
   still warns about the bundled binary's arch.
-- REDline `--format 3` and the Resolve render preset
-  (`SetCurrentRenderFormatAndCodec("mp4", "H264")`) are unverified against real
-  media / every Resolve version.
+- The bundled `src-tauri/bin/REDline-*` sidecars are **non-functional** on
+  Apple Silicon: they are x86_64 with an invalid embedded code signature (AMFI
+  SIGKILLs them, exit 137) and depend on ~10 unbundled `@rpath` dylibs
+  (MediaProcessor, Qt5 frameworks, DNxHR, log4cplus, mpg123). R3D decode
+  therefore requires a real REDCINE-X PRO / standalone REDline install —
+  `locate_redline` finds the `/usr/local/bin/REDline` symlink it drops.
+- The Resolve render preset (`SetCurrentRenderFormatAndCodec("mp4", "H264")`)
+  is still unverified against every Resolve version.
 
 ### Explicit proxy generation (operator control)
 
