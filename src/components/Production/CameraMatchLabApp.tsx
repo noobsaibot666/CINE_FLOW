@@ -1618,6 +1618,20 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                   signalPreview,
                 })
                 : null;
+              // All the loose per-slot warning / note lines, folded into one
+              // compact strip so the columns stay aligned row-to-row and the
+              // card is far less busy. Boilerplate that reads identically in
+              // every column (the colour-pipeline note) is dropped entirely.
+              const slotNotes: Array<{ tone: "warn" | "info"; text: string }> = [];
+              if (frameWarning) slotNotes.push({ tone: "warn", text: frameWarning });
+              if (analysisWarning && analysisWarning !== frameWarning) slotNotes.push({ tone: "warn", text: analysisWarning });
+              (rawAnalysis?.proxy_validation?.warnings ?? []).forEach((w) => {
+                if (!slotNotes.some((n) => n.text === w)) slotNotes.push({ tone: "warn", text: w });
+              });
+              if (analysis?.suggestions?.warning && !slotNotes.some((n) => n.text === analysis.suggestions?.warning)) {
+                slotNotes.push({ tone: "warn", text: analysis.suggestions.warning });
+              }
+              if (rawAnalysis?.proxy_info) slotNotes.push({ tone: "info", text: rawAnalysis.proxy_info });
               const activePreviewUrl =
                 previewMode === "corrected" && supportsCorrectedPreview
                   ? correctedPreviewUrl
@@ -2016,11 +2030,10 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                             <Maximize2 size={14} />
                           </button>
                         </div>
-                        {(frameWarning || analysisWarning) && <div style={inlineWarningStyle}>{frameWarning || analysisWarning}</div>}
                         {signalOnly ? (
                           <div style={signalOnlyStripStyle}>
                             <span style={signalOnlyChipStyle}>Signal only</span>
-                            <span style={signalOnlyTextStyle}>Chart not found. Using scopes only.</span>
+                            <span style={signalOnlyTextStyle}>Chart not found — scopes only.</span>
                           </div>
                         ) : null}
                         <MatchMethodBanner
@@ -2182,24 +2195,27 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                             ]}
                           />
                         ) : null}
-                        {rawAnalysis.proxy_info ? (
+                        {slotNotes.length > 0 ? (
                           <details style={noteStripStyle}>
                             <summary style={noteStripSummaryStyle}>
-                              <span style={noteStripLabelStyle}>Source note</span>
-                              <span style={noteStripToggleStyle}>Show details <ChevronDown size={13} /></span>
+                              <span style={noteStripLabelStyle}>
+                                {slotNotes.some((n) => n.tone === "warn") ? <AlertTriangle size={12} /> : <Info size={12} />}
+                                {` Notes · ${slotNotes.length}`}
+                              </span>
+                              <span style={noteStripToggleStyle}>Show <ChevronDown size={13} /></span>
                             </summary>
                             <div style={noteStripBodyStyle}>
-                              <span style={noteStripValueStyle}>{rawAnalysis.proxy_info}</span>
+                              {slotNotes.map((note, i) => (
+                                <span
+                                  key={i}
+                                  style={{ ...noteStripValueStyle, color: note.tone === "warn" ? "rgba(220,184,124,0.94)" : "var(--text-secondary)" }}
+                                >
+                                  {note.text}
+                                </span>
+                              ))}
                             </div>
                           </details>
                         ) : null}
-                        {rawAnalysis.proxy_validation?.color_pipeline_note ? (
-                          <div style={inlineInfoStyle}>{rawAnalysis.proxy_validation.color_pipeline_note}</div>
-                        ) : null}
-                        {rawAnalysis.proxy_validation?.warnings?.[0] ? (
-                          <div style={inlineWarningStyle}>{rawAnalysis.proxy_validation.warnings[0]}</div>
-                        ) : null}
-                        {analysis.suggestions?.warning ? <div style={inlineWarningStyle}>{analysis.suggestions.warning}</div> : null}
                         {decisionSummary ? (
                           <div style={decisionSummaryStyle}>
                             <div style={decisionSummaryHeaderStyle}>
@@ -2207,7 +2223,7 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                               <span style={decisionSummaryMetaStyle}>{signalOnly ? "Temporary alignment" : "Recommended sequence"}</span>
                             </div>
                             <div style={decisionListStyle}>
-                              {decisionSummary.items.map((item, index) => (
+                              {decisionSummary.items.slice(0, 2).map((item, index) => (
                                 <div key={item.id} style={decisionRowStyle}>
                                   <span style={decisionStepIndexStyle}>{index + 1}</span>
                                   <div style={decisionTextBlockStyle}>
@@ -2216,6 +2232,9 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                                   </div>
                                 </div>
                               ))}
+                              {decisionSummary.items.length > 2 ? (
+                                <div style={decisionReasonStyle}>+{decisionSummary.items.length - 2} more in Match Actions below</div>
+                              ) : null}
                             </div>
                             {decisionSummary.action ? (
                               <div style={decisionActionRowStyle}>
@@ -2263,7 +2282,7 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
               <div style={guidanceHeaderStyle}>
                 <div>
                   <div style={guidanceTitleStyle}>Match Actions</div>
-                  <div style={matchActionsSubtitleStyle}>Use these steps in order. They tell the operator what to change next on each non-hero camera.</div>
+                  <div style={matchActionsSubtitleStyle}>What to change on each non-hero camera, in order.</div>
                 </div>
               </div>
               <div style={matchActionsGridStyle}>
@@ -2281,10 +2300,9 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                     <div style={matchActionStatusStyle}>{card.status}</div>
                     <div style={matchActionChipGridStyle}>
                       {card.actions.map((action) => (
-                        <div key={`${card.slot}-${action.key}`} style={matchActionChipStyle}>
+                        <div key={`${card.slot}-${action.key}`} style={matchActionChipStyle} title={action.reason}>
                           <span style={matchActionChipLabelStyle}>{action.label}</span>
                           <span style={matchActionChipValueStyle}>{action.value}</span>
-                          <span style={matchActionChipReasonStyle}>{action.reason}</span>
                         </div>
                       ))}
                     </div>
@@ -4475,11 +4493,11 @@ const calibrationStripStyle: React.CSSProperties = { display: "grid", gap: 8, ma
 const signalOnlyStripStyle: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 10 };
 const signalOnlyChipStyle: React.CSSProperties = { display: "inline-flex", alignItems: "center", padding: "4px 8px", borderRadius: 999, border: "1px solid rgba(165,146,255,0.18)", background: "rgba(165,146,255,0.1)", color: "rgba(214,204,255,0.96)", fontSize: "0.68rem", fontWeight: 800, letterSpacing: "0.04em" };
 const signalOnlyTextStyle: React.CSSProperties = { color: "var(--text-secondary)", fontSize: "0.74rem", fontWeight: 700 };
-const matchMethodBannerStyle: React.CSSProperties = { display: "grid", gap: 6, marginBottom: 12, padding: "12px 12px 11px", borderRadius: 15, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.02)" };
+const matchMethodBannerStyle: React.CSSProperties = { display: "grid", gap: 6, marginBottom: 12, padding: "12px 12px 11px", borderRadius: 15, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.02)", minHeight: 104, alignContent: "start" };
 const matchMethodHeaderStyle: React.CSSProperties = { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" };
 const matchMethodBadgeStyle: React.CSSProperties = { display: "inline-flex", alignItems: "center", padding: "4px 8px", borderRadius: 999, border: "1px solid rgba(255,255,255,0.08)", fontSize: "0.68rem", fontWeight: 800, letterSpacing: "0.05em" };
 const matchMethodTitleStyle: React.CSSProperties = { color: "rgba(241,245,249,0.96)", fontSize: "0.86rem", fontWeight: 800, lineHeight: 1.25 };
-const matchMethodBodyStyle: React.CSSProperties = { color: "rgba(148,163,184,0.92)", fontSize: "0.76rem", lineHeight: 1.45 };
+const matchMethodBodyStyle: React.CSSProperties = { color: "rgba(148,163,184,0.92)", fontSize: "0.76rem", lineHeight: 1.45, display: "-webkit-box", WebkitBoxOrient: "vertical", WebkitLineClamp: 3, overflow: "hidden" };
 const calibrationHeaderStyle: React.CSSProperties = { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 };
 const calibrationHeaderMetaStyle: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8, minWidth: 0, flexWrap: "wrap", justifyContent: "flex-end" };
 const qualitySummaryStyle: React.CSSProperties = { color: "var(--text-secondary)", fontSize: "0.74rem", fontWeight: 700 };
@@ -4508,7 +4526,6 @@ const cropViewportBoxStyle: React.CSSProperties = { position: "absolute", inset:
 const editableCalibrationOverlaySvgStyle: React.CSSProperties = { position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" };
 const editableCornerHandleStyle: React.CSSProperties = { position: "absolute", width: 16, height: 16, borderRadius: 999, border: "2px solid rgba(255,255,255,0.95)", background: "rgba(251,191,36,0.92)", boxShadow: "0 0 0 4px rgba(251,191,36,0.18)", transform: "translate(-50%, -50%)", cursor: "move" };
 const inlineWarningStyle: React.CSSProperties = { marginBottom: 10, color: "rgba(220,184,124,0.94)", fontSize: "0.76rem", lineHeight: 1.4 };
-const inlineInfoStyle: React.CSSProperties = { marginBottom: 10, color: "rgba(186,230,253,0.9)", fontSize: "0.74rem", lineHeight: 1.4 };
 const metricsWrapStyle: React.CSSProperties = { display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 8, marginBottom: 10 };
 const signalActionPanelStyle: React.CSSProperties = { display: "grid", gap: 10, marginBottom: 12, padding: "12px 12px 10px", borderRadius: 16, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.02)" };
 const signalActionPanelHeaderStyle: React.CSSProperties = { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" };
@@ -4522,7 +4539,7 @@ const signalActionCardValueStyle: React.CSSProperties = { color: "rgba(241,245,2
 const falseColorLegendStyle: React.CSSProperties = { display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 10 };
 const legendChipStyle: React.CSSProperties = { display: "inline-flex", alignItems: "center", gap: 6, padding: "4px 8px", borderRadius: 999, border: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.03)", color: "var(--text-secondary)", fontSize: "0.68rem", fontWeight: 700 };
 const legendSwatchStyle: React.CSSProperties = { width: 8, height: 8, borderRadius: 999, flexShrink: 0 };
-const decisionSummaryStyle: React.CSSProperties = { display: "grid", gap: 10, marginBottom: 10, padding: 12, borderRadius: 14, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.02)" };
+const decisionSummaryStyle: React.CSSProperties = { display: "grid", gap: 10, marginBottom: 10, padding: 12, borderRadius: 14, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.02)", alignContent: "start" };
 const decisionSummaryHeaderStyle: React.CSSProperties = { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 };
 const decisionSummaryMetaStyle: React.CSSProperties = { color: "var(--text-muted)", fontSize: "0.72rem", fontWeight: 700 };
 const decisionListStyle: React.CSSProperties = { display: "grid", gap: 8 };
@@ -4546,9 +4563,9 @@ const metricInfoValueInlineStyle: React.CSSProperties = { fontSize: "0.68rem", w
 const metricInfoValueCompactStyle: React.CSSProperties = { fontSize: "0.69rem" };
 const noteStripStyle: React.CSSProperties = { display: "grid", gap: 4, marginBottom: 10, padding: "10px 11px", borderRadius: 12, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.02)" };
 const noteStripSummaryStyle: React.CSSProperties = { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, cursor: "pointer", listStyle: "none" };
-const noteStripLabelStyle: React.CSSProperties = { color: "var(--text-muted)", fontSize: "0.66rem", fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase" };
-const noteStripToggleStyle: React.CSSProperties = { display: "inline-flex", alignItems: "center", gap: 6, color: "var(--text-secondary)", fontSize: "0.72rem", fontWeight: 700 };
-const noteStripBodyStyle: React.CSSProperties = { marginTop: 8 };
+const noteStripLabelStyle: React.CSSProperties = { display: "inline-flex", alignItems: "center", gap: 6, color: "var(--text-muted)", fontSize: "0.66rem", fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase" };
+const noteStripToggleStyle: React.CSSProperties = { display: "inline-flex", alignItems: "center", gap: 6, color: "var(--text-secondary)", fontSize: "0.72rem", fontWeight: 700, flexShrink: 0 };
+const noteStripBodyStyle: React.CSSProperties = { marginTop: 8, display: "grid", gap: 8 };
 const noteStripValueStyle: React.CSSProperties = { color: "var(--text-secondary)", fontSize: "0.74rem", lineHeight: 1.4 };
 const placeholderStyle: React.CSSProperties = { minHeight: 320, display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center", gap: 12, color: "var(--text-muted)", textAlign: "center", padding: 24 };
 const guidanceSectionStyle: React.CSSProperties = { marginTop: 20, display: "grid", gap: 12, padding: 16, borderRadius: 18, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.02)" };
@@ -4566,7 +4583,6 @@ const matchActionChipGridStyle: React.CSSProperties = { display: "grid", gridTem
 const matchActionChipStyle: React.CSSProperties = { display: "grid", gap: 6, minWidth: 0, padding: "10px 11px", borderRadius: 12, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.02)", alignContent: "start" };
 const matchActionChipLabelStyle: React.CSSProperties = { color: "rgba(214,204,255,0.86)", fontSize: "0.64rem", fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase" };
 const matchActionChipValueStyle: React.CSSProperties = { color: "var(--text-primary)", fontSize: "0.82rem", fontWeight: 800, minWidth: 0, lineHeight: 1.2 };
-const matchActionChipReasonStyle: React.CSSProperties = { color: "var(--text-secondary)", fontSize: "0.72rem", lineHeight: 1.45 };
 const matchActionEmptyStyle: React.CSSProperties = { padding: "12px 14px", borderRadius: 14, border: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.02)", color: "var(--text-secondary)", fontSize: "0.82rem", fontWeight: 700 };
 const guidanceActionRowStyle: React.CSSProperties = { display: "flex", justifyContent: "flex-end", marginTop: 2 };
 const exportMenuStyle: React.CSSProperties = { position: "absolute", top: "calc(100% + 8px)", right: 0, minWidth: 244, padding: 8, borderRadius: 12, background: "#0c0d0f", border: "1px solid rgba(255,255,255,0.08)", boxShadow: "0 18px 40px rgba(0,0,0,0.4)", zIndex: 30, display: "grid", gap: 6 };

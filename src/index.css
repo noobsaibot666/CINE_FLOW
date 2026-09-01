@@ -225,6 +225,7 @@ body {
 .matchLabGrid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-rows: auto 1fr;
   gap: var(--space-gap);
   align-items: stretch;
   width: 100%;
@@ -236,7 +237,10 @@ body {
   min-width: 0;
   display: grid;
   gap: 16px;
+  /* Fallback for engines without subgrid (macOS 12 / Safari < 16). */
   grid-template-rows: auto 1fr;
+  grid-row: span 2;
+  grid-template-rows: subgrid;
 }
 
 .matchLabCard,
