@@ -5824,7 +5824,25 @@ async fn camera_match_analyze_clip_internal(
         }
 
         if per_frame.is_empty() {
-            return Err("No frames were analyzed".to_string());
+            // Surface the actual reason instead of a bare "No frames" — the
+            // per-frame failures we collected above are the useful part.
+            let first_reason = analysis_warnings
+                .iter()
+                .find(|w| w.contains("failed"))
+                .and_then(|w| w.rsplit(": ").next())
+                .unwrap_or("every frame extraction failed")
+                .to_string();
+            let hint = if source_path != clip_path {
+                " The analysis proxy may be corrupt or truncated — regenerate it, or pick a different MP4/MOV proxy."
+            } else {
+                " This source can't be decoded directly — generate an H.264/H.265 proxy and re-run."
+            };
+            return Err(format!(
+                "No frames could be analyzed from {} — {}.{}",
+                clip_name_from_path(&source_path),
+                first_reason,
+                hint
+            ));
         }
 
         let aggregate = aggregate_frames(&per_frame);

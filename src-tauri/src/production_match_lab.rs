@@ -470,24 +470,65 @@ pub fn is_decoder_backed_raw_path(clip_path: &str) -> bool {
 
 /// Locate a REDline / RED-SDK CLI. `red_sdk_dir` is a user-configured install
 /// folder (see `production_decoder_status`).
+///
+/// Preference order matters on Apple Silicon: the sidecar CineFlow bundles is an
+/// older x86_64 REDline that only runs under Rosetta. A REDline from a current
+/// REDCINE-X PRO / standalone REDline install is a native arm64 build and is far
+/// faster, so it wins over the bundled copy.
 pub fn locate_redline(red_sdk_dir: Option<&str>) -> Option<String> {
+    // 1. Operator-configured RED SDK / REDCINE-X install directory.
+    if let Some(dir) = red_sdk_dir {
+        for name in ["REDline", "redline", "REDLine", "REDline.exe"] {
+            for sub in [
+                "",
+                "bin",
+                "Contents/MacOS",
+                "Redistributable",
+                "Redistributable/mac",
+                "Redistributable/win",
+                "Redistributable/linux",
+            ] {
+                let candidate = if sub.is_empty() {
+                    Path::new(dir).join(name)
+                } else {
+                    Path::new(dir).join(sub).join(name)
+                };
+                if candidate.exists() {
+                    return Some(candidate.to_string_lossy().to_string());
+                }
+            }
+        }
+    }
+
+    // 2. A native REDline dropped by REDCINE-X PRO or the standalone installer.
+    #[cfg(target_os = "macos")]
+    for path in [
+        "/Applications/REDCINE-X PRO.app/Contents/MacOS/REDline",
+        "/Applications/REDCINEX PRO.app/Contents/MacOS/REDline",
+        "/usr/local/bin/REDline",
+        "/opt/homebrew/bin/REDline",
+    ] {
+        if Path::new(path).exists() {
+            return Some(path.to_string());
+        }
+    }
+
+    // 3. PATH.
+    #[cfg(not(target_os = "windows"))]
+    if let Ok(out) = std::process::Command::new("which").arg("REDline").output() {
+        if out.status.success() {
+            let found = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !found.is_empty() && Path::new(&found).exists() {
+                return Some(found);
+            }
+        }
+    }
+
+    // 4. Bundled sidecar (last resort — may be x86_64 under Rosetta).
     for name in ["red_bridge", "REDline", "redline"] {
         let path = crate::tools::find_executable(name);
         if path != name && Path::new(&path).exists() {
             return Some(path);
-        }
-    }
-    let dir = red_sdk_dir?;
-    for name in ["REDline", "redline", "REDline.exe", "REDLine"] {
-        for sub in ["", "bin", "Redistributable", "Redistributable/mac", "Redistributable/win", "Redistributable/linux"] {
-            let candidate = if sub.is_empty() {
-                Path::new(dir).join(name)
-            } else {
-                Path::new(dir).join(sub).join(name)
-            };
-            if candidate.exists() {
-                return Some(candidate.to_string_lossy().to_string());
-            }
         }
     }
     None

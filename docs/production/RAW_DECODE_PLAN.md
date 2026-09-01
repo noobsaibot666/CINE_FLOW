@@ -167,9 +167,20 @@ A review of the wiring turned up and fixed:
 
 ### Known caveats still open
 
-- The bundled `REDline-aarch64-apple-darwin` sidecar is an **x86_64** binary —
-  it runs under Rosetta on Apple Silicon but a real arm64/universal build
-  should replace it. `verify_macos_v12_runtime.mjs` now warns on this.
+- **No open-source R3D decoder exists and none can be bundled.** FFmpeg's
+  `libavformat/r3d.c` only demuxes the container, RED scrambled the JPEG2000
+  headers years ago, and RED does not permit shipping their codec with FFmpeg.
+  The `github.com/arunabhcode/RedSDK` repo is just a header mirror of RED's own
+  SDK, not an independent implementation. So RED decode will always require
+  RED's own tooling or DaVinci Resolve — there is nothing to fork.
+- The bundled `REDline-aarch64-apple-darwin` sidecar is an **x86_64** binary
+  (runs under Rosetta). Rather than chase a native build, `locate_redline` now
+  **prefers a REDline from a REDCINE-X PRO / standalone install** (which is
+  native Apple Silicon) and from the operator's configured RED SDK folder, and
+  only falls back to the bundled sidecar. `red_setup()` points users at
+  REDCINE-X PRO (free, native) as the primary route, the R3D SDK as the
+  alternative, and Resolve as the no-install path. `verify_macos_v12_runtime.mjs`
+  still warns about the bundled binary's arch.
 - REDline `--format 3` and the Resolve render preset
   (`SetCurrentRenderFormatAndCodec("mp4", "H264")`) are unverified against real
   media / every Resolve version.

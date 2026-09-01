@@ -138,17 +138,18 @@ fn resolve_setup() -> DecoderSetup {
 
 fn red_setup() -> DecoderSetup {
     DecoderSetup {
-        download_url: Some("https://www.reddigitalcinema.com/download/r3d-sdk".into()),
-        download_label: Some("Get the free RED R3D SDK".into()),
+        download_url: Some("https://www.red.com/downloads".into()),
+        download_label: Some("Get REDCINE-X PRO or the R3D SDK (free)".into()),
         steps: vec![
-            "Sign in / register on RED's developer portal and download the R3D SDK for your OS.".into(),
-            "Unzip it somewhere permanent (e.g. ~/SDKs/R3DSDK).".into(),
-            "Press Locate… below and pick that folder.".into(),
-            "Press Re-check.".into(),
+            "R3D is a proprietary codec — there is no open-source decoder, so you need RED's own tooling. Two options:".into(),
+            "A) Install REDCINE-X PRO (free, native Apple Silicon). CineFlow auto-detects its REDline; nothing else to configure.".into(),
+            "B) Or download the R3D SDK from RED's developer portal, unzip it somewhere permanent, press Locate… and pick that folder.".into(),
+            "Already run DaVinci Resolve? Leave it open — CineFlow can decode R3D through Resolve with no RED install at all.".into(),
+            "Press Re-check when done.".into(),
         ],
         locate_key: Some("red_sdk_dir".into()),
         locate_kind: Some("directory".into()),
-        locate_hint: Some("Pick the unzipped R3D SDK folder (it contains Redistributable/ and Include/).".into()),
+        locate_hint: Some("Pick the unzipped R3D SDK folder (contains Redistributable/ and Include/), or the REDCINE-X PRO app.".into()),
     }
 }
 
@@ -430,7 +431,7 @@ mod tests {
     fn red_needs_setup_with_nothing_available() {
         let s = decide_red(None, false, None, None);
         assert_eq!(s.state, "needs_setup");
-        assert!(s.setup.unwrap().download_url.unwrap().contains("r3d-sdk"));
+        assert!(s.setup.unwrap().download_url.unwrap().contains("red.com"));
     }
 
     #[test]
