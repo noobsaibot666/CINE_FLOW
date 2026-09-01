@@ -1,8 +1,10 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
+  ArrowRight,
   Camera,
   CheckCircle2,
   ChevronDown,
+  Circle,
   Download,
   Gauge,
   HelpCircle,
@@ -66,6 +68,16 @@ export function LookSetupApp({ project, onContinueToMatchLab }: LookSetupAppProp
   const [includeDetailsPages, setIncludeDetailsPages] = useState(false);
   const [notesModalOpen, setNotesModalOpen] = useState(false);
   const [notesDraft, setNotesDraft] = useState("");
+  const [doneSteps, setDoneSteps] = useState<Set<string>>(new Set());
+
+  const toggleStep = (id: string) => {
+    setDoneSteps((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   const openNotes = () => {
     setNotesDraft(setup.custom_notes ?? "");
@@ -130,6 +142,21 @@ export function LookSetupApp({ project, onContinueToMatchLab }: LookSetupAppProp
       }))
       .filter((entry) => entry.items.length > 0);
   }, [usageGuidance]);
+
+  const readiness = useMemo(() => {
+    const complete = cameraConfigs.filter(isCameraComplete).length;
+    const stepIds = usageGuidance.map((g) => g.id);
+    const items = [
+      { id: "cams", label: `Every camera configured (${complete}/${cameraConfigs.length})`, done: cameraConfigs.length > 0 && complete === cameraConfigs.length, manual: false },
+      { id: "look", label: "Target look chosen", done: Boolean(setup.target_type), manual: false },
+      { id: "light", label: "Lighting condition set", done: Boolean(setup.lighting), manual: false },
+      { id: "steps", label: "Every step above worked through", done: stepIds.length > 0 && stepIds.every((id) => doneSteps.has(id)), manual: false },
+      { id: "lut", label: "Technical / neutral LUT loaded on every monitor — not a Rec.709 taste LUT", done: false, manual: true },
+      { id: "fc", label: "False colour or waveform checked against the skin and highlight targets on each body", done: false, manual: true },
+      { id: "wb", label: "White balance metered for the real source mix on each camera", done: false, manual: true },
+    ];
+    return { items, ready: items.filter((i) => !i.manual).every((i) => i.done) };
+  }, [cameraConfigs, setup.target_type, setup.lighting, usageGuidance, doneSteps]);
 
   useEffect(() => {
     // Skip first render since data was just loaded
@@ -450,31 +477,65 @@ export function LookSetupApp({ project, onContinueToMatchLab }: LookSetupAppProp
         <section style={guidanceSectionStyle}>
           <div style={guidanceHeaderStyle}>
             <div>
-              <div style={sectionEyebrowStyle}>How to use this setup</div>
-              <h3 style={{ margin: "4px 0 0" }}>Operate from the generated plan</h3>
+              <div style={sectionEyebrowStyle}>Do it — on set</div>
+              <h3 style={{ margin: "6px 0 4px", fontSize: "1.05rem" }}>Work through the plan in order</h3>
+              <p style={{ margin: 0, ...guidanceSupportStyle }}>
+                Each step below is an action for the camera team. Tick it off as it&apos;s done, then run the readiness check before you roll.
+              </p>
             </div>
           </div>
-          <div style={guidanceGridStyle}>
-            {groupedUsageGuidance.map((group) => (
-              <div key={group.group} style={guidanceGroupStyle}>
-                <div style={guidanceGroupTitleStyle}>{group.group}</div>
+
+          <ol style={guidancePlaybookStyle}>
+            {groupedUsageGuidance.map((group, groupIndex) => (
+              <li key={group.group} style={guidanceStepStyle}>
+                <div style={guidanceStepHeadStyle}>
+                  <span style={guidanceStepNumStyle}>{groupIndex + 1}</span>
+                  <span style={guidanceStepTitleStyle}>{group.group}</span>
+                </div>
                 <div style={guidanceGroupRowsStyle}>
                   {group.items.map((item) => (
-                    <GuidanceRow key={item.id} item={item} />
+                    <GuidanceRow
+                      key={item.id}
+                      item={item}
+                      done={doneSteps.has(item.id)}
+                      onToggle={() => toggleStep(item.id)}
+                    />
                   ))}
                 </div>
-              </div>
+              </li>
             ))}
-          </div>
-          <div style={guidanceActionRowStyle}>
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
-              onClick={onContinueToMatchLab}
-              disabled={!onContinueToMatchLab}
-            >
-              Continue to Match Lab
-            </button>
+          </ol>
+
+          <div style={readinessCardStyle}>
+            <div style={readinessHeadStyle}>
+              <span style={{ ...guidanceStepTitleStyle, fontSize: "0.9rem" }}>You&apos;re ready when…</span>
+              <span style={readiness.ready ? readinessBadgeReadyStyle : readinessBadgePendingStyle}>
+                {readiness.ready ? "Ready to roll" : "Not ready"}
+              </span>
+            </div>
+            <div style={guidanceGroupRowsStyle}>
+              {readiness.items.map((item) => (
+                <div key={item.id} style={readinessRowStyle}>
+                  {item.done
+                    ? <CheckCircle2 size={15} style={{ color: "#86efac", flexShrink: 0 }} />
+                    : <Circle size={15} style={{ color: item.manual ? "var(--text-muted)" : "#fca5a5", flexShrink: 0 }} />}
+                  <span style={{ fontSize: "0.84rem", color: item.done ? "var(--text-secondary)" : "var(--text-primary)", lineHeight: 1.4 }}>
+                    {item.label}
+                    {item.manual && <span style={{ color: "var(--text-muted)" }}> · check on set</span>}
+                  </span>
+                </div>
+              ))}
+            </div>
+            <div style={guidanceActionRowStyle}>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={onContinueToMatchLab}
+                disabled={!onContinueToMatchLab || !readiness.ready}
+              >
+                Continue to Match Lab <ArrowRight size={14} />
+              </button>
+            </div>
           </div>
         </section>
       ) : null}
@@ -586,24 +647,43 @@ function DetailSection({ section }: { section: ProductionDetailSection }) {
   );
 }
 
-function GuidanceRow({ item }: { item: ProductionUsageGuidance }) {
+function GuidanceRow({
+  item,
+  done,
+  onToggle,
+}: {
+  item: ProductionUsageGuidance;
+  done: boolean;
+  onToggle: () => void;
+}) {
   return (
-    <div style={guidanceRowStyle}>
+    <div style={{ ...guidanceRowStyle, opacity: done ? 0.6 : 1 }}>
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-pressed={done}
+        title={done ? "Mark as not done" : "Mark as done"}
+        style={guidanceCheckBtnStyle}
+      >
+        {done ? <CheckCircle2 size={16} style={{ color: "#86efac" }} /> : <Circle size={16} style={{ color: "var(--text-muted)" }} />}
+      </button>
       <div style={guidanceRowMainStyle}>
-        <div style={guidanceLabelStyle}>{item.label}</div>
+        <div style={{ ...guidanceLabelStyle, textDecoration: done ? "line-through" : "none" }}>{item.label}</div>
         <div style={guidanceSupportStyle}>{item.support}</div>
-        <div style={guidanceCameraWrapStyle}>
-          {item.camera_labels.map((cameraLabel, index) => (
-            <div key={`${item.id}:${cameraLabel}`} style={guidanceCameraPillStyle}>
-              <span style={{ ...slotChipStyle, ...slotChipColor(item.slots[index] ?? item.slots[0] ?? "C"), minWidth: 24, height: 20, padding: "0 6px" }}>
-                {item.slots[index] ?? item.slots[0] ?? "—"}
-              </span>
-              <span style={guidanceCameraPillTextStyle}>{cameraLabel.replace(/^[A-C]\s·\s/, "")}</span>
-            </div>
-          ))}
-        </div>
+        {item.reason && <div style={guidanceReasonStyle}>{item.reason}</div>}
+        {item.camera_labels.length > 0 && (
+          <div style={guidanceCameraWrapStyle}>
+            {item.camera_labels.map((cameraLabel, index) => (
+              <div key={`${item.id}:${cameraLabel}`} style={guidanceCameraPillStyle}>
+                <span style={{ ...slotChipStyle, ...slotChipColor(item.slots[index] ?? item.slots[0] ?? "C"), minWidth: 24, height: 20, padding: "0 6px" }}>
+                  {item.slots[index] ?? item.slots[0] ?? "—"}
+                </span>
+                <span style={guidanceCameraPillTextStyle}>{cameraLabel.replace(/^[A-C]\s·\s/, "")}</span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
-      <span title={item.reason} style={helpIconStyle}><HelpCircle size={13} /></span>
     </div>
   );
 }
@@ -656,16 +736,25 @@ const notesModalHeaderStyle: React.CSSProperties = { display: "flex", alignItems
 const notesModalTextareaStyle: React.CSSProperties = { width: "100%", minHeight: 260, resize: "vertical", padding: "12px 14px", borderRadius: 12, border: "1px solid rgba(255,255,255,0.1)", background: "rgba(10,10,12,0.6)", color: "var(--text-primary)", fontSize: "0.9rem", lineHeight: 1.5 };
 const notesModalActionsStyle: React.CSSProperties = { display: "flex", justifyContent: "flex-end", gap: 10 };
 const columnLayoutStyle: React.CSSProperties = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 16, alignItems: "stretch" };
-const guidanceSectionStyle: React.CSSProperties = { marginTop: 18, display: "grid", gap: 12, padding: 16, borderRadius: 18, background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.08)" };
-const guidanceHeaderStyle: React.CSSProperties = { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 };
-const guidanceGridStyle: React.CSSProperties = { display: "grid", gap: 12 };
-const guidanceGroupStyle: React.CSSProperties = { display: "grid", gap: 8, padding: 12, borderRadius: 14, border: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.018)" };
-const guidanceGroupTitleStyle: React.CSSProperties = { fontSize: "0.72rem", textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--text-muted)", fontWeight: 800 };
+const guidanceSectionStyle: React.CSSProperties = { marginTop: 24, display: "grid", gap: 20, padding: 24, borderRadius: 20, background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.09)" };
+const guidanceHeaderStyle: React.CSSProperties = { display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 };
+const guidancePlaybookStyle: React.CSSProperties = { listStyle: "none", margin: 0, padding: 0, display: "grid", gap: 16, counterReset: "step" };
+const guidanceStepStyle: React.CSSProperties = { display: "grid", gap: 10, padding: 16, borderRadius: 16, border: "1px solid rgba(255,255,255,0.07)", background: "rgba(255,255,255,0.02)" };
+const guidanceStepHeadStyle: React.CSSProperties = { display: "flex", alignItems: "center", gap: 10 };
+const guidanceStepNumStyle: React.CSSProperties = { display: "inline-flex", alignItems: "center", justifyContent: "center", width: 22, height: 22, borderRadius: 999, background: "var(--color-accent, #00d1ff)", color: "#04121a", fontSize: "0.72rem", fontWeight: 800, flexShrink: 0 };
+const guidanceStepTitleStyle: React.CSSProperties = { fontSize: "0.78rem", textTransform: "uppercase", letterSpacing: "0.11em", color: "var(--text-primary)", fontWeight: 800 };
 const guidanceGroupRowsStyle: React.CSSProperties = { display: "grid", gap: 8 };
-const guidanceRowStyle: React.CSSProperties = { display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, padding: "12px 14px", borderRadius: 12, border: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.018)" };
-const guidanceRowMainStyle: React.CSSProperties = { minWidth: 0, display: "grid", gap: 6, flex: 1 };
-const guidanceLabelStyle: React.CSSProperties = { color: "var(--text-primary)", fontSize: "0.88rem", fontWeight: 700, lineHeight: 1.35 };
-const guidanceSupportStyle: React.CSSProperties = { color: "var(--text-secondary)", fontSize: "0.8rem", lineHeight: 1.4 };
+const guidanceRowStyle: React.CSSProperties = { display: "flex", alignItems: "flex-start", gap: 10, padding: "12px 14px", borderRadius: 12, border: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.018)", transition: "opacity 0.15s ease" };
+const guidanceCheckBtnStyle: React.CSSProperties = { flexShrink: 0, marginTop: 1, padding: 0, background: "none", border: "none", cursor: "pointer", display: "inline-flex" };
+const guidanceRowMainStyle: React.CSSProperties = { minWidth: 0, display: "grid", gap: 5, flex: 1 };
+const guidanceLabelStyle: React.CSSProperties = { color: "var(--text-primary)", fontSize: "0.9rem", fontWeight: 700, lineHeight: 1.35 };
+const guidanceSupportStyle: React.CSSProperties = { color: "var(--text-secondary)", fontSize: "0.82rem", lineHeight: 1.45 };
+const guidanceReasonStyle: React.CSSProperties = { color: "var(--text-muted)", fontSize: "0.78rem", lineHeight: 1.45, fontStyle: "italic" };
+const readinessCardStyle: React.CSSProperties = { display: "grid", gap: 12, padding: 18, borderRadius: 16, border: "1px solid rgba(0,209,255,0.22)", background: "rgba(0,209,255,0.04)" };
+const readinessHeadStyle: React.CSSProperties = { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 };
+const readinessRowStyle: React.CSSProperties = { display: "flex", alignItems: "flex-start", gap: 10, padding: "2px 0" };
+const readinessBadgeReadyStyle: React.CSSProperties = { fontSize: "0.68rem", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.08em", padding: "4px 10px", borderRadius: 999, background: "rgba(34,197,94,0.16)", color: "#86efac" };
+const readinessBadgePendingStyle: React.CSSProperties = { fontSize: "0.68rem", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.08em", padding: "4px 10px", borderRadius: 999, background: "rgba(248,113,113,0.14)", color: "#fca5a5" };
 const guidanceCameraWrapStyle: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" };
 const guidanceCameraPillStyle: React.CSSProperties = { display: "inline-flex", alignItems: "center", gap: 8, minWidth: 0, padding: "6px 10px 6px 6px", borderRadius: 999, border: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.03)" };
 const guidanceCameraPillTextStyle: React.CSSProperties = { color: "var(--text-secondary)", fontSize: "0.76rem", fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" };
