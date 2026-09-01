@@ -175,7 +175,23 @@ export function JobsPanel({ open, jobs, onClose, onRefresh, extracting, extractP
 
   const runningJobs = jobs.filter((j) => j.status === "running" || j.status === "queued");
   const completedJobs = jobs.filter((j) => j.status === "done");
-  const failedJobs = jobs.filter((j) => j.status === "failed" || j.status === "cancelled");
+
+  // Issues: collapse to the latest job per kind, and only if that latest
+  // attempt actually failed. Retrying a proxy/analysis for the same camera
+  // slot was stacking a fresh "FAILED" row on top of every earlier one.
+  const latestUpdatedByKind = new Map<string, string>();
+  for (const j of jobs) {
+    const prev = latestUpdatedByKind.get(j.kind);
+    if (!prev || j.updated_at > prev) latestUpdatedByKind.set(j.kind, j.updated_at);
+  }
+  const failedJobs = jobs
+    .filter(
+      (j) =>
+        (j.status === "failed" || j.status === "cancelled") &&
+        j.updated_at === latestUpdatedByKind.get(j.kind),
+    )
+    .filter((j, index, arr) => arr.findIndex((x) => x.kind === j.kind) === index)
+    .sort((a, b) => (a.updated_at < b.updated_at ? 1 : -1));
 
   return (
     <div className="jobs-drawer-backdrop" onClick={onClose}>

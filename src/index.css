@@ -1862,6 +1862,31 @@ body {
   }
 }
 
+@keyframes matchlabProxyScan {
+  0%   { left: -42%; }
+  100% { left: 100%; }
+}
+
+.matchlab-proxy-progress {
+  position: relative;
+  height: 4px;
+  margin-top: 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.matchlab-proxy-progress::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 42%;
+  border-radius: 999px;
+  background: var(--color-accent, #a592ff);
+  animation: matchlabProxyScan 1.15s infinite linear;
+}
+
 @keyframes moveIndeterminate {
   0% {
     transform: translateX(-100%) scaleX(0.2);

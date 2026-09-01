@@ -1565,6 +1565,12 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                           </button>
                         </div>
                       ) : null}
+                      {generatingProxy ? (
+                        <div style={{ marginTop: 2 }}>
+                          <div style={helperMetaStyle}>Decoding to an analysis proxy — this can take a few minutes.</div>
+                          <div className="matchlab-proxy-progress" />
+                        </div>
+                      ) : null}
                     </div>
                     <div className="matchLabPathPrimary" style={fileMetaStyle} title={clipPath ? getFileName(clipPath) : "No clip selected"}>{clipPath ? getFileName(clipPath) : "No clip selected"}</div>
                     <div className="matchLabPathSecondary" style={helperMetaStyle} title={clipPath || "Import MOV, MP4, MXF, BRAW, R3D, X-OCN, Canon RAW, N-RAW, or still RAW."}>{clipPath || "Import MOV, MP4, MXF, BRAW, R3D, X-OCN, Canon RAW, N-RAW, or still RAW."}</div>
@@ -4222,9 +4228,11 @@ const sourceProfileSelectStyle: React.CSSProperties = { width: "100%", minWidth:
 const transformIntentMetaStyle: React.CSSProperties = { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, color: "var(--text-secondary)", fontSize: "0.68rem", lineHeight: 1.3, minWidth: 0 };
 const transformIntentWarningStyle: React.CSSProperties = { color: "rgba(253,224,71,0.9)", fontSize: "0.68rem", lineHeight: 1.35 };
 const capabilityPanelStyle: React.CSSProperties = { marginTop: 12, padding: "10px 11px", borderRadius: 12, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.02)", display: "grid", gap: 7 };
-const capabilityRowStyle: React.CSSProperties = { display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12, minWidth: 0 };
-const capabilityLabelStyle: React.CSSProperties = { color: "var(--text-muted)", fontSize: "0.62rem", fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", whiteSpace: "nowrap" };
-const capabilityValueStyle: React.CSSProperties = { color: "var(--text-primary)", fontSize: "0.72rem", fontWeight: 800, textAlign: "right", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
+const capabilityRowStyle: React.CSSProperties = { display: "flex", alignItems: "baseline", gap: 12, minWidth: 0 };
+// Fixed label column so every value in the panel starts at the same x and
+// the rows read as an aligned table.
+const capabilityLabelStyle: React.CSSProperties = { flex: "0 0 44%", color: "var(--text-muted)", fontSize: "0.62rem", fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" };
+const capabilityValueStyle: React.CSSProperties = { flex: "1 1 auto", color: "var(--text-primary)", fontSize: "0.72rem", fontWeight: 600, textAlign: "right", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
 const capabilityWarningStyle: React.CSSProperties = { marginTop: 2, color: "rgba(220,184,124,0.92)", fontSize: "0.7rem", lineHeight: 1.35 };
 const capabilityBlockerStyle: React.CSSProperties = { marginTop: 2, paddingTop: 7, borderTop: "1px solid rgba(253,186,116,0.16)", color: "rgba(253,186,116,0.98)", fontSize: "0.7rem", lineHeight: 1.35 };
 const statusMetaStyle: React.CSSProperties = { marginTop: 10, fontSize: "0.76rem", color: "rgba(216,212,223,0.86)" };
