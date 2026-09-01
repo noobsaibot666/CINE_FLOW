@@ -723,26 +723,48 @@ pub async fn generate_frame_preview_image_proxy(
 }
 
 #[tauri::command]
-pub async fn read_audio_preview(path: String) -> Result<String, String> {
-    let bytes = std::fs::read(&path)
-        .map_err(|e| format!("Failed to read audio preview at {}: {}", path, e))?;
-    let ext = std::path::Path::new(&path)
+pub async fn read_audio_preview(
+    path: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<String, String> {
+    let src = std::path::Path::new(&path);
+    let ext = src
         .extension()
         .and_then(|ext| ext.to_str())
         .map(|ext| ext.to_ascii_lowercase())
         .unwrap_or_default();
-    let mime = match ext.as_str() {
-        "m4a" | "aac" => "audio/mp4",
-        "wav" => "audio/wav",
-        "mp3" => "audio/mpeg",
-        "aif" | "aiff" => "audio/aiff",
-        "mp4" => "video/mp4",
-        "mov" => "video/quicktime",
-        "mkv" => "video/x-matroska",
-        _ => "application/octet-stream",
-    };
-    let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes);
-    Ok(format!("data:{};base64,{}", mime, b64))
+
+    // Formats an <audio> element decodes natively — hand back the file itself,
+    // the frontend resolves it through the asset protocol.
+    if matches!(
+        ext.as_str(),
+        "mp3" | "m4a" | "aac" | "wav" | "aif" | "aiff" | "flac" | "ogg" | "opus"
+    ) {
+        if !src.exists() {
+            return Err(format!("Audio file not found: {}", path));
+        }
+        return Ok(path);
+    }
+
+    // Everything else — ProRes MOV, MXF, large MP4, BRAW/R3D, … — gets a small
+    // cached AAC preview. The old implementation base64-encoded the entire
+    // source file into a data: URL, which was unusable for real media.
+    let hash = hash_source_signature(&path);
+    let dest = std::path::Path::new(&state.cache_dir)
+        .join("audio_preview")
+        .join(format!("{}.m4a", hash));
+
+    if let Ok(meta) = std::fs::metadata(&dest) {
+        if meta.len() > 0 {
+            return Ok(dest.to_string_lossy().to_string());
+        }
+    }
+
+    match crate::audio::extract_audio_preview(&path, &dest) {
+        Ok(true) => Ok(dest.to_string_lossy().to_string()),
+        Ok(false) => Err("This clip has no playable audio track.".to_string()),
+        Err(error) => Err(error),
+    }
 }
 
 #[tauri::command]

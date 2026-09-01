@@ -12,7 +12,7 @@ interface WaveformProps {
 
 export const Waveform: React.FC<WaveformProps> = ({
     envelope,
-    color = "var(--color-accent-indigo, var(--color-accent))",
+    color = "var(--color-accent)",
     height = 36,
     width = "100%",
     onPlayToggle,
@@ -40,10 +40,13 @@ export const Waveform: React.FC<WaveformProps> = ({
                     style={{ width: '100%', height: '100%', display: 'block' }}
                 >
                     <defs>
+                        {/* CSS custom properties resolve only in `style`, not in
+                            SVG presentation attributes — so `fill`/`stop-color`
+                            must be set via style or the bars render colourless. */}
                         <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="0%" stopColor={color} stopOpacity="1" />
-                            <stop offset="50%" stopColor={color} stopOpacity="0.6" />
-                            <stop offset="100%" stopColor={color} stopOpacity="1" />
+                            <stop offset="0%" style={{ stopColor: color, stopOpacity: 1 }} />
+                            <stop offset="50%" style={{ stopColor: color, stopOpacity: 0.6 }} />
+                            <stop offset="100%" style={{ stopColor: color, stopOpacity: 1 }} />
                         </linearGradient>
                     </defs>
 
@@ -58,7 +61,7 @@ export const Waveform: React.FC<WaveformProps> = ({
                                 y={50 - h / 2}
                                 width={barWidth}
                                 height={Math.max(2, h)}
-                                fill={isPlayed ? color : "rgba(255,255,255,0.12)"}
+                                style={{ fill: isPlayed ? color : "rgba(255,255,255,0.14)" }}
                                 rx={barWidth / 2}
                             />
                         );

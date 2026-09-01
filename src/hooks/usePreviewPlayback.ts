@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { ClipWithThumbnails } from "../types";
 
 export function usePreviewPlayback(clips: ClipWithThumbnails[]) {
@@ -52,7 +52,12 @@ export function usePreviewPlayback(clips: ClipWithThumbnails[]) {
         clearAudioPreview();
 
         try {
-            const src = await invoke<string>("read_audio_preview", { path: clip.file_path });
+            const previewPath = await invoke<string>("read_audio_preview", { path: clip.file_path });
+            // read_audio_preview returns a local file path (native-playable file
+            // or a cached AAC transcode) — resolve it through the asset protocol.
+            const src = /^(data:|blob:|https?:|asset:|tauri:)/i.test(previewPath)
+                ? previewPath
+                : convertFileSrc(previewPath);
             const audio = new Audio();
             audio.onended = () => {
                 clearAudioPreview();

@@ -152,9 +152,12 @@ pub fn apply_lut_to_image(
         .decode()
         .map_err(|e| format!("Failed to decode original image {}: {}", image_path, e))?;
 
-    let mut rgba_img = img.into_rgba8();
+    // RGB, not RGBA: thumbnails are JPEG and the JPEG encoder rejects an alpha
+    // channel — saving an RgbaImage as `.jpg` errored out, so no LUT thumbnail
+    // was ever written and the review grid showed broken images.
+    let mut rgb_img = img.to_rgb8();
 
-    rgba_img.pixels_mut().for_each(|pixel| {
+    rgb_img.pixels_mut().for_each(|pixel| {
         let r = pixel[0] as f32 / 255.0;
         let g = pixel[1] as f32 / 255.0;
         let b = pixel[2] as f32 / 255.0;
@@ -171,7 +174,7 @@ pub fn apply_lut_to_image(
             .map_err(|e| format!("Failed to create lut_thumbs dir: {}", e))?;
     }
 
-    rgba_img
+    rgb_img
         .save(output_path)
         .map_err(|e| format!("Failed to save lut image {}: {}", output_path, e))?;
 

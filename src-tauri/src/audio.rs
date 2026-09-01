@@ -35,6 +35,68 @@ fn run_ffmpeg_extract(source: &str) -> Result<Vec<u8>, String> {
     Ok(pcm_data)
 }
 
+/// Transcode a small, browser-playable AAC preview of a clip's audio to `dest`.
+/// Returns `Ok(false)` when the source has no decodable audio track.
+pub fn extract_audio_preview(file_path: &str, dest: &Path) -> Result<bool, String> {
+    let path = Path::new(file_path);
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .unwrap_or_default();
+
+    let audio_source = if ext == "r3d" {
+        match find_r3d_companion_audio(path) {
+            Some(companion) => companion,
+            None => return Ok(false),
+        }
+    } else {
+        file_path.to_string()
+    };
+
+    if let Some(parent) = dest.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::remove_file(dest);
+
+    let status = crate::tools::create_command("ffmpeg")
+        .args([
+            "-nostdin",
+            "-y",
+            "-i",
+            &audio_source,
+            "-vn",
+            "-sn",
+            "-dn",
+            "-ac",
+            "2",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+            "-movflags",
+            "+faststart",
+            dest.to_string_lossy().as_ref(),
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map_err(|e| format!("Failed to spawn ffmpeg: {}", e))?;
+
+    if !status.success() {
+        let _ = std::fs::remove_file(dest);
+        return Err("ffmpeg could not build an audio preview for this clip".to_string());
+    }
+
+    match std::fs::metadata(dest) {
+        Ok(meta) if meta.len() > 0 => Ok(true),
+        _ => {
+            let _ = std::fs::remove_file(dest);
+            Ok(false)
+        }
+    }
+}
+
 pub fn extract_envelope(file_path: &str, points: usize) -> Result<AudioEnvelope, String> {
     // ffmpeg -i input -f s16le -ac 1 -ar 8000 -
     // -f s16le: signed 16-bit little-endian
