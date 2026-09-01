@@ -3541,6 +3541,11 @@ body {
   color: var(--text-muted);
 }
 
+/* Slot with no frame — just a quiet placeholder, no glyph. */
+.film-strip-placeholder.is-empty {
+  background: rgba(255, 255, 255, 0.02);
+}
+
 /* Image-only Filmstrip Adaptation */
 .film-strip.is-image {
   background: transparent;

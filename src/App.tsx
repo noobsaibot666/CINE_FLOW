@@ -80,7 +80,7 @@ const FramePreview = lazy(() => import('./modules/Production/apps/FramePreview')
 const StarterSetup = lazy(() => import('./components/Production/StarterSetup'));
 import { useCommandPalette } from "./hooks/useCommandPalette";
 import { CommandPalette } from "./components/CommandPalette";
-import { getJumpIntervalForThumbCount, getThumbnailCacheContext } from "./utils/thumbnailIntervals";
+import { getThumbnailCacheContext } from "./utils/thumbnailIntervals";
 import { convertFileSrc, invokeGuarded, isTauriReloading } from "./utils/tauri";
 import { ActivationScreen } from "./components/ActivationScreen";
 import TrialBanner from "./components/TrialBanner";
@@ -408,13 +408,20 @@ function AppContent() {
     return saved ? parseInt(saved, 10) : 5;
   });
 
+  // Seconds between extracted frames. Explicit user choice (3 / 5 / 10),
+  // decoupled from the frame count.
+  const [thumbInterval, setThumbInterval] = useState<number>(() => {
+    const saved = parseInt(localStorage.getItem("wp_thumbInterval") || "", 10);
+    return [3, 5, 10].includes(saved) ? saved : 10;
+  });
+
   const [namingTemplate] = useState<string>(() => {
     return localStorage.getItem("wp_namingTemplate") || "ContactSheet_{PROJECT}_{DATE}";
   });
 
   const [customShotSizes, setCustomShotSizes] = useState<string[]>([]);
   const [customMovements, setCustomMovements] = useState<string[]>([]);
-  const selectedJumpSeconds = useMemo(() => getJumpIntervalForThumbCount(thumbCount), [thumbCount]);
+  const selectedJumpSeconds = thumbInterval;
   const thumbCacheContext = useMemo(
     () => getThumbnailCacheContext(selectedJumpSeconds, thumbCount),
     [selectedJumpSeconds, thumbCount],
@@ -2103,6 +2110,18 @@ function AppContent() {
                               onClick={() => { setThumbCount(n); localStorage.setItem('wp_thumbCount', n.toString()); }}
                             >
                               <span className="thumb-choice-value">{n}</span>
+                            </button>
+                          ))}
+                        </div>
+                        <div className="thumb-range-selector">
+                          <span className="toolbar-label">Every</span>
+                          {[3, 5, 10].map((s) => (
+                            <button
+                              key={s}
+                              className={`btn btn-ghost btn-xs ${thumbInterval === s ? 'active' : ''}`}
+                              onClick={() => { setThumbInterval(s); localStorage.setItem('wp_thumbInterval', s.toString()); }}
+                            >
+                              <span className="thumb-choice-value">{s}s</span>
                             </button>
                           ))}
                         </div>

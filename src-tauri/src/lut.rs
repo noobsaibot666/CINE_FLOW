@@ -157,17 +157,23 @@ pub fn apply_lut_to_image(
     // was ever written and the review grid showed broken images.
     let mut rgb_img = img.to_rgb8();
 
-    rgb_img.pixels_mut().for_each(|pixel| {
-        let r = pixel[0] as f32 / 255.0;
-        let g = pixel[1] as f32 / 255.0;
-        let b = pixel[2] as f32 / 255.0;
+    // Trilinear-sample every pixel across the rayon pool — this is the hot path
+    // when applying a LUT to a whole project's thumbnails.
+    {
+        use rayon::prelude::*;
+        let buffer: &mut [u8] = &mut rgb_img;
+        buffer.par_chunks_mut(3).for_each(|pixel| {
+            let r = pixel[0] as f32 / 255.0;
+            let g = pixel[1] as f32 / 255.0;
+            let b = pixel[2] as f32 / 255.0;
 
-        let sampled = lut.sample_trilinear(r, g, b);
+            let sampled = lut.sample_trilinear(r, g, b);
 
-        pixel[0] = (sampled[0] * 255.0).clamp(0.0, 255.0) as u8;
-        pixel[1] = (sampled[1] * 255.0).clamp(0.0, 255.0) as u8;
-        pixel[2] = (sampled[2] * 255.0).clamp(0.0, 255.0) as u8;
-    });
+            pixel[0] = (sampled[0] * 255.0).clamp(0.0, 255.0) as u8;
+            pixel[1] = (sampled[1] * 255.0).clamp(0.0, 255.0) as u8;
+            pixel[2] = (sampled[2] * 255.0).clamp(0.0, 255.0) as u8;
+        });
+    }
 
     if let Some(parent) = Path::new(output_path).parent() {
         fs::create_dir_all(parent)

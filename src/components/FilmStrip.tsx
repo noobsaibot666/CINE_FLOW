@@ -115,9 +115,7 @@ export const FilmStrip = memo(function FilmStrip({
                     <div key={idx} className="film-strip-placeholder">
                         {idx === Math.floor(effectivePlaceholderCount / 2) ? (
                             <span className="thumb-warning">{status === "ok" ? "Extracting…" : "No thumbnails"}</span>
-                        ) : (
-                            <span className="thumb-warning">—</span>
-                        )}
+                        ) : null}
                     </div>
                 ))}
             </div>
@@ -164,15 +162,9 @@ export const FilmStrip = memo(function FilmStrip({
                     );
                 }
 
-                return (
-                    <div key={idx} className="film-strip-placeholder">
-                        {resolvedThumbnails.length === 0 && idx === Math.floor(effectivePlaceholderCount / 2) ? (
-                            <span className="thumb-warning">No thumbnails</span>
-                        ) : (
-                            <span className="thumb-warning">—</span>
-                        )}
-                    </div>
-                );
+                // Trailing slot with no frame for it — keep it visually clean,
+                // no centred dash or label.
+                return <div key={idx} className="film-strip-placeholder is-empty" aria-hidden="true" />;
             })}
         </div>
 
