@@ -579,7 +579,9 @@ function AppContent() {
   // State for delayed actions
   const [postScanTab, setPostScanTab] = useState<"preproduction" | "shot-planner" | "media-workspace" | "clip-review" | "scene-blocks" | "contact" | "blocks" | "all" | null>(null);
 
-  const [projectLut, setProjectLut] = useState<{ path: string; name: string; hash: string } | null>(null);
+  type LutShelfEntry = { path: string; name: string; hash: string };
+  const [projectLut, setProjectLut] = useState<LutShelfEntry | null>(null);
+  const [projectLutShelf, setProjectLutShelf] = useState<LutShelfEntry[]>([]);
   const [lutRenderNonce, setLutRenderNonce] = useState(0);
 
 
@@ -625,20 +627,23 @@ function AppContent() {
       if (isTauriReloading()) return;
       if (settingsJson && settingsJson !== "{}") {
         const settings = JSON.parse(settingsJson);
-        if (settings.lut_path) {
-          setProjectLut({
-            path: settings.lut_path,
-            name: settings.lut_name,
-            hash: settings.lut_hash
-          });
-        } else {
-          setProjectLut(null);
-        }
+        const shelf: LutShelfEntry[] = Array.isArray(settings.lut_shelf)
+          ? settings.lut_shelf
+              .filter((e: any) => e && e.path && e.hash)
+              .map((e: any) => ({ path: e.path, name: e.name || "LUT", hash: e.hash }))
+          : settings.lut_path
+            ? [{ path: settings.lut_path, name: settings.lut_name || "LUT", hash: settings.lut_hash }]
+            : [];
+        setProjectLutShelf(shelf);
+        const activeHash = settings.active_lut_hash || settings.lut_hash || shelf[0]?.hash || null;
+        setProjectLut(shelf.find((e) => e.hash === activeHash) ?? shelf[0] ?? null);
       } else {
+        setProjectLutShelf([]);
         setProjectLut(null);
       }
     } catch (e) {
       console.error("Failed to fetch project settings", e);
+      setProjectLutShelf([]);
       setProjectLut(null);
     }
   }, [safeInvoke]);
@@ -653,15 +658,42 @@ function AppContent() {
     });
     if (!selected || typeof selected !== "string") return;
     try {
-      await invoke("set_project_lut", { projectId, lutPath: selected });
+      const hash = await invoke<string>("add_project_lut", { projectId, lutPath: selected });
       await fetchProjectSettings(projectId);
       await invoke("set_all_clips_lut", { projectId, enabled: 1 });
-      await invoke("generate_lut_thumbnails", { projectId });
+      await invoke("generate_lut_thumbnails", { projectId, lutHash: hash });
       setLutRenderNonce((n) => n + 1);
-      setUiNotice({ title: "LUT loaded", hint: "Review thumbnails can now use the selected project LUT." });
+      setUiNotice({ title: "LUT added", hint: "It is now the active preview LUT — switch between loaded LUTs from the LUT row." });
     } catch (error) {
       console.error("Failed to load project LUT", error);
       setUiError({ title: "Could not load LUT", hint: String(error) });
+    }
+  }, [fetchProjectSettings, projectId]);
+
+  const handleSelectProjectLut = useCallback(async (hash: string) => {
+    if (!projectId) return;
+    try {
+      await invoke("set_active_project_lut", { projectId, lutHash: hash });
+      await fetchProjectSettings(projectId);
+      // Renders only what isn't already cached for this LUT — switching back to
+      // a previously-rendered LUT is instant.
+      await invoke("generate_lut_thumbnails", { projectId, lutHash: hash });
+      setLutRenderNonce((n) => n + 1);
+    } catch (error) {
+      console.error("Failed to switch project LUT", error);
+      setUiError({ title: "Could not switch LUT", hint: String(error) });
+    }
+  }, [fetchProjectSettings, projectId]);
+
+  const handleRemoveOneLut = useCallback(async (hash: string) => {
+    if (!projectId) return;
+    try {
+      await invoke("remove_project_lut", { projectId, lutHash: hash });
+      await fetchProjectSettings(projectId);
+      setLutRenderNonce((n) => n + 1);
+    } catch (error) {
+      console.error("Failed to remove LUT", error);
+      setUiError({ title: "Could not remove LUT", hint: String(error) });
     }
   }, [fetchProjectSettings, projectId]);
 
@@ -2090,8 +2122,42 @@ function AppContent() {
                         <div className="stat-header">
                           <span className="stat-label">Project LUT</span>
                         </div>
-                        <span className="stat-value">{projectLut ? projectLut.name : "None"}</span>
-                        <span className="stat-sub">{projectLut ? "LUT preview available in Review" : "Load a .cube LUT for review previews"}</span>
+                        {projectLutShelf.length > 0 ? (
+                          <div className="lut-shelf">
+                            {projectLutShelf.map((lut) => (
+                              <span
+                                key={lut.hash}
+                                className={`lut-pill ${projectLut?.hash === lut.hash ? 'active' : ''}`}
+                              >
+                                <button
+                                  type="button"
+                                  className="lut-pill-select"
+                                  onClick={() => void handleSelectProjectLut(lut.hash)}
+                                  title={`Preview with ${lut.name}`}
+                                >
+                                  {lut.name}
+                                </button>
+                                <button
+                                  type="button"
+                                  className="lut-pill-remove"
+                                  onClick={() => void handleRemoveOneLut(lut.hash)}
+                                  title={`Remove ${lut.name}`}
+                                  aria-label={`Remove ${lut.name}`}
+                                >
+                                  <XCircle size={12} />
+                                </button>
+                              </span>
+                            ))}
+                            <button type="button" className="lut-pill lut-pill-add" onClick={handleLoadProjectLut} title="Add another LUT">
+                              <FolderOpen size={12} /> Add
+                            </button>
+                          </div>
+                        ) : (
+                          <>
+                            <span className="stat-value">None</span>
+                            <span className="stat-sub">Load a .cube LUT for review previews</span>
+                          </>
+                        )}
                       </div>
                     </div>
 
@@ -2165,12 +2231,12 @@ function AppContent() {
                         </div>
                         <button className="btn btn-secondary btn-sm" onClick={handleLoadProjectLut}>
                           <FolderOpen size={14} />
-                          <span>{projectLut ? "Replace LUT" : "Load LUT"}</span>
+                          <span>Add LUT</span>
                         </button>
-                        {projectLut && (
+                        {projectLutShelf.length > 0 && (
                           <button className="btn btn-ghost btn-sm" onClick={handleRemoveProjectLut}>
                             <XCircle size={14} />
-                            <span>Clear LUT</span>
+                            <span>Clear all</span>
                           </button>
                         )}
                       </div>

@@ -323,6 +323,8 @@ pub fn run() {
             commands::reorder_scene_block_clips,
             commands::promote_clip_to_block,
             commands::set_project_lut,
+            commands::add_project_lut,
+            commands::set_active_project_lut,
             commands::remove_project_lut,
             commands::set_clip_lut_enabled,
             commands::set_all_clips_lut,

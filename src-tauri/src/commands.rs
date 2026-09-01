@@ -1856,9 +1856,44 @@ pub async fn extract_audio_waveform(
     }
 }
 
+/// Resolve a `(lut_path, lut_hash)` pair from project settings. When
+/// `requested_hash` is given, look it up in the `lut_shelf`; otherwise use the
+/// active / legacy single-LUT fields.
+fn resolve_project_lut(
+    settings_val: &serde_json::Value,
+    requested_hash: Option<&str>,
+) -> Option<(String, String)> {
+    if let Some(hash) = requested_hash {
+        if let Some(arr) = settings_val.get("lut_shelf").and_then(|v| v.as_array()) {
+            for entry in arr {
+                if entry.get("hash").and_then(|h| h.as_str()) == Some(hash) {
+                    let path = entry.get("path").and_then(|p| p.as_str())?.to_string();
+                    if !path.is_empty() {
+                        return Some((path, hash.to_string()));
+                    }
+                }
+            }
+        }
+        if settings_val.get("lut_hash").and_then(|h| h.as_str()) == Some(hash) {
+            let path = settings_val.get("lut_path").and_then(|p| p.as_str())?.to_string();
+            if !path.is_empty() {
+                return Some((path, hash.to_string()));
+            }
+        }
+        return None;
+    }
+    let path = settings_val.get("lut_path").and_then(|p| p.as_str())?.to_string();
+    let hash = settings_val.get("lut_hash").and_then(|h| h.as_str())?.to_string();
+    if path.is_empty() || hash.is_empty() {
+        return None;
+    }
+    Some((path, hash))
+}
+
 #[tauri::command]
 pub async fn generate_lut_thumbnails(
     project_id: String,
+    lut_hash: Option<String>,
     app: AppHandle,
     state: State<'_, Arc<AppState>>,
 ) -> Result<String, String> {
@@ -1872,12 +1907,8 @@ pub async fn generate_lut_thumbnails(
     let settings_val: serde_json::Value =
         serde_json::from_str(&settings.settings_json).map_err(|e| e.to_string())?;
 
-    let lut_path = settings_val["lut_path"].as_str().unwrap_or("").to_string();
-    let lut_hash = settings_val["lut_hash"].as_str().unwrap_or("").to_string();
-
-    if lut_path.is_empty() || lut_hash.is_empty() {
-        return Err("Invalid LUT settings".to_string());
-    }
+    let (lut_path, lut_hash) = resolve_project_lut(&settings_val, lut_hash.as_deref())
+        .ok_or_else(|| "Invalid LUT settings".to_string())?;
 
     let lut_content = std::fs::read_to_string(&lut_path).map_err(|e| e.to_string())?;
     let lut = Arc::new(crate::lut::Lut3D::parse_cube(&lut_content).map_err(|e| e.to_string())?);
@@ -1924,6 +1955,7 @@ pub async fn generate_lut_thumbnails(
             .unwrap_or(4);
         let semaphore = Arc::new(Semaphore::new(max_parallel));
         let completed_clips = Arc::new(AtomicUsize::new(0));
+        let failed_total = Arc::new(AtomicUsize::new(0));
         let mut set = tokio::task::JoinSet::new();
 
         for (clip_idx, clip) in clips.into_iter().enumerate() {
@@ -1940,6 +1972,7 @@ pub async fn generate_lut_thumbnails(
             let cancel_flag_task = cancel_flag.clone();
             let job_id_task = job_id_clone.clone();
             let completed_task = completed_clips.clone();
+            let failed_total_task = failed_total.clone();
 
             set.spawn(async move {
                 let _permit = semaphore_task.acquire().await.unwrap();
@@ -1951,16 +1984,17 @@ pub async fn generate_lut_thumbnails(
                 let state_blocking = state_task.clone();
                 let lut_blocking = lut_task.clone();
                 let lut_hash_blocking = lut_hash_task.clone();
-                let processed_thumbs = match tokio::task::spawn_blocking(move || -> Result<Vec<Thumbnail>, String> {
+                let (processed_thumbs, failed_thumbs) = match tokio::task::spawn_blocking(move || -> Result<(Vec<Thumbnail>, usize), String> {
                     let thumbnails = state_blocking
                         .db
                         .get_thumbnails(&clip_id)
                         .map_err(|e| e.to_string())?;
                     if thumbnails.is_empty() {
-                        return Ok(vec![]);
+                        return Ok((vec![], 0));
                     }
 
                     let mut processed_thumbs = Vec::with_capacity(thumbnails.len());
+                    let mut failed = 0usize;
                     for thumb in &thumbnails {
                         let original_name = Path::new(&thumb.file_path)
                             .file_name()
@@ -1992,23 +2026,27 @@ pub async fn generate_lut_thumbnails(
                                 processed_thumbs.push(new_thumb);
                             }
                             Err(err) => {
+                                failed += 1;
                                 eprintln!("LUT processing failed for {}: {}", thumb.file_path, err);
                             }
                         }
                     }
 
-                    Ok(processed_thumbs)
+                    Ok((processed_thumbs, failed))
                 }).await {
                     Ok(Ok(processed)) => processed,
                     Ok(Err(error)) => {
                         eprintln!("LUT processing failed for clip {}: {}", clip.id, error);
-                        Vec::new()
+                        (Vec::new(), 1)
                     }
                     Err(error) => {
                         eprintln!("LUT processing task failed for clip {}: {}", clip.id, error);
-                        Vec::new()
+                        (Vec::new(), 1)
                     }
                 };
+                if failed_thumbs > 0 {
+                    failed_total_task.fetch_add(failed_thumbs, Ordering::Relaxed);
+                }
 
                 let done = completed_task.fetch_add(1, Ordering::Relaxed) + 1;
                 let progress = (done as f32 / total_clips as f32).clamp(0.01, 1.0);
@@ -2034,7 +2072,15 @@ pub async fn generate_lut_thumbnails(
         if cancel_flag.load(Ordering::Relaxed) {
              state_inner.job_manager.mark_failed(&job_id_clone, "LUT processing cancelled");
         } else {
-            state_inner.job_manager.mark_done(&job_id_clone, "LUT thumbnails processing complete");
+            let failed = failed_total.load(Ordering::Relaxed);
+            if failed > 0 {
+                state_inner.job_manager.mark_done(
+                    &job_id_clone,
+                    &format!("LUT thumbnails complete — {} frame(s) could not be processed", failed),
+                );
+            } else {
+                state_inner.job_manager.mark_done(&job_id_clone, "LUT thumbnails processing complete");
+            }
         }
         emit_job_state(&app_clone, &state_inner.job_manager, &job_id_clone);
     });
@@ -2230,62 +2276,180 @@ pub async fn get_scene_blocks(
     Ok(result)
 }
 
+fn load_settings_object(
+    db: &crate::db::Database,
+    project_id: &str,
+) -> serde_json::Map<String, serde_json::Value> {
+    db.get_project_settings(project_id)
+        .ok()
+        .flatten()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s.settings_json).ok())
+        .and_then(|v| v.as_object().cloned())
+        .unwrap_or_default()
+}
+
+fn save_settings_object(
+    db: &crate::db::Database,
+    project_id: &str,
+    obj: serde_json::Map<String, serde_json::Value>,
+) -> Result<(), String> {
+    db.upsert_project_settings(&crate::db::ProjectSettings {
+        project_id: project_id.to_string(),
+        settings_json: serde_json::Value::Object(obj).to_string(),
+    })
+    .map_err(|e| format!("Failed to save project settings: {}", e))
+}
+
+/// Parse + hash a `.cube` file, returning `(name, hash)`.
+fn read_lut_identity(lut_path: &str) -> Result<(String, String), String> {
+    let content = std::fs::read_to_string(lut_path)
+        .map_err(|e| format!("Failed to read LUT file: {}", e))?;
+    crate::lut::Lut3D::parse_cube(&content).map_err(|e| format!("Invalid LUT format: {}", e))?;
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(content.as_bytes());
+    let hash_hex = hasher.finalize().to_hex()[..16].to_string();
+    let name = std::path::Path::new(lut_path)
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "Unknown LUT".to_string());
+    Ok((name, hash_hex))
+}
+
+fn mirror_active_lut(obj: &mut serde_json::Map<String, serde_json::Value>, hash: Option<&str>) {
+    use serde_json::Value;
+    let entry = hash.and_then(|h| {
+        obj.get("lut_shelf")
+            .and_then(|v| v.as_array())
+            .and_then(|arr| {
+                arr.iter()
+                    .find(|e| e.get("hash").and_then(|x| x.as_str()) == Some(h))
+                    .cloned()
+            })
+    });
+    match (hash, entry) {
+        (Some(h), Some(e)) => {
+            obj.insert("active_lut_hash".into(), Value::String(h.to_string()));
+            obj.insert("lut_hash".into(), Value::String(h.to_string()));
+            if let Some(p) = e.get("path").and_then(|x| x.as_str()) {
+                obj.insert("lut_path".into(), Value::String(p.to_string()));
+            }
+            if let Some(n) = e.get("name").and_then(|x| x.as_str()) {
+                obj.insert("lut_name".into(), Value::String(n.to_string()));
+            }
+        }
+        _ => {
+            obj.remove("active_lut_hash");
+            obj.remove("lut_hash");
+            obj.remove("lut_path");
+            obj.remove("lut_name");
+        }
+    }
+}
+
+/// Legacy single-LUT command — replace the shelf with just this LUT.
 #[tauri::command]
 pub async fn set_project_lut(
     project_id: String,
     lut_path: String,
     state: State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
-    use crate::db::ProjectSettings;
-    use crate::lut::Lut3D;
-    use blake3;
-    use serde_json::json;
-
-    let content = std::fs::read_to_string(&lut_path)
-        .map_err(|e| format!("Failed to read LUT file: {}", e))?;
-
-    let _parsed = Lut3D::parse_cube(&content).map_err(|e| format!("Invalid LUT format: {}", e))?;
-
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(content.as_bytes());
-    let hash_hex = hasher.finalize().to_hex()[..16].to_string();
-
-    let lut_name = std::path::Path::new(&lut_path)
-        .file_stem()
-        .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_else(|| "Unknown LUT".to_string());
-
-    let settings = json!({
-        "lut_path": lut_path,
-        "lut_name": lut_name,
-        "lut_hash": hash_hex,
-        "lut_loaded_at": chrono::Utc::now().to_rfc3339(),
-    });
-
-    let project_settings = ProjectSettings {
-        project_id,
-        settings_json: settings.to_string(),
-    };
-
-    let db = &state.db;
-    db.upsert_project_settings(&project_settings)
-        .map_err(|e| format!("Failed to save project settings: {}", e))
+    let (name, hash) = read_lut_identity(&lut_path)?;
+    let mut obj = load_settings_object(&state.db, &project_id);
+    obj.insert(
+        "lut_shelf".into(),
+        serde_json::json!([{
+            "path": lut_path,
+            "name": name,
+            "hash": hash,
+            "loaded_at": chrono::Utc::now().to_rfc3339(),
+        }]),
+    );
+    mirror_active_lut(&mut obj, Some(&hash));
+    save_settings_object(&state.db, &project_id, obj)
 }
 
+/// Add a LUT to the project's shelf (deduped by content hash) and make it active.
+#[tauri::command]
+pub async fn add_project_lut(
+    project_id: String,
+    lut_path: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<String, String> {
+    let (name, hash) = read_lut_identity(&lut_path)?;
+    let mut obj = load_settings_object(&state.db, &project_id);
+    let mut shelf: Vec<serde_json::Value> = obj
+        .get("lut_shelf")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    if !shelf
+        .iter()
+        .any(|e| e.get("hash").and_then(|x| x.as_str()) == Some(hash.as_str()))
+    {
+        shelf.push(serde_json::json!({
+            "path": lut_path,
+            "name": name,
+            "hash": hash,
+            "loaded_at": chrono::Utc::now().to_rfc3339(),
+        }));
+    }
+    obj.insert("lut_shelf".into(), serde_json::Value::Array(shelf));
+    mirror_active_lut(&mut obj, Some(&hash));
+    save_settings_object(&state.db, &project_id, obj)?;
+    Ok(hash)
+}
+
+/// Switch the active LUT to one already on the shelf.
+#[tauri::command]
+pub async fn set_active_project_lut(
+    project_id: String,
+    lut_hash: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<(), String> {
+    let mut obj = load_settings_object(&state.db, &project_id);
+    let on_shelf = obj
+        .get("lut_shelf")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .any(|e| e.get("hash").and_then(|x| x.as_str()) == Some(lut_hash.as_str()))
+        })
+        .unwrap_or(false);
+    if !on_shelf {
+        return Err("That LUT is not loaded for this project.".to_string());
+    }
+    mirror_active_lut(&mut obj, Some(&lut_hash));
+    save_settings_object(&state.db, &project_id, obj)
+}
+
+/// Remove one LUT from the shelf (`lut_hash` given) or clear all LUT state.
 #[tauri::command]
 pub async fn remove_project_lut(
     project_id: String,
+    lut_hash: Option<String>,
     state: State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
-    use crate::db::ProjectSettings;
-    let db = &state.db;
-    let project_settings = ProjectSettings {
-        project_id,
-        settings_json: "{}".to_string(),
-    };
-
-    db.upsert_project_settings(&project_settings)
-        .map_err(|e| format!("Failed to clear project settings: {}", e))
+    let mut obj = load_settings_object(&state.db, &project_id);
+    match lut_hash {
+        Some(hash) => {
+            let mut shelf: Vec<serde_json::Value> = obj
+                .get("lut_shelf")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+            shelf.retain(|e| e.get("hash").and_then(|x| x.as_str()) != Some(hash.as_str()));
+            let next_active = shelf
+                .first()
+                .and_then(|e| e.get("hash").and_then(|x| x.as_str()).map(String::from));
+            obj.insert("lut_shelf".into(), serde_json::Value::Array(shelf));
+            mirror_active_lut(&mut obj, next_active.as_deref());
+        }
+        None => {
+            obj.remove("lut_shelf");
+            mirror_active_lut(&mut obj, None);
+        }
+    }
+    save_settings_object(&state.db, &project_id, obj)
 }
 
 #[tauri::command]

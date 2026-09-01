@@ -2831,6 +2831,80 @@ body {
   color: #4ade80;
 }
 
+/* Loaded-LUT shelf — switch the active preview LUT without re-loading. */
+.lut-shelf {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.lut-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 4px 0 0;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 11px;
+  overflow: hidden;
+}
+
+.lut-pill.active {
+  border-color: rgba(45, 212, 191, 0.5);
+  background: rgba(45, 212, 191, 0.12);
+}
+
+.lut-pill-select {
+  padding: 5px 4px 5px 12px;
+  background: none;
+  border: none;
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lut-pill.active .lut-pill-select {
+  color: #5eead4;
+}
+
+.lut-pill-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.lut-pill-remove:hover {
+  color: var(--status-red);
+  background: rgba(239, 68, 68, 0.12);
+}
+
+.lut-pill-add {
+  padding: 5px 10px;
+  color: var(--text-secondary);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.lut-pill-add:hover {
+  border-color: rgba(255, 255, 255, 0.24);
+  color: var(--text-primary);
+}
+
 .stat-value-total {
   font-size: 15px;
   font-weight: 600;
