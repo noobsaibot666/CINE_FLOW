@@ -11,6 +11,11 @@ pub struct ProductionMediaCapabilityReport {
     pub proxy_required: bool,
     pub recommended_proxy_tool: Option<String>,
     pub warnings: Vec<String>,
+    /// Live decode-provider availability for this format (see
+    /// `production_decoder_status`). Populated by the capability-report command;
+    /// `None` on the internal analysis path.
+    #[serde(default)]
+    pub decoder_status: Option<crate::production_decoder_status::DecoderStatus>,
 }
 
 pub fn classify_media_source(source_path: &str) -> ProductionMediaCapabilityReport {
@@ -104,6 +109,7 @@ pub fn classify_media_source_with_libraw(
                 "Unsupported source extension. Import a ProRes, DNxHR, H.264, H.265, or HEVC proxy for analysis."
                     .to_string(),
             ],
+            decoder_status: None,
         },
     }
 }
@@ -122,6 +128,7 @@ fn direct_original(
         proxy_required: false,
         recommended_proxy_tool: None,
         warnings,
+        decoder_status: None,
     }
 }
 
@@ -142,6 +149,7 @@ fn vendor_decoded(
             "Original camera RAW source requires a vendor decode path before ACES analysis."
                 .to_string(),
         ],
+        decoder_status: None,
     }
 }
 
@@ -160,6 +168,7 @@ fn native_candidate(
         proxy_required: true,
         recommended_proxy_tool: Some(recommended_proxy_tool.to_string()),
         warnings: vec![warning.to_string()],
+        decoder_status: None,
     }
 }
 
@@ -178,6 +187,7 @@ fn operator_proxy(
         proxy_required: true,
         recommended_proxy_tool: Some(recommended_proxy_tool.to_string()),
         warnings: vec![warning.to_string()],
+        decoder_status: None,
     }
 }
 

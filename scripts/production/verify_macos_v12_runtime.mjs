@@ -24,6 +24,16 @@ const requiredChecks = [
   fileCheck("ffmpeg", "FFmpeg sidecar", join(macos, "ffmpeg")),
   fileCheck("ffprobe", "FFprobe sidecar", join(macos, "ffprobe")),
   fileCheck("braw-bridge", "BRAW bridge sidecar", join(macos, "braw_bridge")),
+  anyFileCheck(
+    "braw-sdk",
+    "Blackmagic RAW SDK runtime (BlackmagicRawAPI.framework)",
+    [
+      join(macos, "Libraries", "BlackmagicRawAPI.framework"),
+      join(resources, "Libraries", "BlackmagicRawAPI.framework"),
+      join(resources, "resources", "Libraries", "BlackmagicRawAPI.framework"),
+    ],
+    "fail",
+  ),
   fileCheck("redline", "REDline sidecar", join(macos, "REDline")),
   fileCheck("resources", "Bundled resources directory", join(resources, "resources")),
   fileCheck("camera-profiles", "Camera profiles resource", join(resources, "resources", "camera_profiles.json")),
@@ -104,13 +114,13 @@ function fileCheck(id, label, path, missingStatus = "fail") {
   };
 }
 
-function anyFileCheck(id, label, paths) {
+function anyFileCheck(id, label, paths, missingStatus = "blocked") {
   const found = paths.find((path) => existsSync(path));
   return {
     id,
     label,
     path: found ?? paths.join(" | "),
-    status: found ? "pass" : "blocked",
+    status: found ? "pass" : missingStatus,
     detail: found ? sizeDetail(found) : "not bundled",
   };
 }

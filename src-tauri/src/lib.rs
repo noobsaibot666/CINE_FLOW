@@ -24,6 +24,7 @@ pub mod production_ocio_processor;
 pub mod production_libraw;
 mod production_match_lab;
 pub mod production_media_capabilities;
+pub mod production_decoder_status;
 pub mod production_raw_ingest;
 pub mod production_v12_readiness;
 mod review_core;
@@ -393,6 +394,9 @@ pub fn run() {
             commands::production_list_presets,
             commands::production_get_preset,
             commands::production_get_media_capability_report,
+            commands::production_decoder_status,
+            commands::production_set_decoder_path,
+            commands::production_clear_decoder_path,
             commands::production_get_raw_ingest_report,
             commands::production_get_ocio_config_status,
             commands::production_get_v12_readiness_report,

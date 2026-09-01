@@ -828,6 +828,26 @@ export interface CameraMatchResult {
     generated_at: string;
 }
 
+export interface ProductionDecoderSetup {
+    download_url?: string | null;
+    download_label?: string | null;
+    steps: string[];
+    locate_key?: string | null;
+    locate_kind?: string | null;
+    locate_hint?: string | null;
+}
+
+export interface ProductionDecoderStatus {
+    family: string;
+    label: string;
+    state: "available" | "needs_setup" | "unavailable";
+    provider?: string | null;
+    detail: string;
+    version?: string | null;
+    path?: string | null;
+    setup?: ProductionDecoderSetup | null;
+}
+
 export interface ProductionMediaCapabilityReport {
     source_path: string;
     format_family: string;
@@ -837,6 +857,7 @@ export interface ProductionMediaCapabilityReport {
     proxy_required: boolean;
     recommended_proxy_tool?: string | null;
     warnings: string[];
+    decoder_status?: ProductionDecoderStatus | null;
 }
 
 export interface ProductionOcioConfigStatus {

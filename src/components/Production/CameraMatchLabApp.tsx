@@ -1,6 +1,7 @@
 import React, { startTransition, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, BarChart3, ChevronDown, HelpCircle, Download, FolderOpen, Gauge, ImageIcon, Info, Maximize2, Palette, Pipette, RefreshCw, Trash2, Waves } from "lucide-react";
 import { open, save } from "@tauri-apps/plugin-dialog";
+import { openExternalUrl } from "../../utils/externalLinks";
 import {
   CalibrationChartDetection,
   CalibrationPoint,
@@ -10,6 +11,7 @@ import {
   CameraMatchDelta,
   CameraMatchMetrics,
   CameraMatchSuggestionSet,
+  ProductionDecoderStatus,
   ProductionMediaCapabilityReport,
   ProductionOcioConfigStatus,
   ProductionMatchLabRun,
@@ -132,6 +134,9 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
   const [analysisOverrideBySlot, setAnalysisOverrideBySlot] = useState<Record<string, string>>({});
   const [analysisBySlot, setAnalysisBySlot] = useState<Record<string, CameraMatchAnalysisResult>>({});
   const [capabilityBySlot, setCapabilityBySlot] = useState<Record<string, ProductionMediaCapabilityReport>>({});
+  const [decoderStatuses, setDecoderStatuses] = useState<ProductionDecoderStatus[]>([]);
+  const [decoderSetupOpen, setDecoderSetupOpen] = useState(false);
+  const [decoderRefreshNonce, setDecoderRefreshNonce] = useState(0);
   const [sourceProfileBySlot, setSourceProfileBySlot] = useState<Record<string, ProductionSourceProfileId>>({});
   const [ocioStatusBySlot, setOcioStatusBySlot] = useState<Record<string, ProductionOcioConfigStatus>>({});
   const [frameDataUrls, setFrameDataUrls] = useState<Record<string, string>>({});
@@ -302,6 +307,7 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
             proxy_required: true,
             recommended_proxy_tool: null,
             warnings: ["Capability report unavailable. Attach a supported proxy before relying on this analysis."],
+            decoder_status: null,
           };
         }
       }));
@@ -315,7 +321,45 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
     return () => {
       cancelled = true;
     };
-  }, [clipsBySlot]);
+  }, [clipsBySlot, decoderRefreshNonce]);
+
+  const refreshDecoderStatuses = React.useCallback(async () => {
+    try {
+      setDecoderStatuses(await invokeGuarded<ProductionDecoderStatus[]>("production_decoder_status"));
+    } catch (error) {
+      console.error("Failed to read decoder status", error);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshDecoderStatuses();
+  }, [refreshDecoderStatuses]);
+
+  const locateDecoder = React.useCallback(async (key: string, kind: string | null | undefined) => {
+    const picked = await open({
+      directory: kind === "directory",
+      multiple: false,
+      title: "Locate decoder",
+    });
+    if (!picked || typeof picked !== "string") return;
+    try {
+      await invokeGuarded("production_set_decoder_path", { key, path: picked });
+      await refreshDecoderStatuses();
+      setDecoderRefreshNonce((n) => n + 1);
+    } catch (error) {
+      console.error("Failed to save decoder path", error);
+    }
+  }, [refreshDecoderStatuses]);
+
+  const clearDecoder = React.useCallback(async (key: string) => {
+    try {
+      await invokeGuarded("production_clear_decoder_path", { key });
+      await refreshDecoderStatuses();
+      setDecoderRefreshNonce((n) => n + 1);
+    } catch (error) {
+      console.error("Failed to clear decoder path", error);
+    }
+  }, [refreshDecoderStatuses]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1311,7 +1355,17 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
             </div>
           </div>
 
-          <SourceSupportStrip />
+          <SourceSupportStrip decoderStatuses={decoderStatuses} onOpenDecoderSetup={() => setDecoderSetupOpen(true)} />
+
+          {decoderSetupOpen && (
+            <DecoderSetupPanel
+              statuses={decoderStatuses}
+              onClose={() => setDecoderSetupOpen(false)}
+              onRefresh={() => void refreshDecoderStatuses()}
+              onLocate={(key, kind) => void locateDecoder(key, kind)}
+              onClear={(key) => void clearDecoder(key)}
+            />
+          )}
 
           <section className="matchLabGrid" style={gridStyle}>
             {SLOT_ORDER.map((slot) => {
@@ -1436,6 +1490,20 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                     ) : null}
                     {sourceWorkflow ? (
                       <SourceWorkflowNotice workflow={sourceWorkflow} onPickProxy={() => void pickExistingProxy(slot)} />
+                    ) : null}
+                    {capability?.decoder_status?.state === "needs_setup" ? (
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-sm"
+                        style={{ marginTop: 8 }}
+                        onClick={() => setDecoderSetupOpen(true)}
+                      >
+                        <Gauge size={14} /> Set up {capability.decoder_status.label} decoder
+                      </button>
+                    ) : capability?.decoder_status?.provider === "resolve" ? (
+                      <div style={{ ...sourceMetaInlineStyle, marginTop: 6 }}>
+                        Will decode via DaVinci Resolve.
+                      </div>
                     ) : null}
                     {clipPath ? (
                       <div style={transformIntentPanelStyle}>
@@ -2863,7 +2931,14 @@ function MatchMethodBanner({
   );
 }
 
-function SourceSupportStrip() {
+function SourceSupportStrip({
+  decoderStatuses,
+  onOpenDecoderSetup,
+}: {
+  decoderStatuses: ProductionDecoderStatus[];
+  onOpenDecoderSetup: () => void;
+}) {
+  const needsSetup = decoderStatuses.filter((d) => d.state === "needs_setup").length;
   return (
     <section className="production-source-support" style={sourceSupportStripStyle} aria-label="Supported camera sources">
       <div style={sourceSupportIntroStyle}>
@@ -2874,6 +2949,9 @@ function SourceSupportStrip() {
             Select video, BRAW, vendor RAW, and open camera RAW here. Trusted analysis requires a decoded frame path and OCIO processor path; otherwise the slot stays provisional with a clear blocker.
           </div>
         </div>
+        <button type="button" className="btn btn-ghost btn-sm" style={{ flexShrink: 0 }} onClick={onOpenDecoderSetup}>
+          <Gauge size={14} /> Decoder Setup{needsSetup > 0 ? ` · ${needsSetup} to set up` : ""}
+        </button>
       </div>
       <div style={sourceSupportGroupsStyle}>
         <SourceSupportGroup label="Direct video" value="MOV, MP4, MXF, MKV, AVI" tone="good" />
@@ -2882,6 +2960,84 @@ function SourceSupportStrip() {
         <SourceSupportGroup label="Proxy/vendor path" value="R3D, N-RAW, X-OCN, Canon RAW" tone="warning" />
       </div>
     </section>
+  );
+}
+
+function DecoderSetupPanel({
+  statuses,
+  onClose,
+  onRefresh,
+  onLocate,
+  onClear,
+}: {
+  statuses: ProductionDecoderStatus[];
+  onClose: () => void;
+  onRefresh: () => void;
+  onLocate: (key: string, kind: string | null | undefined) => void;
+  onClear: (key: string) => void;
+}) {
+  const toneFor = (state: string) =>
+    state === "available" ? "#86efac" : state === "needs_setup" ? "#fcd34d" : "#fca5a5";
+  return (
+    <div style={decoderPanelBackdropStyle} onClick={onClose}>
+      <div style={decoderPanelCardStyle} onClick={(e) => e.stopPropagation()}>
+        <div style={decoderPanelHeadStyle}>
+          <div>
+            <strong style={{ fontSize: "1rem" }}>Decoder Setup</strong>
+            <div style={{ ...sourceSupportBodyStyle, marginTop: 4 }}>
+              CineFlow analyses camera RAW through a decode provider. Bundled ones just work; the rest you install once or point us at. Nothing here blocks an analysis — unresolved formats fall back to an attached proxy.
+            </div>
+          </div>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={onRefresh}><RefreshCw size={14} /> Re-check</button>
+        </div>
+        <div style={{ display: "grid", gap: 10, overflowY: "auto" }}>
+          {statuses.map((d) => (
+            <div key={d.family} style={decoderRowStyle}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ width: 8, height: 8, borderRadius: 999, background: toneFor(d.state), flexShrink: 0 }} />
+                <strong style={{ fontSize: "0.88rem" }}>{d.label}</strong>
+                <span style={{ fontSize: "0.72rem", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                  {d.state === "available" ? `Ready · ${d.provider ?? ""}` : d.state === "needs_setup" ? "Needs setup" : "Unavailable"}
+                  {d.version ? ` · v${d.version}` : ""}
+                </span>
+              </div>
+              <div style={{ ...sourceSupportBodyStyle, marginTop: 2 }}>{d.detail}</div>
+              {d.path && <div style={{ fontSize: "0.72rem", color: "var(--text-muted)", wordBreak: "break-all" }}>{d.path}</div>}
+              {d.setup && (
+                <div style={{ display: "grid", gap: 6, marginTop: 6 }}>
+                  {d.setup.steps.length > 0 && (
+                    <ol style={{ margin: 0, paddingLeft: 18, fontSize: "0.78rem", color: "var(--text-secondary)", lineHeight: 1.5 }}>
+                      {d.setup.steps.map((s, i) => <li key={i}>{s}</li>)}
+                    </ol>
+                  )}
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    {d.setup.download_url && (
+                      <button type="button" className="btn btn-secondary btn-sm" onClick={() => void openExternalUrl(d.setup!.download_url!)}>
+                        <Download size={14} /> {d.setup.download_label ?? "Download"}
+                      </button>
+                    )}
+                    {d.setup.locate_key && (
+                      <button type="button" className="btn btn-ghost btn-sm" onClick={() => onLocate(d.setup!.locate_key!, d.setup!.locate_kind)}>
+                        <FolderOpen size={14} /> Locate…
+                      </button>
+                    )}
+                    {d.path && d.setup.locate_key && (
+                      <button type="button" className="btn btn-ghost btn-sm" onClick={() => onClear(d.setup!.locate_key!)}>
+                        <Trash2 size={14} /> Clear path
+                      </button>
+                    )}
+                  </div>
+                  {d.setup.locate_hint && <div style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>{d.setup.locate_hint}</div>}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+        <div style={{ display: "flex", justifyContent: "flex-end" }}>
+          <button type="button" className="btn btn-secondary btn-sm" onClick={onClose}>Done</button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -3899,6 +4055,10 @@ const modalActionsStyle: React.CSSProperties = { display: "flex", justifyContent
 const subtleStyle: React.CSSProperties = { margin: 0, color: "var(--text-muted)", maxWidth: 760, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", textAlign: "left" };
 const sourceSupportStripStyle: React.CSSProperties = { display: "grid", gridTemplateColumns: "minmax(240px, 1.1fr) minmax(0, 1.9fr)", gap: 12, marginBottom: 14, padding: 14, borderRadius: 16, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.025)", minWidth: 0 };
 const sourceSupportIntroStyle: React.CSSProperties = { display: "flex", alignItems: "flex-start", gap: 10, minWidth: 0, color: "rgba(216,212,223,0.92)" };
+const decoderPanelBackdropStyle: React.CSSProperties = { position: "fixed", inset: 0, zIndex: 4000, background: "rgba(0,0,0,0.55)", backdropFilter: "blur(3px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 };
+const decoderPanelCardStyle: React.CSSProperties = { width: "min(720px, 100%)", maxHeight: "82vh", display: "flex", flexDirection: "column", gap: 16, padding: 22, borderRadius: 18, border: "1px solid rgba(255,255,255,0.1)", background: "var(--inspector-bg, #14151a)", boxShadow: "0 24px 64px rgba(0,0,0,0.5)" };
+const decoderPanelHeadStyle: React.CSSProperties = { display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16 };
+const decoderRowStyle: React.CSSProperties = { display: "grid", gap: 3, padding: "12px 14px", borderRadius: 12, border: "1px solid rgba(255,255,255,0.07)", background: "rgba(255,255,255,0.02)" };
 const sourceSupportTextBlockStyle: React.CSSProperties = { display: "grid", gap: 4, minWidth: 0 };
 const sourceSupportTitleStyle: React.CSSProperties = { color: "var(--text-primary)", fontSize: "0.82rem", fontWeight: 800, lineHeight: 1.2 };
 const sourceSupportBodyStyle: React.CSSProperties = { color: "var(--text-secondary)", fontSize: "0.74rem", lineHeight: 1.45 };

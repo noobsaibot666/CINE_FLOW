@@ -1594,7 +1594,13 @@ fn tail_lines(value: &str, limit: usize) -> String {
 fn locate_braw_decoder(resource_dir: Option<&Path>) -> Option<(String, Option<String>)> {
     let sdk_subpath = Path::new("Libraries").join("BlackmagicRawAPI.framework");
 
-    let sdk_present_at = |dir: &Path| dir.join(&sdk_subpath).exists();
+    let sdk_present_at = |dir: &Path| {
+        // macOS: bundled framework in ./Libraries/. Windows: BlackmagicRawAPI.dll
+        // next to the bridge exe. Linux: the .so next to it.
+        dir.join(&sdk_subpath).exists()
+            || dir.join("BlackmagicRawAPI.dll").exists()
+            || dir.join("libBlackmagicRawAPI.so").exists()
+    };
 
     // 1. Bundled sidecar — preferred in production when SDK is adjacent (dev) or in resources
     let path = crate::tools::find_executable("braw_bridge");

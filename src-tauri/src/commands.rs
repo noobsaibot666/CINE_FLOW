@@ -7785,13 +7785,66 @@ pub async fn production_get_preset(
 #[tauri::command]
 pub async fn production_get_media_capability_report(
     source_path: String,
+    state: State<'_, Arc<AppState>>,
     app: AppHandle,
 ) -> Result<crate::production_media_capabilities::ProductionMediaCapabilityReport, String> {
     let resource_dir = app.path().resource_dir().ok();
-    Ok(crate::production_media_capabilities::classify_media_source_from_environment_and_resources(
-        &source_path,
+    let mut report =
+        crate::production_media_capabilities::classify_media_source_from_environment_and_resources(
+            &source_path,
+            resource_dir.as_deref(),
+        );
+    report.decoder_status = crate::production_decoder_status::probe_decoder_for_family(
+        &report.format_family,
+        &state.app_data_dir,
+        resource_dir.as_deref(),
+    );
+    Ok(report)
+}
+
+#[tauri::command]
+pub async fn production_decoder_status(
+    state: State<'_, Arc<AppState>>,
+    app: AppHandle,
+) -> Result<Vec<crate::production_decoder_status::DecoderStatus>, String> {
+    let resource_dir = app.path().resource_dir().ok();
+    Ok(crate::production_decoder_status::probe_all_decoders(
+        &state.app_data_dir,
         resource_dir.as_deref(),
     ))
+}
+
+#[tauri::command]
+pub async fn production_set_decoder_path(
+    state: State<'_, Arc<AppState>>,
+    key: String,
+    path: String,
+) -> Result<(), String> {
+    let mut overrides =
+        crate::production_decoder_status::load_overrides(&state.app_data_dir);
+    match key.as_str() {
+        "braw_sdk_dir" => overrides.braw_sdk_dir = Some(path),
+        "red_sdk_dir" => overrides.red_sdk_dir = Some(path),
+        "resolve_path" => overrides.resolve_path = Some(path),
+        other => return Err(format!("Unknown decoder path key: {other}")),
+    }
+    crate::production_decoder_status::save_overrides(&state.app_data_dir, &overrides)
+}
+
+#[tauri::command]
+pub async fn production_clear_decoder_path(
+    state: State<'_, Arc<AppState>>,
+    key: String,
+) -> Result<(), String> {
+    let mut overrides =
+        crate::production_decoder_status::load_overrides(&state.app_data_dir);
+    match key.as_str() {
+        "braw_sdk_dir" => overrides.braw_sdk_dir = None,
+        "red_sdk_dir" => overrides.red_sdk_dir = None,
+        "resolve_path" => overrides.resolve_path = None,
+        other => return Err(format!("Unknown decoder path key: {other}")),
+    }
+    crate::production_decoder_status::save_overrides(&state.app_data_dir, &overrides)
 }
 
 #[tauri::command]
