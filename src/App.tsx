@@ -1043,12 +1043,12 @@ function AppContent() {
     },
     {
       target: ".tour-home-postproduction",
-      title: "Ingest & Review",
-      description: "Our high-speed post-production tools include Safe Copy for secure offloads and Review Core for visual verification.",
+      title: "Review & Deliver",
+      description: "Post-production covers Media Review for visual verification, Scene Blocks, and editorial handoff. (Checksum-verified Safe Copy offload now lives in Pre-production.)",
       placement: "bottom",
       learnMore: [
-        "Safe Copy uses checksums to ensure file integrity.",
-        "Review Core provides a deterministic HLS proxy playback environment."
+        "Media Review provides a deterministic proxy playback and tagging environment.",
+        "Scene Blocks organize reviewed clips into editorial groups."
       ]
     },
     {
@@ -1375,8 +1375,8 @@ function AppContent() {
         setActiveMediaWorkspaceApp("clip-review");
       },
       "nav-safe-copy": () => {
-        setActiveTab("media-workspace");
-        setActiveMediaWorkspaceApp("safe-copy");
+        setActiveTab("preproduction");
+        setActivePreproductionApp("safe-copy");
       },
     };
 
@@ -1973,6 +1973,10 @@ function AppContent() {
                     </div>
                   </div>
                 )
+              ) : activePreproductionApp === 'safe-copy' ? (
+                <div className="scrollable-view">
+                  <SafeCopy projectId={projectId ?? "__global__"} onError={setUiError} />
+                </div>
               ) : activePreproductionApp === 'folder-creator' ? (
                 <div className="scrollable-view">
                   <FolderCreator />
@@ -1993,6 +1997,17 @@ function AppContent() {
                       <p>Plan your shoot and organize your project structure.</p>
                     </div>
                     <div className="onboarding-grid module-launcher-grid onboarding-grid-root">
+                      <div
+                        className="module-card premium-card module-launcher-card"
+                        onClick={() => setActivePreproductionApp('safe-copy')}
+                      >
+                        <div className="module-icon"><ShieldCheck size={20} strokeWidth={1.5} /></div>
+                        <div className="module-info">
+                          <h3>Safe Copy</h3>
+                          <p>Checksum-verified media offload — copy source cards to your working drives with integrity proof.</p>
+                          <span className="module-action">Open App <ArrowRight size={14} /></span>
+                        </div>
+                      </div>
                       <div
                         className="module-card premium-card module-launcher-card"
                         onClick={() => setActivePreproductionApp('folder-creator')}
@@ -2048,12 +2063,7 @@ function AppContent() {
                 </div>
               )
             ) : activeTab === 'media-workspace' ? (
-              activeMediaWorkspaceApp === 'safe-copy' ? (
-                <div className="media-workspace">
-
-                  <SafeCopy projectId={projectId ?? "__global__"} onError={setUiError} />
-                </div>
-              ) : activeMediaWorkspaceApp === 'clip-review' ? (
+              activeMediaWorkspaceApp === 'clip-review' ? (
                 projectId ? (
                   <div className="media-workspace">
                     <div className="stats-bar">
@@ -2200,17 +2210,6 @@ function AppContent() {
                       <p>Post-production suite for media verification and organization.</p>
                     </div>
                     <div className="onboarding-grid module-launcher-grid workspace-apps-grid postproduction-apps-grid">
-                      <div
-                        className="module-card premium-card module-launcher-card"
-                        onClick={() => setActiveMediaWorkspaceApp('safe-copy')}
-                      >
-                        <div className="module-icon"><ShieldCheck size={20} strokeWidth={1.5} /></div>
-                        <div className="module-info">
-                          <h3>Safe Copy</h3>
-                          <p>Verify source and destination pairs before editorial work begins.</p>
-                          <span className="module-action">Open App <ArrowRight size={14} /></span>
-                        </div>
-                      </div>
                       <div
                         className="module-card premium-card module-launcher-card"
                         onClick={() => {
