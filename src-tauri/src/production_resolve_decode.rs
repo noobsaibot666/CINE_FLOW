@@ -7,7 +7,7 @@
 //! an actionable message; the caller always still has the "attach a proxy"
 //! fallback.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[cfg(target_os = "macos")]
 const DEFAULTS: ResolveEnv = ResolveEnv {
@@ -34,14 +34,20 @@ const DRIVER_PY: &str = r#"
 import sys, os, time
 
 src, out_dir, out_name = sys.argv[1], sys.argv[2], sys.argv[3]
+
+resolve = None
 try:
     import DaVinciResolveScript as dvr
-except Exception as e:
-    print("ERR: cannot import DaVinciResolveScript: %s" % e); sys.exit(2)
+    resolve = dvr.scriptapp("Resolve")
+except Exception:
+    # Under Resolve's own fuscript, the bridge is a preloaded global.
+    try:
+        resolve = bmd.scriptapp("Resolve")  # noqa: F821
+    except Exception as e:
+        print("ERR: DaVinci Resolve scripting is unavailable: %s" % e); sys.exit(2)
 
-resolve = dvr.scriptapp("Resolve")
 if resolve is None:
-    print("ERR: DaVinci Resolve is not running"); sys.exit(3)
+    print("ERR: DaVinci Resolve is not running — open it and try again"); sys.exit(3)
 
 pm = resolve.GetProjectManager()
 proj_name = "CineFlow_ProxyTmp"
@@ -81,16 +87,6 @@ finally:
     pm.DeleteProject(proj_name)
 "#;
 
-fn python_bin() -> String {
-    for candidate in ["python3", "python"] {
-        let found = crate::tools::find_executable(candidate);
-        if found != candidate || which_ok(candidate) {
-            return found;
-        }
-    }
-    "python3".to_string()
-}
-
 fn which_ok(name: &str) -> bool {
     std::process::Command::new(name)
         .arg("--version")
@@ -99,10 +95,38 @@ fn which_ok(name: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Resolve ships `fuscript`, which runs Python with the scripting modules
+/// already wired up — no system Python or env vars needed. Prefer it; fall back
+/// to a system `python3` with the RESOLVE_SCRIPT_* environment.
+fn locate_fuscript(resolve_path: &str) -> Option<PathBuf> {
+    let mut roots: Vec<PathBuf> = Vec::new();
+    let p = Path::new(resolve_path);
+    if resolve_path.ends_with(".app") {
+        roots.push(p.join("Contents/Libraries/Fusion"));
+        roots.push(p.join("Contents/MacOS"));
+    } else if let Some(dir) = p.parent() {
+        roots.push(dir.to_path_buf());
+    }
+    roots.push(PathBuf::from("/opt/resolve/libs/Fusion"));
+    roots.push(PathBuf::from("/opt/resolve/bin"));
+    for root in roots {
+        for name in ["fuscript", "fuscript.exe"] {
+            let candidate = root.join(name);
+            if candidate.exists() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
 /// Render `input_path` to an mp4 proxy via a running DaVinci Resolve.
-/// `output_path` is the desired final proxy file; on success the rendered file
-/// is moved there.
-pub fn create_proxy_via_resolve(input_path: &str, output_path: &Path) -> Result<(), String> {
+/// `output_path` is the desired final proxy file.
+pub fn create_proxy_via_resolve(
+    input_path: &str,
+    output_path: &Path,
+    resolve_path: &str,
+) -> Result<(), String> {
     let out_dir = output_path
         .parent()
         .ok_or_else(|| "Proxy output path has no parent directory".to_string())?;
@@ -125,16 +149,37 @@ pub fn create_proxy_via_resolve(input_path: &str, output_path: &Path) -> Result<
     };
 
     let out_name = "cineflow_resolve_proxy";
-    let output = crate::tools::create_command(&python_bin())
-        .env("RESOLVE_SCRIPT_API", &script_api)
-        .env("RESOLVE_SCRIPT_LIB", &script_lib)
-        .env("PYTHONPATH", &pythonpath)
-        .arg(&script_path.to_string_lossy().to_string())
+    let script_arg = script_path.to_string_lossy().to_string();
+    let scratch_arg = scratch.to_string_lossy().to_string();
+
+    let mut command = match locate_fuscript(resolve_path) {
+        Some(fuscript) => {
+            // fuscript preloads the scripting modules — no env needed.
+            let mut c = crate::tools::create_command(&fuscript.to_string_lossy());
+            c.args(["-l", "py3", &script_arg]);
+            c
+        }
+        None if which_ok("python3") => {
+            let mut c = crate::tools::create_command("python3");
+            c.env("RESOLVE_SCRIPT_API", &script_api)
+                .env("RESOLVE_SCRIPT_LIB", &script_lib)
+                .env("PYTHONPATH", &pythonpath)
+                .arg(&script_arg);
+            c
+        }
+        None => {
+            return Err(
+                "Can't run the DaVinci Resolve helper: neither Resolve's fuscript nor python3 was found. Install DaVinci Resolve, or attach an MP4/ProRes proxy for this slot."
+                    .to_string(),
+            );
+        }
+    };
+    let output = command
         .arg(input_path)
-        .arg(&scratch.to_string_lossy().to_string())
+        .arg(&scratch_arg)
         .arg(out_name)
         .output()
-        .map_err(|e| format!("Failed to launch the Resolve driver: {e}"))?;
+        .map_err(|e| format!("Failed to launch the Resolve helper: {e}"))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let rendered = stdout
@@ -153,9 +198,10 @@ pub fn create_proxy_via_resolve(input_path: &str, output_path: &Path) -> Result<
         ));
     };
 
-    std::fs::rename(rendered, output_path)
-        .or_else(|_| std::fs::copy(rendered, output_path).map(|_| ()))
-        .map_err(|e| format!("Resolve rendered a proxy but it could not be moved into place: {e}"))?;
+    // Resolve renders at timeline (= source) resolution; re-encode through the
+    // shared path so the proxy is the same downscaled H.264 shape as the BRAW
+    // and RED providers produce.
+    crate::production_match_lab::encode_analysis_proxy(Path::new(rendered), output_path)?;
     let _ = std::fs::remove_dir_all(&scratch);
     Ok(())
 }

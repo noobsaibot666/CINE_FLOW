@@ -143,6 +143,37 @@ The Analyze button stays enabled; slots that still can't decode are marked
   bundled FFmpeg drops below 8; the source-support strip lists ProRes RAW
   under "Direct video".
 
+### Implementation review — fixes applied
+
+A review of the wiring turned up and fixed:
+- **Front/back mismatch** — `isDecoderBackedRawClip` in the UI only knew
+  `.braw`, so `.r3d`/`.crm`/`.xocn` bypassed the Generate-proxy gate and
+  auto-decoded on Analyze. It now mirrors the Rust `is_decoder_backed_raw_path`
+  (braw + r3d/nev + crm/rmf/xocn).
+- **`source_kind` mislabel** — a RED/Resolve-decoded clip was tagged
+  `"original"`; now anything where the analysed path differs from the clip is
+  `"proxy"`.
+- **Post-failure cooldown** — the 120 s "proxy recently failed" lock blocked
+  the intended "open Resolve and retry" loop; an explicit
+  `production_matchlab_ensure_proxy` call now bypasses it.
+- **REDline flags** — dropped `--decodeRes/--resizeX/--proResEncoding` (vary by
+  SDK version and can make REDline reject the whole command); it now just
+  `--format 3` decodes to ProRes and ffmpeg does the downscale via the shared
+  `encode_analysis_proxy`, which every provider now uses.
+- **Resolve runner** — prefers Resolve's own `fuscript` (Python + modules
+  preloaded, no env/`python3` needed); falls back to system `python3` with
+  `RESOLVE_SCRIPT_*`; errors clearly if neither exists.
+- **`.ari`** dropped from the Resolve route (ARRIRAW arrives as MXF → direct).
+
+### Known caveats still open
+
+- The bundled `REDline-aarch64-apple-darwin` sidecar is an **x86_64** binary —
+  it runs under Rosetta on Apple Silicon but a real arm64/universal build
+  should replace it. `verify_macos_v12_runtime.mjs` now warns on this.
+- REDline `--format 3` and the Resolve render preset
+  (`SetCurrentRenderFormatAndCodec("mp4", "H264")`) are unverified against real
+  media / every Resolve version.
+
 ### Explicit proxy generation (operator control)
 
 Provider-backed sources (BRAW / RED / Resolve) no longer auto-decode on

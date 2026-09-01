@@ -457,8 +457,10 @@ pub fn is_redline_backed_path(clip_path: &str) -> bool {
 }
 
 /// Formats with no bundled decoder that DaVinci Resolve can decode headless.
+/// (ARRIRAW is excluded — it normally arrives wrapped in MXF, which is
+/// classified as a direct source.)
 pub fn is_resolve_backed_path(clip_path: &str) -> bool {
-    matches!(lower_ext(clip_path).as_str(), "crm" | "rmf" | "xocn" | "ari")
+    matches!(lower_ext(clip_path).as_str(), "crm" | "rmf" | "xocn")
 }
 
 /// Any camera-RAW source that needs a decode provider before analysis.
@@ -508,15 +510,13 @@ pub fn create_red_proxy_via_redline(
         .map_err(|e| format!("Failed to prepare RED decode scratch: {e}"))?;
     let base = decoded_dir.join("red_decode");
 
+    // Minimal, version-stable REDline invocation: decode the clip to Apple
+    // ProRes; ffmpeg below does the downscale. Extra flags (--decodeRes,
+    // --resizeX, --proResEncoding) vary between REDline releases and can make an
+    // otherwise-fine SDK reject the whole command, so they are deliberately
+    // omitted here.
     let mut cmd = crate::tools::create_command(redline_path);
-    cmd.args([
-        "--i", input_path,
-        "--o", &base.to_string_lossy(),
-        "--format", "3",         // Apple ProRes
-        "--proResEncoding", "0", // Proxy
-        "--decodeRes", "2",      // quarter-res debayer — fast, enough for signal analysis
-        "--resizeX", "1920",
-    ]);
+    cmd.args(["--i", input_path, "--o", &base.to_string_lossy(), "--format", "3"]);
     let out = cmd
         .output()
         .map_err(|e| format!("Failed to start REDline ({redline_path}): {e}"))?;
@@ -549,20 +549,29 @@ pub fn create_red_proxy_via_redline(
             )
         })?;
 
+    encode_analysis_proxy(&decoded_mov, output_path)?;
+    let _ = std::fs::remove_dir_all(decoded_dir);
+    Ok(())
+}
+
+/// Re-encode any decoded intermediate (ProRes, etc.) to the standard downscaled
+/// H.264 analysis proxy, so every decode provider produces an identical proxy
+/// shape for the rest of the pipeline.
+pub fn encode_analysis_proxy(input: &Path, output: &Path) -> Result<(), String> {
+    validate_proxy_output_path(&input.to_string_lossy(), output)?;
     let ff = crate::tools::create_command("ffmpeg")
-        .args(["-nostdin", "-hide_banner", "-y", "-i", &decoded_mov.to_string_lossy()])
-        .args(proxy_ffmpeg_args(output_path))
+        .args(["-nostdin", "-hide_banner", "-y", "-i", &input.to_string_lossy()])
+        .args(proxy_ffmpeg_args(output))
         .output()
-        .map_err(|e| format!("Failed to run ffmpeg for RED proxy encode: {e}"))?;
+        .map_err(|e| format!("Failed to run ffmpeg for analysis proxy encode: {e}"))?;
     if !ff.status.success() {
         return Err(format!(
-            "ffmpeg failed encoding the RED proxy.\nInput: {}\nOutput: {}\n{}",
-            decoded_mov.display(),
-            output_path.display(),
+            "ffmpeg failed encoding the analysis proxy.\nInput: {}\nOutput: {}\n{}",
+            input.display(),
+            output.display(),
             tail_lines(&String::from_utf8_lossy(&ff.stderr), 20),
         ));
     }
-    let _ = std::fs::remove_dir_all(decoded_dir);
     Ok(())
 }
 

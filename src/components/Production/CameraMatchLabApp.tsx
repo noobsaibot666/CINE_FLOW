@@ -1569,8 +1569,25 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
                     <div className="matchLabPathPrimary" style={fileMetaStyle} title={clipPath ? getFileName(clipPath) : "No clip selected"}>{clipPath ? getFileName(clipPath) : "No clip selected"}</div>
                     <div className="matchLabPathSecondary" style={helperMetaStyle} title={clipPath || "Import MOV, MP4, MXF, BRAW, R3D, X-OCN, Canon RAW, N-RAW, or still RAW."}>{clipPath || "Import MOV, MP4, MXF, BRAW, R3D, X-OCN, Canon RAW, N-RAW, or still RAW."}</div>
                     {slotProxy ? (
-                      <div style={sourceMetaInlineStyle} title={slotProxy}>
-                        {analysisOverrideBySlot[slot] ? "Using attached proxy · " : "Using generated proxy · "}{getFileName(slotProxy)}
+                      <div style={{ ...sourceMetaInlineStyle, display: "flex", alignItems: "center", gap: 8 }} title={slotProxy}>
+                        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {analysisOverrideBySlot[slot] ? "Using attached proxy · " : "Using generated proxy · "}{getFileName(slotProxy)}
+                        </span>
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-xs"
+                          style={{ flexShrink: 0 }}
+                          onClick={() => {
+                            if (analysisOverrideBySlot[slot]) {
+                              setAnalysisOverrideBySlot((prev) => { const n = { ...prev }; delete n[slot]; return n; });
+                            } else {
+                              setGeneratedProxyBySlot((prev) => { const n = { ...prev }; delete n[slot]; return n; });
+                            }
+                            setSlotStatuses((prev) => { const n = { ...prev }; delete n[slot]; return n; });
+                          }}
+                        >
+                          Clear
+                        </button>
                       </div>
                     ) : null}
                     {sourceWorkflow ? (
@@ -3610,8 +3627,16 @@ function isProxyOnlyRawClip(path: string) {
   ]);
 }
 
+// Sources that the backend routes through a decode provider (BRAW bridge /
+// REDline / DaVinci Resolve) before analysis — i.e. everything that needs an
+// explicit "Generate proxy" step. Must stay in sync with the Rust
+// `is_decoder_backed_raw_path`.
 function isDecoderBackedRawClip(path: string) {
-  return isBrawClip(path);
+  return hasExtension(path, [
+    ...DECODER_BACKED_RAW_EXTENSIONS,
+    ...VENDOR_RAW_EXTENSIONS,
+    ...PROXY_GUIDED_RAW_EXTENSIONS,
+  ]);
 }
 
 function getProxyOnlyFormatBadge(path: string) {

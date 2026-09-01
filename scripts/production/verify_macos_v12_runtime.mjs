@@ -43,6 +43,7 @@ const requiredChecks = [
 ];
 
 const optionalChecks = [
+  archCheck("redline-arch", "REDline sidecar is arm64/universal (else needs Rosetta on Apple Silicon)", join(macos, "REDline")),
   anyFileCheck("ocio-config", "OCIO/ACES config", [
     join(resources, "ocio", "config.ocio"),
     join(resources, "aces", "config.ocio"),
@@ -131,6 +132,16 @@ function ffmpegVersionCheck(id, label, path, minMajor) {
     status: Number.isFinite(major) && major >= minMajor ? "pass" : "fail",
     detail: match ? `${match[1]}.${match[2]}` : "version unreadable",
   };
+}
+
+function archCheck(id, label, path) {
+  if (!existsSync(path)) {
+    return { id, label, path, status: "blocked", detail: "missing" };
+  }
+  const out = spawnSync("file", ["-b", path], { encoding: "utf8" });
+  const desc = (out.stdout || "").trim();
+  const ok = /arm64|universal/i.test(desc);
+  return { id, label, path, status: ok ? "pass" : "blocked", detail: desc || "arch unreadable" };
 }
 
 function anyFileCheck(id, label, paths, missingStatus = "blocked") {

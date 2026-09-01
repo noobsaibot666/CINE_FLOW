@@ -5680,24 +5680,22 @@ async fn camera_match_analyze_clip_internal(
             })
         };
 
+        // Any time the analysed source differs from the original clip — an
+        // operator proxy, or a BRAW/RED/Resolve decode — the metrics came from a
+        // proxy, not the original negative.
+        let analysed_from_proxy = source_path != clip_path;
+        let source_kind_label = if analysed_from_proxy { "proxy" } else { "original" };
+
         Ok(CameraMatchAnalysisResult {
             measurement_bundle: build_measurement_bundle(
                 &source_path,
-                Some(if analysis_source_override_path.is_some() || is_braw_path(clip_path) {
-                    "proxy".to_string()
-                } else {
-                    "original".to_string()
-                }),
+                Some(source_kind_label.to_string()),
                 Some(classify_source_format(clip_path)),
                 &metadata,
                 &aggregate,
             ),
             source_path,
-            source_kind: Some(if analysis_source_override_path.is_some() || is_braw_path(clip_path) {
-                "proxy".to_string()
-            } else {
-                "original".to_string()
-            }),
+            source_kind: Some(source_kind_label.to_string()),
             original_format_kind: Some(classify_source_format(clip_path)),
             decode_path_kind: Some(decode_path_kind),
             decode_source_path: Some(decode_source_path),
@@ -5759,8 +5757,8 @@ enum RawProxyPlan {
     Braw(Box<BrawDecoderCaps>),
     /// REDline / RED-SDK CLI path.
     Redline(String),
-    /// Headless DaVinci Resolve render.
-    Resolve,
+    /// Headless DaVinci Resolve render — carries the detected Resolve app/exe path.
+    Resolve(String),
     /// No provider is set up — carries user-facing guidance.
     Unavailable(String),
 }
@@ -5771,6 +5769,20 @@ async fn ensure_matchlab_proxy_internal(
     source_path: &str,
     app: &AppHandle,
     state: Arc<AppState>,
+) -> Result<ProductionMatchLabProxyResult, String> {
+    ensure_matchlab_proxy_inner(project_id, slot, source_path, app, state, false).await
+}
+
+async fn ensure_matchlab_proxy_inner(
+    project_id: &str,
+    slot: &str,
+    source_path: &str,
+    app: &AppHandle,
+    state: Arc<AppState>,
+    // An explicit operator "Generate proxy" click bypasses the post-failure
+    // cooldown — the whole point is "fix it (open Resolve / plug in the SDK) and
+    // retry now".
+    user_initiated: bool,
 ) -> Result<ProductionMatchLabProxyResult, String> {
     if !is_decoder_backed_raw_path(source_path) {
         return Ok(ProductionMatchLabProxyResult {
@@ -5799,9 +5811,11 @@ async fn ensure_matchlab_proxy_internal(
                 }
                 existing.running = false;
             }
-            if let Some(last_failed_at_ms) = existing.last_failed_at_ms {
-                if now_ms - last_failed_at_ms < 120_000 {
-                    return Err("Proxy recently failed. Fix the issue and try again.".to_string());
+            if !user_initiated {
+                if let Some(last_failed_at_ms) = existing.last_failed_at_ms {
+                    if now_ms - last_failed_at_ms < 120_000 {
+                        return Err("Proxy recently failed. Fix the issue and try again.".to_string());
+                    }
                 }
             }
         }
@@ -5888,21 +5902,20 @@ async fn ensure_matchlab_proxy_internal(
         let overrides = crate::production_decoder_status::load_overrides(&state.app_data_dir);
         match crate::production_match_lab::locate_redline(overrides.red_sdk_dir.as_deref()) {
             Some(path) => RawProxyPlan::Redline(path),
-            None if crate::production_decoder_status::detect_resolve(&overrides).is_some() => {
-                RawProxyPlan::Resolve
-            }
-            None => RawProxyPlan::Unavailable(
-                "No RED decoder found. Open Decoder Setup to install the free RED R3D SDK (or DaVinci Resolve) — or export an MP4/ProRes proxy from REDCINE-X PRO and use 'Select Existing Proxy'.".to_string(),
-            ),
+            None => match crate::production_decoder_status::detect_resolve(&overrides) {
+                Some(resolve) => RawProxyPlan::Resolve(resolve),
+                None => RawProxyPlan::Unavailable(
+                    "No RED decoder found. Open Decoder Setup to install the free RED R3D SDK (or DaVinci Resolve) — or export an MP4/ProRes proxy from REDCINE-X PRO and use 'Select Existing Proxy'.".to_string(),
+                ),
+            },
         }
     } else if crate::production_match_lab::is_resolve_backed_path(source_path) {
         let overrides = crate::production_decoder_status::load_overrides(&state.app_data_dir);
-        if crate::production_decoder_status::detect_resolve(&overrides).is_some() {
-            RawProxyPlan::Resolve
-        } else {
-            RawProxyPlan::Unavailable(
+        match crate::production_decoder_status::detect_resolve(&overrides) {
+            Some(resolve) => RawProxyPlan::Resolve(resolve),
+            None => RawProxyPlan::Unavailable(
                 "This format has no bundled decoder. Install DaVinci Resolve (free) — Decoder Setup has the link — or attach an MP4/ProRes proxy for this slot.".to_string(),
-            )
+            ),
         }
     } else {
         RawProxyPlan::Unavailable("No decode provider is available for this source.".to_string())
@@ -5989,12 +6002,13 @@ async fn ensure_matchlab_proxy_internal(
                     )?;
                     Ok(("redline-decode".to_string(), Some(redline_path)))
                 }
-                RawProxyPlan::Resolve => {
+                RawProxyPlan::Resolve(resolve_path) => {
                     crate::production_resolve_decode::create_proxy_via_resolve(
                         &source_for_task,
                         &tmp_for_task,
+                        &resolve_path,
                     )?;
-                    Ok(("resolve-render".to_string(), None))
+                    Ok(("resolve-render".to_string(), Some(resolve_path)))
                 }
                 RawProxyPlan::Unavailable(detail) => Err(detail),
             }),
@@ -7962,7 +7976,7 @@ pub async fn production_matchlab_ensure_proxy(
     app: AppHandle,
     state: State<'_, Arc<AppState>>,
 ) -> Result<ProductionMatchLabProxyResult, String> {
-    ensure_matchlab_proxy_internal(&project_id, &slot, &source_path, &app, state.inner().clone()).await
+    ensure_matchlab_proxy_inner(&project_id, &slot, &source_path, &app, state.inner().clone(), true).await
 }
 
 #[tauri::command]
