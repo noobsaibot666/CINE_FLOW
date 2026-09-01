@@ -6818,6 +6818,18 @@ pub async fn scan_duplicates(
     options: Option<DuplicateScanOptions>,
     app: tauri::AppHandle,
 ) -> Result<DuplicateScanResult, String> {
+    // The scan is fully blocking (recursive walk, rayon hashing) — keep it off
+    // the async runtime worker so other IPC stays responsive.
+    tokio::task::spawn_blocking(move || scan_duplicates_blocking(paths, options, app))
+        .await
+        .map_err(|e| format!("Duplicate scan task panicked: {}", e))?
+}
+
+fn scan_duplicates_blocking(
+    paths: Vec<String>,
+    options: Option<DuplicateScanOptions>,
+    app: tauri::AppHandle,
+) -> Result<DuplicateScanResult, String> {
     use rayon::prelude::*;
     use std::collections::HashMap;
     use std::path::PathBuf;
