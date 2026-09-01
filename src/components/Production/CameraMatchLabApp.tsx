@@ -1246,6 +1246,18 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
       delete proxyProgressTimersRef.current[slot];
     }
     setProxyProgressBySlot((prev) => ({ ...prev, [slot]: { pct: 0, message: "Starting decoder…", status: "running" } }));
+    // `generateProxy` owns the progress-strip lifecycle: the job-progress
+    // listener drives pct/message while a job runs, but a cached proxy returns
+    // with no job (hence no events), so the terminal state must be set here or
+    // the strip would sit at "Starting decoder…" forever.
+    const settleProgress = (message: string, status: "done" | "failed") => {
+      setProxyProgressBySlot((prev) => ({ ...prev, [slot]: { pct: status === "done" ? 100 : (prev[slot]?.pct ?? 0), message, status } }));
+      if (proxyProgressTimersRef.current[slot]) clearTimeout(proxyProgressTimersRef.current[slot]);
+      proxyProgressTimersRef.current[slot] = setTimeout(() => {
+        setProxyProgressBySlot((prev) => { const n = { ...prev }; delete n[slot]; return n; });
+        delete proxyProgressTimersRef.current[slot];
+      }, status === "done" ? 4000 : 9000);
+    };
     try {
       const res = await invokeGuarded<ProductionMatchLabProxyResult>("production_matchlab_ensure_proxy", {
         projectId: project.id,
@@ -1253,13 +1265,17 @@ export function CameraMatchLabApp({ project }: CameraMatchLabAppProps) {
         sourcePath: clipPath,
       });
       setGeneratedProxyBySlot((prev) => ({ ...prev, [slot]: { path: res.proxy_path, clip: clipPath } }));
-      setSlotStatuses((prev) => ({ ...prev, [slot]: res.reused_proxy ? "Proxy ready (cached)" : "Proxy ready" }));
+      const label = res.reused_proxy ? "Proxy ready (cached)" : "Proxy ready";
+      setSlotStatuses((prev) => ({ ...prev, [slot]: label }));
+      settleProgress(label, "done");
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const parsed = parseStructuredError(message);
-      setSlotErrors((prev) => ({ ...prev, [slot]: parsed.summary || message.split("\n")[0] }));
+      const summary = parsed.summary || message.split("\n")[0];
+      setSlotErrors((prev) => ({ ...prev, [slot]: summary }));
       if (parsed.details) setSlotErrorDetails((prev) => ({ ...prev, [slot]: parsed.details as string }));
       setSlotStatuses((prev) => { const n = { ...prev }; delete n[slot]; return n; });
+      settleProgress(summary, "failed");
     } finally {
       setGeneratingProxySlots((prev) => ({ ...prev, [slot]: false }));
     }
